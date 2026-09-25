@@ -1,0 +1,43 @@
+{
+  "name": "棋墩墩",
+  "note": "改这里就能改成你们家那版规则，不用动代码。count = [黑, 红]；大小一律黑 < 红（同职级红压黑，红帅也压黑将）。",
+
+  "ranks": [
+    { "name": "兵卒", "redLabel": "兵", "blackLabel": "卒", "count": [5, 5] },
+    { "name": "炮", "redLabel": "红炮", "blackLabel": "黑炮", "count": [2, 2] },
+    { "name": "车", "redLabel": "红车", "blackLabel": "黑车", "count": [2, 2] },
+    { "name": "马", "redLabel": "红马", "blackLabel": "黑马", "count": [2, 2] },
+    { "name": "相", "redLabel": "红相", "blackLabel": "黑象", "count": [2, 2] },
+    { "name": "士", "redLabel": "红仕", "blackLabel": "黑士", "count": [2, 2] },
+    {
+      "name": "将",
+      "redLabel": "红帅",
+      "blackLabel": "黑将",
+      "count": [1, 1],
+      "groupColors": "any"
+    }
+  ],
+
+  "playerCounts": [2, 4],
+  "modes": ["ming", "kou"],
+
+  "tieBreak": "leader",
+  "nextLeader": "trick-winner",
+
+  "mingqi": {
+    "mustBeatIfAble": true,
+    "groupCompare": "sameSize",
+    "discardCost": "same"
+  },
+
+  "kouqi": {
+    "mustBeatIfAble": false,
+    "groupCompare": "sameSize",
+    "discardCost": "same"
+  },
+
+  "draft": {
+    "stackSize": 4,
+    "ways": ["layered", "stacks-left", "stacks-right"]
+  }
+}

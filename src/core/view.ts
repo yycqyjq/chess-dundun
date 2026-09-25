@@ -1,0 +1,72 @@
+import { modeRules, type GameState } from './game.ts';
+import type { Piece } from './pieces.ts';
+import type { TrickConfig } from './trick.ts';
+
+export interface TrickView {
+  leader: number;
+  waiting: number[];
+  /** 本墩各家出了几张。暗棋扣着出不亮牌面，只有已经公开的那几张（抽签的明牌、明棋出过的）才给看 */
+  plays: { seat: number; size: number; pieceIds: number[] }[];
+  /** 本墩各家抵押了几张——张数是公开的，牌面按同一套规则亮不亮 */
+  discarded: { seat: number; size: number; pieceIds: number[] }[];
+  /** 当前最大那套是谁出的。暗棋里只知道座位和张数，不知道牌面 */
+  championSeat: number;
+}
+
+/** 某个座位看得见的全部信息。真人屏幕上能显示的也就这些，AI 也只许吃这个 */
+export interface View {
+  seat: number;
+  mode: 'ming' | 'kou';
+  players: number;
+  hand: number[];
+  counts: number[];
+  won: number[];
+  /** 公开在明处的牌：抽签翻的那张 + 明棋出过的 + 每墩翻开结算的 */
+  open: Set<number>;
+  /** 没公开的牌按档位数一遍：下标 = tier，值 = 张数。真人靠记牌得到的是同一张表，它不含「哪张在谁手里」 */
+  unknownTiers: number[];
+  /** 全场最高档的下标（将帅的红那档）。把档位换算成「值几枚牌」时用它归一 */
+  topTier: number;
+  /** 当前模式那套比牌规则。同档算谁赢、张数怎么比对两家都是公开的，判赢面要用 */
+  cfg: TrickConfig;
+  trick: TrickView | null;
+  /** 查看不见的牌直接抛错——AI 伸手拿别人的牌就当场崩，不作弊是硬约束 */
+  piece(id: number): Piece;
+}
+
+export function viewFor(state: GameState, seat: number): View {
+  const open = new Set<number>(state.revealed);
+  for (const id of state.hands[seat]) open.add(id);
+  const unknownTiers: number[] = [];
+  for (const p of state.pieces) {
+    if (open.has(p.id)) continue;
+    unknownTiers[p.tier] = (unknownTiers[p.tier] ?? 0) + 1;
+  }
+  const trick = state.trick;
+  const shown = (ids: number[]) => (ids.every((id) => open.has(id)) ? [...ids] : []);
+  return {
+    seat,
+    mode: state.mode,
+    players: state.players,
+    hand: [...state.hands[seat]],
+    counts: state.hands.map((h) => h.length),
+    won: [...state.won],
+    open,
+    unknownTiers,
+    topTier: state.pieces.reduce((max, p) => Math.max(max, p.tier), 0),
+    cfg: { tieBreak: state.rules.tieBreak, groupCompare: modeRules(state).groupCompare },
+    trick: trick
+      ? {
+          leader: trick.leader,
+          waiting: [...trick.waiting],
+          plays: trick.plays.map((p) => ({ seat: p.player, size: p.pieceIds.length, pieceIds: shown(p.pieceIds) })),
+          discarded: trick.discards.map((d) => ({ seat: d.player, size: d.pieceIds.length, pieceIds: shown(d.pieceIds) })),
+          championSeat: trick.plays[trick.championIdx].player,
+        }
+      : null,
+    piece(id: number): Piece {
+      if (!open.has(id)) throw new Error(`P${seat + 1} 看不见第 ${id} 号牌`);
+      return state.byId.get(id)!;
+    },
+  };
+}

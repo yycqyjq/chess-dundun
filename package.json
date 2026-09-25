@@ -1,0 +1,22 @@
+{
+  "name": "chess-dundun",
+  "version": "0.1.0",
+  "private": true,
+  "description": "棋墩墩 — 掀棋/打棋摞 的规则引擎与人机对战",
+  "type": "module",
+  "engines": {
+    "node": ">=22.6"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "check": "node --experimental-strip-types src/cli/main.ts check",
+    "test": "node --experimental-strip-types src/test/rules.test.ts",
+    "verify": "npm run typecheck && npm run check && npm run test",
+    "selfplay": "node --experimental-strip-types src/cli/main.ts selfplay",
+    "play": "node --experimental-strip-types src/cli/main.ts play"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.2",
+    "typescript": "^5.9.3"
+  }
+}
