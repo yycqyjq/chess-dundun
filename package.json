@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "description": "棋墩墩 — 掀棋/打棋摞 的规则引擎与人机对战",
+  "license": "MIT",
   "type": "module",
   "engines": {
     "node": ">=22.6"
