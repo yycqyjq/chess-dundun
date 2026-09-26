@@ -77,7 +77,7 @@ function holdValue(view: View, ids: number[]): number {
   for (const id of ids) {
     const piece = view.piece(id);
     strength += piece.tier / view.topTier;
-    // 成组是家里能凑出来的大墩子，拆单张出掉就没了
+    // 成组是能凑出来的大墩子，拆成单张出掉就没了
     if (ids.length === 1 && breaksAPair(view, id)) strength += 0.3;
   }
   return strength * trickValue;

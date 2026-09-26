@@ -18,7 +18,7 @@ export function powerOf(ids: number[], byId: Map<number, Piece>): PlayPower {
   return { top: tiers[0], second: tiers.length > 1 ? tiers[1] : null, size: tiers.length };
 }
 
-/** 张数不同就是两种牌型，按我家的规矩不能互压：单张只能拿单张应，对子只能拿更大的对子应 */
+/** 张数不同就是两种牌型，不能互压：单张只能拿单张应，对子只能拿更大的对子应 */
 export function comparable(a: PlayPower, b: PlayPower, cfg: TrickConfig): boolean {
   return cfg.groupCompare !== 'sameSize' || a.size === b.size;
 }
