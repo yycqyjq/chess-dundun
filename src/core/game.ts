@@ -340,11 +340,6 @@ function applyAllocate(state: GameState, way: AllocWay): GameState {
   return state;
 }
 
-/** 手牌按强度排序，只用于界面展示 */
-export function sortHand(state: GameState, seat: number): void {
-  state.hands[seat].sort((a, b) => state.byId.get(a)!.tier - state.byId.get(b)!.tier);
-}
-
 function startPlay(state: GameState, firstLeader: number): void {
   state.phase = state.mode;
   state.leader = firstLeader;
@@ -478,8 +473,4 @@ function finish(state: GameState): void {
 
 export function seatName(seat: number): string {
   return `P${seat + 1}`;
-}
-
-export function scores(state: GameState): { seat: number; won: number; hand: number }[] {
-  return state.won.map((won, seat) => ({ seat, won, hand: state.hands[seat].length }));
 }
