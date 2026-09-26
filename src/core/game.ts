@@ -1,14 +1,21 @@
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 import {
   buildPieceSet,
   buildRanks,
   pieceLabel,
   type Piece,
   type RankDef,
+  type RankFile,
 } from './pieces.ts';
 import { mulberry32, shuffled } from './rng.ts';
-import { beats, comparable, powerOf, resolveTrick, type PlayPower, type TrickConfig } from './trick.ts';
+import {
+  beats,
+  comparable,
+  powerOf,
+  resolveTrick,
+  type PlayPower,
+  type TrickConfig,
+  type TrickPlay,
+} from './trick.ts';
 
 /** 一种玩法的比牌规则。明暗两版结构相同，只差 mustBeatIfAble */
 export interface ModeRules {
@@ -38,7 +45,7 @@ export interface Rules {
 export type AllocWay = 'layered' | 'stacks-left' | 'stacks-right';
 
 export type Action =
-  | { kind: 'draw'; stackIdx: number }
+  | { kind: 'draw'; stackIdx: number; pieceId?: number }
   | { kind: 'allocate'; way: AllocWay }
   | { kind: 'lead'; pieceIds: number[] }
   | { kind: 'follow'; pieceIds: number[] }
@@ -59,8 +66,10 @@ interface DraftState {
 
 interface TrickState {
   leader: number;
+  /** 还没应战的人。明棋按这个顺序一家家来，扣棋里首出之后剩下的是一伙人同时暗出 */
   waiting: number[];
   championIdx: number;
+  /** 永远按顺时针（从首出者数过去）排；扣棋并发时谁先落子都不改这个次序 */
   plays: { player: number; pieceIds: number[] }[];
   discards: { player: number; pieceIds: number[] }[];
 }
@@ -77,18 +86,21 @@ export interface GameState {
   draft: DraftState | null;
   trick: TrickState | null;
   leader: number;
+  /** 本局起抽人：整局定死，发完牌也留着——跨局驱动靠它算下一局谁起抽 */
+  drawer: number;
   /** 全局唯一一抽：谁抽的、抽的哪摞、翻出哪张、点数数到了谁 */
   opening: { drawer: number; stackIdx: number; pieceId: number; seat: number } | null;
-  /** 已经摊在明处的牌：抽签那张从一开始，暗棋要等一墩翻开设算 */
+  /** 永久摊在明处的牌：明棋出过的 + 每墩翻开结算的。签牌不算在这儿，它只在摆牌阶段公开，见 isFaceDown */
   revealed: Set<number>;
   rng: () => number;
   log: string[];
   seed: number;
 }
 
-export function loadRules(path = fileURLToPath(new URL('../../rules.json', import.meta.url))): Rules {
-  const raw = JSON.parse(readFileSync(path, 'utf8')) as Omit<Rules, 'ranks'> & { ranks: RankDef[] };
-  return { ...raw, ranks: buildRanks(raw.ranks) };
+/** 规则表进引擎的唯一入口：谁读文件、谁 fetch、谁内联 JSON 都随调用方，core 不碰 fs */
+export function parseRules(raw: Omit<Rules, 'ranks'> & { ranks: readonly RankFile[] }): Rules {
+  const { ranks, ...rest } = raw;
+  return { ...rest, ranks: buildRanks(ranks) };
 }
 
 export function createGame(opts: {
@@ -104,6 +116,7 @@ export function createGame(opts: {
   const byId = new Map(pieces.map((p) => [p.id, p]));
   // 随机扣摞：只洗牌不分大小排序，摆好的牌堆本身不带任何可推算的信息
   const stacks = chunks(shuffled(pieces.map((p) => p.id), rng), opts.rules.draft.stackSize);
+  const drawer = opts.drawer ?? Math.floor(rng() * opts.players);
   return {
     rules: opts.rules,
     mode: opts.mode,
@@ -115,7 +128,7 @@ export function createGame(opts: {
     phase: 'draft',
     draft: {
       stacks,
-      drawer: opts.drawer ?? Math.floor(rng() * opts.players),
+      drawer,
       stage: 'draw',
       stackIdx: -1,
       drawn: -1,
@@ -123,6 +136,7 @@ export function createGame(opts: {
     },
     trick: null,
     leader: -1,
+    drawer,
     opening: null,
     revealed: new Set<number>(),
     rng,
@@ -165,14 +179,23 @@ export function championPower(state: GameState): PlayPower | null {
   return powerOf(trick.plays[trick.championIdx].pieceIds, state.byId);
 }
 
-/** 当前该行动的人 */
-export function currentActor(state: GameState): number | null {
+/**
+ * 此刻能动手的人。
+ * 扣棋里首出之后其余几家是同时暗出，所以这是一伙人；明棋和摆牌阶段每次只有一个。
+ */
+export function pendingSeats(state: GameState): number[] {
   if (state.phase === 'draft') {
     const draft = state.draft!;
-    return draft.stage === 'draw' ? draft.drawer : draft.decider;
+    return [draft.stage === 'draw' ? draft.drawer : draft.decider];
   }
-  if (state.phase === 'over') return null;
-  return state.trick ? (state.trick.waiting[0] ?? null) : state.leader;
+  if (state.phase === 'over') return [];
+  if (!state.trick) return [state.leader];
+  return state.mode === 'kou' ? [...state.trick.waiting] : state.trick.waiting.slice(0, 1);
+}
+
+/** 当前该行动的人：并发时取第一个，命令行那种「一家一家问」的驱动照旧用它 */
+export function currentActor(state: GameState): number | null {
+  return pendingSeats(state)[0] ?? null;
 }
 
 export function legalActions(state: GameState, seat: number): Action[] {
@@ -257,7 +280,7 @@ function draftActions(state: GameState, seat: number): Action[] {
 export function apply(state: GameState, seat: number, action: Action): GameState {
   switch (action.kind) {
     case 'draw':
-      return applyDraw(state, action.stackIdx);
+      return applyDraw(state, action.stackIdx, action.pieceId);
     case 'allocate':
       return applyAllocate(state, action.way);
     case 'noop':
@@ -272,19 +295,20 @@ export function apply(state: GameState, seat: number, action: Action): GameState
   }
 }
 
-function applyDraw(state: GameState, stackIdx: number): GameState {
+function applyDraw(state: GameState, stackIdx: number, pieceId?: number): GameState {
   const draft = state.draft!;
   const stack = draft.stacks[stackIdx];
-  const drawn = stack[stack.length - 1];
+  // 界面上点哪张抽哪张；CLI 和 AI 都不传 pieceId，永远抽摞口那张。
+  // 摸签阶段四张全扣着，抽哪张的点数期望都一样，所以拆开热点不影响公平
+  const drawn = pieceId ?? stack[stack.length - 1];
   const piece = state.byId.get(drawn)!;
   draft.stackIdx = stackIdx;
   draft.drawn = drawn;
   draft.decider = countTo(draft.drawer, piece.point, state.players);
   draft.stage = 'allocate';
-  state.revealed.add(drawn);
   state.opening = { drawer: draft.drawer, stackIdx, pieceId: drawn, seat: draft.decider };
   state.log.push(
-    `${seatName(draft.drawer)} 从第 ${stackIdx + 1} 摞抽到 ${label(state, drawn)}（${piece.point} 点，从此刻起算明牌），从自己数到 ${seatName(draft.decider)}——这 8 摞怎么分归他定，第一轮也由他先出`,
+    `${seatName(draft.drawer)} 从第 ${stackIdx + 1} 摞抽到 ${label(state, drawn)}（${piece.point} 点，当场各家都看见，进手后跟着扣），从自己数到 ${seatName(draft.decider)}——这 8 摞怎么分归他定，第一轮也由他先出`,
   );
   return state;
 }
@@ -294,7 +318,7 @@ function applyAllocate(state: GameState, way: AllocWay): GameState {
   if (way === 'layered') {
     for (const stack of draft.stacks) {
       let seat = draft.decider;
-      // 一摞从顶上那张开始，一人一张，每摞都从处置人起数
+      // 一摞从摞口那张开始，一人一张，每摞都从处置人起数
       for (const id of [...stack].reverse()) {
         state.hands[seat].push(id);
         seat = (seat + 1) % state.players;
@@ -356,12 +380,21 @@ function responseOrder(state: GameState, leader: number): number[] {
 function applyFollow(state: GameState, seat: number, pieceIds: number[]): GameState {
   take(state, seat, pieceIds);
   const trick = state.trick!;
-  trick.plays.push({ player: seat, pieceIds });
-  trick.championIdx = resolveTrick(trick.plays, state.byId, trickCfg(state));
+  insertPlay(state, trick, { player: seat, pieceIds });
   trick.waiting = trick.waiting.filter((s) => s !== seat);
   reveal(state, pieceIds);
+  // 扣棋是同时暗出：没出完之前桌上没有「当前最大」，判赢留到翻开那一刻一次算完
+  trick.championIdx = state.mode === 'ming' ? resolveTrick(trick.plays, state.byId, trickCfg(state)) : 0;
   state.log.push(`${seatName(seat)} 压 ${labels(state, pieceIds)}`);
   return maybeCloseTrick(state);
+}
+
+/** plays 永远按顺时针（从首出者数过去）排，谁先落子都不改：并列就该靠前那家赢 */
+function insertPlay(state: GameState, trick: TrickState, play: TrickPlay): void {
+  const rank = (seat: number) => (seat - trick.leader + state.players) % state.players;
+  const at = trick.plays.findIndex((p) => rank(p.player) > rank(play.player));
+  if (at < 0) trick.plays.push(play);
+  else trick.plays.splice(at, 0, play);
 }
 
 function applyDiscard(state: GameState, seat: number, pieceIds: number[]): GameState {
@@ -379,13 +412,15 @@ function reveal(state: GameState, pieceIds: number[]): void {
   if (state.mode === 'ming') for (const id of pieceIds) state.revealed.add(id);
 }
 
+/** 亮不亮的唯一口径。签牌只在摆牌那一段公开：draft 一清空它就跟着扣进手里 */
 export function isFaceDown(state: GameState, id: number): boolean {
-  return !state.revealed.has(id);
+  return !state.revealed.has(id) && state.draft?.drawn !== id;
 }
 
 function maybeCloseTrick(state: GameState): GameState {
   const trick = state.trick!;
   if (trick.waiting.length > 0) return state;
+  trick.championIdx = resolveTrick(trick.plays, state.byId, trickCfg(state));
   const winner = trick.plays[trick.championIdx].player;
   let gained = 0;
   for (const play of trick.plays) gained += play.pieceIds.length;
@@ -434,7 +469,10 @@ function finish(state: GameState): void {
   state.trick = null;
   const best = Math.max(...state.won);
   const top = state.won.map((w, i) => (w === best ? seatName(i) : '')).filter(Boolean);
-  const verdict = top.length > 1 ? `${top.join('、')} 并列 ${best} 枚` : `胜者 ${top[0]}（下一局由他起抽）`;
+  const verdict =
+    top.length > 1
+      ? `${top.join('、')} 并列 ${best} 枚（下一局仍由 ${seatName(state.drawer)} 起抽）`
+      : `胜者 ${top[0]}（下一局由他起抽）`;
   state.log.push(`结束：${state.won.map((w, i) => `${seatName(i)} ${w} 枚`).join('，')}｜${verdict}`);
 }
 

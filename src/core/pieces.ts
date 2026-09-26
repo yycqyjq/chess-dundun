@@ -23,7 +23,10 @@ export interface Piece {
   label: string;
 }
 
-export function buildRanks(defs: RankDef[]): RankDef[] {
+/** 规则文件里的一级：order 是运行时按数组顺序补的，文件里写了也不算 */
+export type RankFile = Omit<RankDef, 'order'>;
+
+export function buildRanks(defs: readonly RankFile[]): RankDef[] {
   return defs.map((d, i) => ({ ...d, order: i }));
 }
 

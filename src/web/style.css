@@ -1,0 +1,580 @@
+:root {
+  --cw: 44px;
+  --bg: #211c17;
+  --wood: #6a4a2d;
+  --wood-dark: #4a3120;
+  --ink: #f3e7d3;
+  --gold: #ffd76a;
+  --safe-b: env(safe-area-inset-bottom, 0px);
+}
+
+* {
+  box-sizing: border-box;
+  -webkit-tap-highlight-color: transparent;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  overscroll-behavior: none;
+  touch-action: manipulation;
+}
+
+body {
+  background: radial-gradient(120% 90% at 50% 0%, #35291f, var(--bg) 70%);
+  color: var(--ink);
+  font: 15px/1.5 ui-sans-serif, system-ui, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+  user-select: none;
+}
+
+#app {
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+  padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px) 0 env(safe-area-inset-left, 0px);
+}
+
+/* hidden 属性会被下面的 position/display 规则盖掉，挨个补一遍 */
+[hidden] {
+  display: none !important;
+}
+
+.bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px 4px;
+}
+
+.brand {
+  font-weight: 700;
+  letter-spacing: 2px;
+  color: var(--gold);
+}
+
+.meta {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  opacity: 0.62;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.btns {
+  display: flex;
+  gap: 6px;
+}
+
+.stage {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.board {
+  position: relative;
+  flex: 1;
+  margin: 4px 8px;
+  border-radius: 20px;
+  overflow: hidden;
+  background:
+    repeating-linear-gradient(97deg, rgba(255, 255, 255, 0.028) 0 3px, transparent 3px 9px),
+    radial-gradient(120% 130% at 50% 42%, #7d5732, var(--wood) 55%, var(--wood-dark));
+  box-shadow: inset 0 0 0 2px rgba(0, 0, 0, 0.32), inset 0 6px 24px rgba(0, 0, 0, 0.35);
+}
+
+/* 提示文字：顶栏下面单独一行，桌子整块留给牌；两行高是免得数点时上下抖 */
+.status {
+  padding: 0 12px 4px;
+  font-size: 14px;
+  min-height: 2.8em;
+  line-height: 1.4;
+}
+
+.status b {
+  color: var(--gold);
+}
+
+/* 操作按钮浮在桌面里、手牌扇形上方：要点哪张就在哪儿出，眼睛不用上下跑 */
+.ctrl {
+  position: absolute;
+  left: 50%;
+  bottom: var(--ctrl-lift, 178px);
+  transform: translateX(-50%);
+  z-index: 1300;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px;
+  max-width: calc(100% - 20px);
+}
+
+.btn {
+  appearance: none;
+  border: 1px solid #6b5b48;
+  border-radius: 10px;
+  background: linear-gradient(#463a2c, #362c21);
+  color: var(--ink);
+  font: inherit;
+  font-size: 14px;
+  padding: 9px 13px;
+  cursor: pointer;
+  min-height: 40px;
+}
+
+.btn:active {
+  transform: translateY(1px);
+}
+
+.btn.primary {
+  border-color: var(--gold);
+  background: linear-gradient(#a3792f, #7d5a20);
+  color: #fff8e6;
+  font-weight: 600;
+}
+
+.btn.dim {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* 声音关掉时还是点得动的，只是淡一点——不能借 .dim，那个连小手都拿掉了 */
+.btn.mute {
+  opacity: 0.55;
+}
+
+/* ---------- 座位标记 ---------- */
+
+.chip {
+  position: absolute;
+  z-index: 1200;
+  pointer-events: none;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  white-space: nowrap;
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  /* 宽度上限就是 board.ts 的 LABEL_W：几何按这条边带给牌摞让位，超了会被裁掉 */
+  max-width: var(--label-w, 168px);
+  overflow: hidden;
+  background: rgba(20, 16, 12, 0.66);
+  border: 1px solid #4a3f34;
+}
+
+.chip > div:empty {
+  display: none;
+}
+
+.chip .who {
+  font-weight: 600;
+}
+
+/* 本墩第几手（顺时针序，先出那家是 1）：扣棋并发时「谁已经出过、谁还欠着」全靠它 */
+.chip .ord {
+  display: grid;
+  place-items: center;
+  width: 1.55em;
+  height: 1.55em;
+  border-radius: 50%;
+  border: 1px solid #6b5b48;
+  font-size: 11px;
+  opacity: 0.85;
+  flex: 0 0 auto;
+}
+
+/* 这一墩没有他的份了（已出完，或本墩还没开始且不是他先出）：整条压暗，别再读成「该它出」 */
+.chip.off {
+  border-color: #3a3128;
+  background: rgba(20, 16, 12, 0.42);
+  opacity: 0.55;
+}
+
+.chip .tag {
+  color: var(--gold);
+}
+
+.chip .count,
+.chip .won {
+  opacity: 0.72;
+}
+
+.chip.now {
+  border-color: var(--gold);
+  box-shadow: 0 0 12px rgba(255, 215, 106, 0.35);
+}
+
+.chip.tick {
+  border-color: #7fd0ff;
+  background: rgba(18, 48, 68, 0.92);
+}
+
+.chip.decider {
+  border-color: var(--gold);
+  background: rgba(90, 62, 18, 0.92);
+}
+
+/* 名字条的落点不住在这儿：board.ts 的 labelBands() 算，app.ts 写成内联 left/top，
+   和收牌摞同一套几何，谁挨着谁、谁让开谁，CSS 里不会有第二份坐标可以漂移。 */
+
+/* ---------- 摸签那一排「第 N 摞」标签 ---------- */
+
+/* 这一块只管圈出领地和摆「第 N 摞」几个字，绝不吃点击：领地一旦成了点击目标，点的位置就没了意义，
+   会出现「点的那张和抽出来的那张不是一张」。点击目标是摞里那一张张牌，摊开之后每张各自可点 */
+.pile-zone {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 1100;
+  display: grid;
+  place-items: end center;
+  pointer-events: none;
+}
+
+.pile-zone .cap {
+  font-size: 11px;
+  opacity: 0.8;
+  transition: opacity 150ms ease-out;
+}
+
+/* 选中/抽出那一拍点中的那张会放大到摞外，正压在这条标签上；那两拍不用标签也认得出是哪摞 */
+.pile-zone.quiet .cap {
+  opacity: 0;
+}
+
+/* 鼠标指着的那摞会整个摊开，标签亮一下就够了 */
+.pile-zone.hot .cap {
+  opacity: 1;
+  color: #ffd97f;
+}
+
+/* ---------- 棋子 ---------- */
+
+.piece {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: var(--cw);
+  height: var(--cw);
+  transform-origin: 50% 50%;
+  perspective: 640px;
+}
+
+.turn {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  transform-style: preserve-3d;
+  transition: transform 250ms ease-out;
+}
+
+/* 轮到自己才给小手：收牌摞、桌面上的牌、别人的牌都不该点，只有手牌能选。
+   摸签那八摞（.stack）例外——摊开之后每张都是能点的那一张 */
+.board.tappable .piece.hand,
+.board.tappable .piece.stack {
+  cursor: pointer;
+}
+
+.piece.down .turn {
+  transform: rotateY(180deg);
+}
+
+.face,
+.back {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  backface-visibility: hidden;
+  display: grid;
+  place-items: center;
+}
+
+.face {
+  background: radial-gradient(circle at 36% 28%, #fbeacb, #e0c389 58%, #b4905a);
+  box-shadow: inset 0 0 0 2px #8c6a3f, inset 0 -3px 6px rgba(0, 0, 0, 0.22), 0 2px 5px rgba(0, 0, 0, 0.45);
+  color: #8e2a1d;
+  font-weight: 700;
+  font-size: calc(var(--cw) * 0.5);
+  transition: transform 150ms ease-out;
+}
+
+.piece[data-color='black'] .face {
+  color: #211d18;
+}
+
+.back {
+  transform: rotateY(180deg);
+  background: radial-gradient(circle at 40% 32%, #8a6238, #5b3d21 65%, #3f260f);
+  box-shadow: inset 0 0 0 2px rgba(0, 0, 0, 0.4), 0 2px 5px rgba(0, 0, 0, 0.45);
+}
+
+.back::after {
+  content: '';
+  position: absolute;
+  inset: 17%;
+  border-radius: 50%;
+  border: 1px dashed rgba(255, 255, 255, 0.22);
+}
+
+.piece.sel .face {
+  transform: translateY(calc(var(--cw) * -0.24));
+  box-shadow: inset 0 0 0 3px var(--gold), 0 6px 12px rgba(0, 0, 0, 0.5);
+}
+
+.piece.hint .face {
+  box-shadow: inset 0 0 0 2px rgba(255, 215, 106, 0.55), inset 0 -3px 6px rgba(0, 0, 0, 0.22), 0 2px 5px rgba(0, 0, 0, 0.45);
+}
+
+.piece.best .face {
+  box-shadow: inset 0 0 0 3px var(--gold), 0 0 14px rgba(255, 215, 106, 0.55);
+}
+
+.piece.drawn .face {
+  filter: drop-shadow(0 0 7px var(--gold));
+}
+
+/* 摸签「选中」那一拍：点中这张原地放大一圈、描一道金，别家七摞退下去。
+   位移写在 .turn 上——.piece 的 transform 归 pieces.ts 的补间管，CSS 抢不过内联样式，
+   而 .turn 同时管翻面，所以扣着的那一态要把 rotateY 一起写回来。
+   这里刻意只做缩放、不做上下抬：摞口朝下摊之后，往上抬是往摞里推，往下抬会撞「第 N 摞」标签，
+   真正的「拿走」由下一拍的抽出位移去演。 */
+.piece.pick .turn {
+  transform: scale(1.06);
+}
+
+.piece.pick.down .turn {
+  transform: scale(1.06) rotateY(180deg);
+}
+
+.piece.pick .face,
+.piece.pick .back {
+  box-shadow: inset 0 0 0 3px var(--gold), 0 8px 18px rgba(0, 0, 0, 0.55);
+}
+
+/* 抽牌时其余七摞只是背景，别跟正在演的那一摞抢眼睛 */
+.piece.dim {
+  opacity: 0.42;
+  transition: opacity 200ms ease-out;
+}
+
+/* 手牌不再跟着鼠标抬起：抬起是「点了一下、这张归进这一套」的专属反馈，
+   hover 也抬就把「选中」和「路过」画成同一个样子。要看清压着的牌摊开看（点一下手牌） */
+
+@keyframes pop {
+  from {
+    filter: brightness(1.75);
+  }
+  to {
+    filter: none;
+  }
+}
+
+.piece.won .face,
+.piece.won .back {
+  animation: pop 460ms ease-out;
+}
+
+/* ---------- 浮层 ---------- */
+
+.toast {
+  position: fixed;
+  left: 50%;
+  top: 16%;
+  transform: translateX(-50%) scale(0.96);
+  max-width: min(440px, 86vw);
+  padding: 10px 16px;
+  border-radius: 12px;
+  background: rgba(18, 14, 10, 0.9);
+  border: 1px solid #5a4c3c;
+  text-align: center;
+  opacity: 0;
+  transition: opacity 0.2s ease-out, transform 0.2s ease-out;
+  pointer-events: none;
+  z-index: 2100;
+}
+
+.toast.show {
+  opacity: 1;
+  transform: translateX(-50%) scale(1);
+}
+
+.sheet {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: rgba(12, 9, 6, 0.6);
+}
+
+/* 点遮罩能关的那张卡：空白处给小手，卡里收回默认 */
+.sheet.tap-close {
+  cursor: pointer;
+}
+
+.sheet.tap-close .sheet-card {
+  cursor: default;
+}
+
+.sheet-card {
+  width: min(440px, 94vw);
+  max-height: 88dvh;
+  overflow: auto;
+  padding: 14px 16px 16px;
+  border-radius: 16px;
+  background: #2d2721;
+  border: 1px solid #4a4038;
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.55);
+}
+
+.sheet-head {
+  font-size: 17px;
+  font-weight: 600;
+  margin-bottom: 10px;
+}
+
+.seg-row {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-bottom: 10px;
+}
+
+.seg-cap {
+  font-size: 12px;
+  opacity: 0.7;
+}
+
+.seg {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.seg-btn {
+  flex: 1 1 auto;
+  min-width: 96px;
+  font-size: 13px;
+  padding: 8px 9px;
+}
+
+.seg-btn.on {
+  border-color: var(--gold);
+  background: linear-gradient(#a3792f, #7d5a20);
+  color: #fff8e6;
+}
+
+.sheet-row {
+  display: flex;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.sheet-row .btn {
+  flex: 1;
+}
+
+/* 重掷只占自己那点宽，剩下的留给开桌；种子贴在左边 */
+.sheet-row .btn.mini {
+  flex: 0 0 auto;
+  padding: 6px 12px;
+}
+
+.sheet-row .note {
+  align-self: center;
+  margin-right: auto;
+}
+
+.note {
+  font-size: 12px;
+  opacity: 0.75;
+  margin: 6px 0;
+}
+
+.rank-row {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  padding: 5px 0;
+  border-bottom: 1px solid #3b332b;
+}
+
+/* 复制不成时摊开的战报原文：等宽、能滚、留得住选中 */
+.report {
+  width: 100%;
+  min-height: 140px;
+  margin-top: 8px;
+  background: #241d16;
+  color: var(--ink);
+  border: 1px solid #4a3f31;
+  border-radius: 10px;
+  font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
+  padding: 10px;
+  white-space: pre;
+  overflow: auto;
+}
+
+.rank-row .who {
+  flex: 1;
+  font-weight: 600;
+}
+
+.rank-row .t {
+  font-size: 12px;
+  color: var(--gold);
+}
+
+.drawer {
+  position: fixed;
+  inset: auto 0 0 0;
+  z-index: 1900;
+  height: 46dvh;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px 14px calc(14px + var(--safe-b));
+  background: rgba(24, 20, 16, 0.97);
+  border-top: 1px solid #4a4038;
+  border-radius: 18px 18px 0 0;
+}
+
+.drawer-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-weight: 600;
+}
+
+.lines {
+  flex: 1;
+  overflow: auto;
+  font-size: 13px;
+  line-height: 1.75;
+  white-space: pre-wrap;
+  opacity: 0.86;
+}
+
+/* 大屏：复盘改成左下角浮层，不盖牌桌；小屏照旧从底部上滑 */
+@media (orientation: landscape) and (min-width: 820px) {
+  .drawer {
+    inset: auto auto 10px 10px;
+    width: 320px;
+    height: min(42dvh, 330px);
+    border: 1px solid #4a4038;
+    border-radius: 14px;
+    padding-bottom: 14px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

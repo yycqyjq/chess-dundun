@@ -5,7 +5,7 @@ import type { TrickConfig } from './trick.ts';
 export interface TrickView {
   leader: number;
   waiting: number[];
-  /** 本墩各家出了几张。暗棋扣着出不亮牌面，只有已经公开的那几张（抽签的明牌、明棋出过的）才给看 */
+  /** 本墩各家出了几张。暗棋扣着出不亮牌面，只有公开过的那几张（明棋出过的、这一墩翻开结算的）才给看 */
   plays: { seat: number; size: number; pieceIds: number[] }[];
   /** 本墩各家抵押了几张——张数是公开的，牌面按同一套规则亮不亮 */
   discarded: { seat: number; size: number; pieceIds: number[] }[];
@@ -21,7 +21,7 @@ export interface View {
   hand: number[];
   counts: number[];
   won: number[];
-  /** 公开在明处的牌：抽签翻的那张 + 明棋出过的 + 每墩翻开结算的 */
+  /** 公开在明处的牌：明棋出过的 + 每墩翻开结算的 + 摆牌阶段刚抽出那张签 */
   open: Set<number>;
   /** 没公开的牌按档位数一遍：下标 = tier，值 = 张数。真人靠记牌得到的是同一张表，它不含「哪张在谁手里」 */
   unknownTiers: number[];
@@ -36,6 +36,8 @@ export interface View {
 
 export function viewFor(state: GameState, seat: number): View {
   const open = new Set<number>(state.revealed);
+  // 签牌只在摆牌这一段算公开，分完牌 draft 清空它就跟着扣进手里——和 isFaceDown 同一口径
+  if (state.draft && state.draft.drawn >= 0) open.add(state.draft.drawn);
   for (const id of state.hands[seat]) open.add(id);
   const unknownTiers: number[] = [];
   for (const p of state.pieces) {

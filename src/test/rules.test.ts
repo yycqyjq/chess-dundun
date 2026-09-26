@@ -5,16 +5,18 @@ import {
   finalRank,
   isFaceDown,
   legalActions,
-  loadRules,
+  pendingSeats,
   seatName,
   type Action,
   type GameState,
 } from '../core/game.ts';
+import { loadRules } from '../node/load_rules.ts';
 import { buildPieceSet } from '../core/pieces.ts';
 import { viewFor } from '../core/view.ts';
 import { choose, type Level } from '../ai/agent.ts';
 import { beats, comparePower, powerOf, resolveTrick } from '../core/trick.ts';
 import { mulberry32 } from '../core/rng.ts';
+import { pickByIndices, sizesOf, tooLong } from '../cli/menu.ts';
 
 let failures = 0;
 function ok(name: string, condition: boolean, detail = ''): void {
@@ -136,6 +138,44 @@ ok(
   owing3.map((a) => `${a.kind}:${sizeOf(a)}`).join(','),
 );
 
+// 同一条规则推到命令行那头：16 张里弃 5 张是 C(16,5)=4368 行菜单，得收成「按下标报牌」
+const noFive = [...idsOf('卒').slice(0, 4), ...pieces.filter((p) => p.label !== '兵' && p.label !== '卒').slice(0, 12).map((p) => p.id)];
+const bigKou = toPlay(createGame({ rules: base, players: 2, mode: 'kou', seed: 61 }), [idsOf('兵'), noFive], 0);
+apply(bigKou, 0, { kind: 'lead', pieceIds: idsOf('兵') });
+const bigOwed = legalActions(bigKou, 1);
+ok(
+  '对面出一整摞五兵，我手里凑不出五张一组：只能弃 5 张',
+  bigOwed.every((a) => a.kind === 'discard' && sizeOf(a) === 5) && bigOwed.length === 4368,
+  `${bigOwed.length} 条：${[...new Set(bigOwed.map((a) => a.kind))].join(',')}`,
+);
+ok('长菜单收口：4368 条组合不数行号，改成按下标报牌，只告诉他出几张', tooLong(bigOwed) && sizesOf(bigOwed).join() === '5');
+const first = bigOwed[0]!;
+const firstIdx = (first as { pieceIds: number[] }).pieceIds
+  .map((id) => bigKou.hands[1]!.indexOf(id) + 1)
+  .sort((a, b) => a - b)
+  .join(' ');
+ok(
+  `按下标报回引擎认的那条：${firstIdx} 号 = ${(first as { pieceIds: number[] }).pieceIds.map((id) => map.get(id)!.label).join('+')}`,
+  pickByIndices(bigKou, 1, bigOwed, firstIdx) === first,
+);
+ok(
+  '下标乱报、重号、超范围、张数不对，一律 null 让 caller 重新问',
+  ['7 7 8 9 10', '1 2 3 4 99', '0 1 2 3 4', 'a b c d e', '1 2 3', '1.5 2 3 4 5', ''].every(
+    (raw) => pickByIndices(bigKou, 1, bigOwed, raw) === null,
+  ),
+);
+ok('逗号顿号也当分隔，别逼人数空格', pickByIndices(bigKou, 1, bigOwed, firstIdx.replace(/ /g, '，')) === first);
+ok('短菜单照旧数行号：只有四种的弃三张不折成下标', !tooLong(owing3));
+// 张数对上了也不等于合法：弃牌那种「任意几张」当然全收，可压牌只认凑得成组的
+const mixed = toPlay(createGame({ rules: base, players: 2, mode: 'kou', seed: 62 }), [idsOf('黑炮'), [id('红车'), ...idsOf('卒').slice(0, 2)]], 0);
+apply(mixed, 0, { kind: 'lead', pieceIds: idsOf('黑炮') });
+const mixedActs = legalActions(mixed, 1);
+ok(
+  '两张一组里只有那对卒合法：车+卒 报上来照样 null',
+  mixedActs.length === 1 && pickByIndices(mixed, 1, mixedActs, '1 2') === null && pickByIndices(mixed, 1, mixedActs, '2 3') === mixedActs[0],
+  mixedActs.map((a) => (a as { pieceIds: number[] }).pieceIds.join(',')).join(' | '),
+);
+
 const tied = createGame({ rules: base, players: 4, mode: 'kou', seed: 3 });
 tied.won = [8, 8, 4, 8];
 const ranked = finalRank(tied);
@@ -165,6 +205,27 @@ apply(hidden, 0, { kind: 'lead', pieceIds: [id('红炮')] });
 ok('暗棋领出的牌结算前别人看不见', isFaceDown(hidden, id('红炮')));
 apply(hidden, 1, { kind: 'follow', pieceIds: [id('卒')] });
 ok('一墩出完才翻开，赢家收走全部', !isFaceDown(hidden, id('红炮')) && hidden.won[0] === 2 && hidden.leader === 0, JSON.stringify(hidden.won));
+
+console.log('\n扣棋并发：首出之后其余几家同时暗出，不分先后');
+const zu = idsOf('卒');
+const pao = idsOf('红炮');
+const conc = toPlay(createGame({ rules: base, players: 4, mode: 'kou', seed: 44 }), [[zu[0]], [pao[0]], [pao[1]], [zu[1]]], 0);
+apply(conc, 0, { kind: 'lead', pieceIds: [zu[0]] });
+ok(
+  '首出一落，其余三家同时都能动手',
+  pendingSeats(conc).join() === '1,2,3' && [1, 2, 3].every((s) => legalActions(conc, s).length > 0),
+  pendingSeats(conc).join(),
+);
+apply(conc, 3, { kind: 'follow', pieceIds: [zu[1]] });
+apply(conc, 2, { kind: 'follow', pieceIds: [pao[1]] });
+ok('一墩没出完之前桌上没有「当前最大」', conc.trick!.championIdx === 0 && viewFor(conc, 1).trick!.championSeat === 0);
+ok(
+  '倒着落子也不改判定序：plays 按顺时针排，不是按谁先出',
+  conc.trick!.plays.map((p) => p.player).join() === '0,2,3',
+  conc.trick!.plays.map((p) => p.player).join(),
+);
+apply(conc, 1, { kind: 'follow', pieceIds: [pao[0]] });
+ok('两张红炮并列，顺时针靠前那家赢，跟谁先落子无关', conc.won.join() === '0,4,0,0', JSON.stringify(conc.won));
 
 console.log('\n成组出牌（成组不是必须的，拆开单出也行）');
 function leadOptions(hand: number[]): number[][] {
@@ -201,9 +262,26 @@ ok(
 apply(opening, drawer, { kind: 'draw', stackIdx: 3 });
 const drawn = stacks0[3][3];
 const firstPoint = opening.byId.get(drawn)!.point;
-ok('抽的是选定那摞最上面那张，当场算明牌', opening.draft!.drawn === drawn && opening.revealed.has(drawn) && !isFaceDown(opening, drawn));
+ok('不指定抽哪张就抽摞口那张，当场各家都看得见', opening.draft!.drawn === drawn && !isFaceDown(opening, drawn) && viewFor(opening, (drawer + 1) % 4).open.has(drawn));
 ok(`翻出 ${firstPoint} 点：从起抽人自己数到 ${seatName((drawer + firstPoint - 1) % 4)}`, opening.draft!.decider === (drawer + firstPoint - 1) % 4 && opening.opening!.seat === opening.draft!.decider);
 ok('抽完这一签就定了：只剩处置人能选分法，起抽人没牌可抽了', legalActions(opening, opening.draft!.decider).length === 3 && legalActions(opening, drawer).length === 0);
+
+// 界面上摊开之后每一张各是一个点击目标，引擎得照着「点的那张」抽；CLI 和 AI 不传 pieceId，走的还是摞口
+const pickGame = createGame({ rules: base, players: 4, mode: 'ming', seed: 21 });
+const pickStack = pickGame.draft!.stacks[1];
+const pickId = pickStack[1];
+apply(pickGame, currentActor(pickGame)!, { kind: 'draw', stackIdx: 1, pieceId: pickId });
+ok('点哪张抽哪张：抽的就是点的那张，不是永远摞口那张', pickGame.draft!.drawn === pickId && pickGame.opening!.pieceId === pickId);
+ok(
+  '抽摞中间那张也照它的点数数人',
+  pickGame.draft!.decider === (pickGame.opening!.drawer + pickGame.byId.get(pickId)!.point - 1) % 4,
+);
+apply(pickGame, pickGame.draft!.decider, { kind: 'allocate', way: 'layered' });
+ok(
+  '摞里被抽走一张也分得完：每人还是 8 枚，那张跟着这摞进了某家',
+  pickGame.hands.every((h) => h.length === 8) && pickGame.hands.some((h) => h.includes(pickId)),
+  pickGame.hands.map((h) => h.length).join(','),
+);
 
 const rngDraft = mulberry32(99);
 while (opening.phase === 'draft') {
@@ -212,6 +290,9 @@ while (opening.phase === 'draft') {
   apply(opening, seat, acts[Math.floor(rngDraft() * acts.length)]);
 }
 ok('8 摞一次分完，发完牌先出的就是那一抽数到的人', opening.leader === opening.opening!.seat && opening.hands.every((h) => h.length === 8), `手牌 ${opening.hands.map((h) => h.length).join(',')}`);
+const holder = opening.hands.findIndex((h) => h.includes(drawn));
+ok('签牌进手就跟着扣：分完牌 isFaceDown 为真', isFaceDown(opening, drawn));
+ok('持有人自己还认得这张签，别人查它直接抛错', viewFor(opening, holder).piece(drawn).id === drawn && (() => { try { viewFor(opening, (holder + 1) % 4).piece(drawn); return false; } catch { return true; } })());
 
 console.log('\n分牌：三种拿法都不指名给谁，张数一定公平');
 function drafted(way: 'layered' | 'stacks-left' | 'stacks-right', players = 4, seed = 31) {
@@ -322,6 +403,113 @@ ok(
   '明棋里它看得见那是一张黑炮，压不过就弃最小的',
   mingDiscard.kind === 'discard' && picked(mingDiscard) === '卒',
   `${mingDiscard.kind}:${picked(mingDiscard)}`,
+);
+
+console.log('\nAI 不许有固定套路：同分的走法要随机挑（网页的电脑座位走的就是这个 choose）');
+
+/** 全程用某个档位打一局，记它每次抽签点了哪一摞、每次分牌挑了哪种拿法 */
+function aiChoices(level: Level, games: number): { stacks: number[]; ways: string[] } {
+  const stacks: number[] = [];
+  const ways: string[] = [];
+  for (let g = 0; g < games; g++) {
+    const state = createGame({ rules: base, players: 4, mode: 'kou', seed: 77000 + g * 31 });
+    const rng = mulberry32(state.seed ^ 0x9e3779b9);
+    let guard = 0;
+    while (state.phase !== 'over' && guard++ < 3000) {
+      const seat = currentActor(state)!;
+      const actions = legalActions(state, seat);
+      const action = choose(viewFor(state, seat), actions, level, rng);
+      if (action.kind === 'draw') stacks.push(action.stackIdx);
+      if (action.kind === 'allocate') ways.push(action.way);
+      apply(state, seat, action);
+    }
+  }
+  return { stacks, ways };
+}
+
+for (const level of ['greedy', 'hard'] as Level[]) {
+  const { stacks, ways } = aiChoices(level, 20);
+  const spread = new Set(stacks).size;
+  ok(
+    `${level} 抽签摊开在 8 摞上（20 局抽了 ${stacks.length} 次，踩过 ${spread} 个不同摞号）`,
+    spread >= 5 && stacks.filter((p) => p === 0).length < stacks.length,
+    stacks.join(','),
+  );
+  // 处置人那三种拿法也一样：只会被网页的电脑永远选「层层轮流分」，那分牌就成了套路
+  ok(
+    `${level} 分牌三种拿法都选过（${ways.join(',').slice(0, 60)}…）`,
+    new Set(ways).size === 3,
+    [...new Set(ways)].join('|'),
+  );
+}
+const easyStacks = aiChoices('easy', 20).stacks;
+ok(
+  'easy 本来就是随机选，改同分逻辑没把它改死',
+  new Set(easyStacks).size >= 5,
+  easyStacks.join(','),
+);
+console.log('\n跨局驱动：上一局赢家担任下一局起抽人');
+const matchImport = await import('../core/match.ts');
+const { nextDrawer, openMatch, recordGame, winners } = matchImport;
+
+/** 打出一局真局，再把收牌数摆成想要的名次（只用来验跨局那几条判定） */
+function played(won: number[], drawer: number): GameState {
+  const state = createGame({ rules: base, players: won.length, mode: 'kou', seed: 61, drawer });
+  playOut(state);
+  state.won = [...won];
+  return state;
+}
+
+const soloWin = played([19, 13], 0);
+ok('唯一赢家 → 下一局他起抽', winners(soloWin).join() === '0' && nextDrawer(soloWin) === 0);
+const tieGame = played([16, 16], 1);
+ok('并列 → 沿用这一局的起抽人，签不换手', winners(tieGame).length === 2 && nextDrawer(tieGame) === 1);
+const nothing = played([0, 0], 1);
+ok('一张没收到也算并列：不加冕、签不动', winners(nothing).length === 0 && nextDrawer(nothing) === 1);
+const appoint = createGame({ rules: base, players: 4, mode: 'ming', seed: 62, drawer: 2 });
+ok('指定起抽人：摆摞阶段认他', appoint.drawer === 2 && appoint.draft!.drawer === 2);
+playOut(appoint);
+ok('打完一局 state.drawer 还在（驱动层不用翻抽签记录）', appoint.drawer === 2 && appoint.draft === null);
+let earlyThrow = '';
+try {
+  nextDrawer(createGame({ rules: base, players: 2, mode: 'ming', seed: 63 }));
+} catch (e) {
+  earlyThrow = String((e as Error).message);
+}
+ok('没打完就想定下一局起抽人 → 直接报错', earlyThrow.includes('还没打完'), earlyThrow);
+
+const book = openMatch(4);
+const chainGames = 60;
+let want = -1;
+let chainBad = '';
+for (let g = 0; g < chainGames; g++) {
+  const state = createGame({
+    rules: base,
+    players: 4,
+    mode: 'ming',
+    seed: 3000 + g * 13,
+    ...(g === 0 ? {} : { drawer: want }),
+  });
+  if (g > 0 && state.drawer !== want) chainBad = `第 ${g + 1} 局起抽人成了 ${state.drawer}，应为 ${want}`;
+  playOut(state);
+  recordGame(book, state);
+  want = nextDrawer(state);
+}
+ok(`${chainGames} 局连环：赢家起抽的链条一局没断`, chainBad === '', chainBad);
+ok(
+  `总账收牌 ${book.cards.reduce((a, b) => a + b, 0)} 枚 = ${TOTAL} × ${chainGames}`,
+  book.cards.reduce((a, b) => a + b, 0) === TOTAL * chainGames,
+);
+ok(
+  `局数守恒：games ${book.games} = 起抽人次 ${book.draws.reduce((a, b) => a + b, 0)} = 加冕 ${book.titles.reduce((a, b) => a + b, 0)} + 并列 ${book.ties}`,
+  book.games === chainGames &&
+    book.draws.reduce((a, b) => a + b, 0) === chainGames &&
+    book.titles.reduce((a, b) => a + b, 0) + book.ties === chainGames,
+);
+ok(
+  `起抽夺冠率不超过起抽次数：${book.draws.map((n, seat) => `${seatName(seat)} ${book.drawWins[seat]}/${n}`).join('  ')}｜累计夺冠 ${book.titles.reduce((a, b) => a + b, 0)} 局`,
+  book.drawWins.every((w, seat) => w <= (book.draws[seat] ?? 0)) &&
+    book.drawWins.reduce((a, b) => a + b, 0) <= book.titles.reduce((a, b) => a + b, 0),
 );
 
 console.log('\n守恒与收敛（每种局面各 200 局）');

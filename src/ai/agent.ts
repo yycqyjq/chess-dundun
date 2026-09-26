@@ -7,20 +7,25 @@ export type Level = 'easy' | 'greedy' | 'hard';
 
 export const LEVELS: Level[] = ['easy', 'greedy', 'hard'];
 
-/** 只喂 View：AI 看得见多少，和真人屏幕上显示的完全一样 */
+/**
+ * 只喂 View：AI 看得见多少，和真人屏幕上显示的完全一样。
+ * 同分的走法攒起来随机挑一个，别永远取第一个——抽签、分牌全是同分。
+ */
 export function choose(view: View, actions: Action[], level: Level, rng: () => number): Action {
   if (actions.length === 0) throw new Error(`P${view.seat + 1} 无合法行动`);
   if (level === 'easy') return actions[Math.floor(rng() * actions.length)];
-  let best = actions[0];
+  let tied: Action[] = [];
   let bestScore = Infinity;
   for (const action of actions) {
     const score = scoreAction(view, action, level);
     if (score < bestScore) {
-      best = action;
+      tied = [action];
       bestScore = score;
+    } else if (score === bestScore) {
+      tied.push(action);
     }
   }
-  return best;
+  return tied.length === 1 ? tied[0]! : tied[Math.floor(rng() * tied.length)]!;
 }
 
 /**
@@ -30,7 +35,7 @@ export function choose(view: View, actions: Action[], level: Level, rng: () => n
  */
 function scoreAction(view: View, action: Action, level: Level): number {
   switch (action.kind) {
-    // 牌堆随机扣着、没人看得见，所以抽哪摞、三种分法怎么选在信息上等值——不做偏好
+    // 牌堆随机扣着、没人看得见，所以抽哪摞、三种分法怎么选在信息上等值——不做偏好，交给同分随机
     case 'draw':
     case 'allocate':
     case 'noop':
