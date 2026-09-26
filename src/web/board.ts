@@ -73,8 +73,33 @@ const PILE_SCALE = 0.55;
 /** 一排放两组摞，排满往桌心叠下一排——贴着角那一小块地盘就这么宽 */
 const PILE_ROW = 2;
 
-/** 往桌心最多叠两排：再多就原地挤出一丝边缝，一家独吞时摞不会爬到别家地盘上 */
-const PILE_MAX_ROWS = 2;
+/** 一组（四张码一摞）自己占多宽多深：同摞逐张错开会把外轮廓撑出去这一截 */
+const GROUP_A = 1 + 0.16 * (PILE_SIZE - 1);
+const GROUP_I = 1 + 0.24 * (PILE_SIZE - 1);
+
+/** 相邻两组之间沿边／往桌心的圆心距（乘小牌半径） */
+const GROUP_STEP_A = 1.7;
+const GROUP_STEP_I = 1.85;
+
+/**
+ * 一块收牌地盘有多大：**固定**，按「两排两组、每组四张」在 `PILE_SCALE` 下量出来的那个方框。
+ * 固定是关键——名字条贴边、别家让位全按它算，牌多起来时地盘不能跟着长，
+ * 只能框里的格变密、小牌变小（见 `pileUnit`）。
+ */
+function pileBox(cw: number): { a: number; i: number } {
+  const u = cw * PILE_SCALE;
+  return { a: u * (GROUP_STEP_A * (PILE_ROW - 1) + GROUP_A), i: u * (GROUP_STEP_I * (PILE_ROW - 1) + GROUP_I) };
+}
+
+/**
+ * 收 32 张（一家独吞＝八组）也不许叠罗汉：组数一多就重新分格数、把每张小牌整体缩一点，
+ * 让它们仍在同一个方框里排成整齐的网格。四组以内用原尺寸，看不出缩过。
+ * 沿边固定 `PILE_ROW` 组：横向让量 `CORNER_KEEP` 就够两组，多塞一列反而要把牌缩得更狠。
+ */
+function pileUnit(groups: number, cw: number): number {
+  const rows = Math.max(1, Math.ceil(groups / PILE_ROW));
+  return Math.min(cw * PILE_SCALE, pileBox(cw).i / (GROUP_STEP_I * (rows - 1) + GROUP_I));
+}
 
 /** 手牌扇形左右各让出这么多个 cw：四角那块地盘归收牌摞，扇形不许压进去 */
 const CORNER_KEEP = 2.4;
@@ -174,14 +199,12 @@ export function labelBand(): number {
 }
 
 /**
- * 一块收牌地盘能吃多深：沿边铺开那一长条（两组 + 同摞错开 + 溢出排挤的边缝 + 最外那张牌）
- * 和往桌心叠到 `PILE_MAX_ROWS` 排，两个方向取大。名字条贴边、别家让位都按这个数算，别靠肉眼估。
+ * 一块收牌地盘能吃多深：沿边那一长条和往桌心那一长条取大。
+ * 名字条贴边、别家让位都按这个数算，别靠肉眼估。
  */
 export function pileDepth(cw: number): number {
-  const u = cw * PILE_SCALE;
-  const along = u * (1.7 * (PILE_ROW - 1) + (0.16 + 0.08) * (PILE_SIZE - 1) + 1);
-  const inward = u * (1.85 * (PILE_MAX_ROWS - 1) + 0.24 * (PILE_SIZE - 1) + 1);
-  return Math.max(along, inward);
+  const box = pileBox(cw);
+  return Math.max(box.a, box.i);
 }
 
 /** 顶边那一长条有多深：P3 的名字条 + 一条缝 + 它贴边那排收牌摞 */
@@ -296,9 +319,9 @@ interface PileGeom {
 
 function pileGeom(seat: number, players: number, board: Board, cw: number): PileGeom {
   const s = cw * 0.62;
-  // 牌缩放到 PILE_SCALE 后四周各空 (cw-w)/2，锚点补回这 0.05cw，摞沿就正好压在顶/底那一长条的边上
-  const below = LABEL_TOP + LABEL_H + LABEL_GAP + cw * 0.05;
-  const above = board.h - bottomBand(board) + cw * 0.05;
+  // 锚点就是这块地盘的边角线：`layout` 里按小牌实际尺寸摆可见框，缩多少都同一条边，不会往桌心漂
+  const below = LABEL_TOP + LABEL_H + LABEL_GAP;
+  const above = board.h - bottomBand(board);
   // 2 人局对面坐北，右手边＝左上角
   if (players === 2) {
     return seat === 0
@@ -306,7 +329,7 @@ function pileGeom(seat: number, players: number, board: Board, cw: number): Pile
       : { x: s, y: below, alongX: true, sa: 1, si: 1 };
   }
   if (seat === 0) return { x: board.w - s, y: above, alongX: true, sa: -1, si: -1 };
-  if (seat === 1) return { x: s, y: sideLabelY(board) + LABEL_H + LABEL_GAP + cw * 0.05, alongX: false, sa: 1, si: 1 };
+  if (seat === 1) return { x: s, y: sideLabelY(board) + LABEL_H + LABEL_GAP, alongX: false, sa: 1, si: 1 };
   if (seat === 2) return { x: s, y: below, alongX: true, sa: 1, si: 1 };
   return { x: board.w - s, y: below, alongX: false, sa: 1, si: -1 };
 }
@@ -388,23 +411,23 @@ export function layout(state: GameState, view: TableView, board: Board): Map<num
     return out;
   }
 
-  // 收牌摞：四张码一摞，各家长在自家那块地盘上，一排两组、排满往桌心叠一排，同摞内逐张错开好数张数。
-  // 叠到 `PILE_MAX_ROWS` 排就封顶，后面的摞原地挤一点边缝——一家独吞也不会把摞爬到别家那边。
-  const u = cw * PILE_SCALE;
+  // 收牌摞：四张码一摞，各家长在自家那块地盘上，一排两组、排满往桌心叠下一排，同摞内逐张错开好数张数。
+  // 地盘是固定大小的方框（`pileBox`），组数超过框里原有的四格就把小牌缩一档、格数加排，
+  // 所以一家独吞 32 张也是八组各占一格排整齐，不会叠成一坨（他原话：超过 4 摞也要按顺序排好）。
   for (let seat = 0; seat < state.players; seat++) {
     const g = pileGeom(seat, state.players, board, cw);
     const ids = view.piles[seat] ?? [];
+    const u = pileUnit(Math.ceil(ids.length / PILE_SIZE), cw);
     ids.forEach((id, k) => {
       const group = Math.floor(k / PILE_SIZE);
       const depth = k % PILE_SIZE;
-      const row = Math.floor(group / PILE_ROW);
-      const along = (group % PILE_ROW) * u * 1.7 + depth * u * 0.16 + Math.max(0, row - (PILE_MAX_ROWS - 1)) * u * 0.08;
-      const inward = Math.min(row, PILE_MAX_ROWS - 1) * u * 1.85 + depth * u * 0.24;
+      const along = (group % PILE_ROW) * u * GROUP_STEP_A + depth * u * 0.16;
+      const inward = Math.floor(group / PILE_ROW) * u * GROUP_STEP_I + depth * u * 0.24;
       put(id, {
-        x: g.x + (g.alongX ? g.sa * along : g.si * inward) - u / 2,
-        y: g.y + (g.alongX ? g.si * inward : g.sa * along) - u / 2,
-        scale: PILE_SCALE,
-        z: 100 + seat * 40 + group * 8 + depth,
+        x: g.x + (g.alongX ? g.sa * along : g.si * inward) - cw / 2 + u / 2,
+        y: g.y + (g.alongX ? g.si * inward : g.sa * along) - cw / 2 + u / 2,
+        scale: u / cw,
+        z: 100 + seat * 40 + group * 4 + depth,
         down: !faceUp(id, seat === view.mine),
         delay: view.justWon.has(id) ? 140 : 0,
         cls: view.justWon.has(id) ? 'won' : 'pile',

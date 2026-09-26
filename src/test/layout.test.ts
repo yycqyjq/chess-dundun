@@ -5,7 +5,7 @@
  */
 import { apply, createGame, type GameState } from '../core/game.ts';
 import { loadRules } from '../node/load_rules.ts';
-import { bottomBand, ctrlLift, fanStep, handBand, handCramped, labelBand, labelBands, layout, pieceSize, stackSpots, type Board, type TableView } from '../web/board.ts';
+import { bottomBand, ctrlLift, fanStep, handBand, handCramped, labelBand, labelBands, layout, PILE_SIZE, pieceSize, stackSpots, type Board, type TableView } from '../web/board.ts';
 
 let failures = 0;
 function ok(name: string, condition: boolean, detail = ''): void {
@@ -97,6 +97,8 @@ const CASES: Record<number, [number[], number[]][]> = {
     [[8, 8], [8, 8]],
     [[4, 10], [12, 6]],
     [[0, 6], [26, 0]],
+    // 一家独吞整副：八组摞，每组都得各占一格
+    [[0, 0], [32, 0]],
   ],
   4: [
     [[8, 8, 8, 8], [0, 0, 0, 0]],
@@ -105,8 +107,11 @@ const CASES: Record<number, [number[], number[]][]> = {
     [[0, 8, 8, 8], [8, 0, 0, 0]],
     // P2 一家被处置人塞了一大摞：它的摞只能在左边那块地盘里挤，不许爬到 P3 或我头上来
     [[4, 4, 4, 0], [4, 12, 4, 0]],
-    // 对面独吞 20 张：五组摞叠到第三排也封顶在自家那条边带里，剩下的原地挤边缝
+    // 对面独吞 20 张：五组起地盘里原本的格子就不够分，得缩牌加排而不是叠罗汉
     [[2, 2, 0, 0], [4, 4, 20, 0]],
+    // 你独吞 28 张（七组）、P2 独吞 28 张（沿左边那条边排）
+    [[0, 0, 4, 0], [28, 0, 0, 0]],
+    [[4, 0, 0, 0], [0, 28, 0, 0]],
   ],
 };
 
@@ -132,6 +137,29 @@ for (const { name, board } of BOARDS) {
         out.length === 0 && pileVsPile === 0 && pileVsHand === 0 && cw >= 20,
         `出界 ${out.length}｜摞压摞 ${pileVsPile}｜摞压手牌 ${pileVsHand}｜cw ${cw.toFixed(1)}`,
       );
+    }
+  }
+}
+
+console.log('\n同一家的组与组：四张一墩算一格，超过地盘里那四格就缩牌加排，一张都不许叠在另一组上');
+for (const { name, board } of BOARDS) {
+  for (const players of [2, 4]) {
+    for (const [hands, piles] of CASES[players]!) {
+      const { state, view } = midGame(players, 11, hands, piles);
+      const box = boxes(state, view, board);
+      let stacked = 0;
+      let groups = 0;
+      for (const ids of view.piles) {
+        groups = Math.max(groups, Math.ceil(ids.length / PILE_SIZE));
+        // 同组内四张本来就互相压着（那就是一摞），要守的是组与组的边界
+        for (let a = 0; a < ids.length; a++) {
+          for (let b = a + 1; b < ids.length; b++) {
+            if (Math.floor(a / PILE_SIZE) === Math.floor(b / PILE_SIZE)) continue;
+            if (hits(box.get(ids[a]!)!, box.get(ids[b]!)!)) stacked++;
+          }
+        }
+      }
+      ok(`${name}｜${players} 人 摞 ${piles.join('/')} 组组分开（最多 ${groups} 组）`, stacked === 0, `${stacked} 对压在一起`);
     }
   }
 }
