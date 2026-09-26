@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img">
+  <title>棋墩墩</title>
+  <defs>
+    <linearGradient id="board" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#e8c996"/>
+      <stop offset="0.55" stop-color="#d0a76c"/>
+      <stop offset="1" stop-color="#a97c46"/>
+    </linearGradient>
+    <radialGradient id="face" cx="0.36" cy="0.28" r="0.82">
+      <stop offset="0" stop-color="#fbeacb"/>
+      <stop offset="0.58" stop-color="#e0c389"/>
+      <stop offset="1" stop-color="#b4905a"/>
+    </radialGradient>
+    <radialGradient id="back" cx="0.4" cy="0.32" r="0.86">
+      <stop offset="0" stop-color="#8a6238"/>
+      <stop offset="0.65" stop-color="#5b3d21"/>
+      <stop offset="1" stop-color="#3f260f"/>
+    </radialGradient>
+    <clipPath id="tile">
+      <rect width="512" height="512" rx="112"/>
+    </clipPath>
+  </defs>
+
+  <g clip-path="url(#tile)">
+    <rect width="512" height="512" fill="url(#board)"/>
+
+    <!-- 线不贴边：四周留 32 的空边，8 竖 8 横、间距 64。左右两条边框通画封口，中间 6 条竖线在河界那格断开 -->
+    <g stroke="#4a3120" stroke-width="6" opacity="0.42" fill="none">
+      <path d="M32 32V480M480 32V480"/>
+      <path d="M96 32V224M96 288V480M160 32V224M160 288V480M224 32V224M224 288V480M288 32V224M288 288V480M352 32V224M352 288V480M416 32V224M416 288V480"/>
+      <path d="M32 32H480M32 96H480M32 160H480M32 224H480M32 288H480M32 352H480M32 416H480M32 480H480"/>
+    </g>
+
+    <!-- 一摞四枚：四枚一样大，等距往上叠，每枚只露一道边，正对镜头不做透视 -->
+    <g>
+      <ellipse cx="256" cy="340" rx="88" ry="84" fill="#2f1c0a"/>
+      <ellipse cx="256" cy="340" rx="82" ry="78" fill="url(#back)"/>
+      <ellipse cx="256" cy="296" rx="88" ry="84" fill="#2f1c0a"/>
+      <ellipse cx="256" cy="296" rx="82" ry="78" fill="url(#back)"/>
+      <ellipse cx="256" cy="252" rx="88" ry="84" fill="#2f1c0a"/>
+      <ellipse cx="256" cy="252" rx="82" ry="78" fill="url(#back)"/>
+    </g>
+    <g>
+      <ellipse cx="256" cy="208" rx="88" ry="84" fill="#8c6a3f"/>
+      <ellipse cx="256" cy="208" rx="82" ry="78" fill="url(#face)"/>
+      <ellipse cx="256" cy="208" rx="66" ry="63" fill="none" stroke="#8e2a1d" stroke-width="6"/>
+      <text x="256" y="236" text-anchor="middle" font-family="'Songti SC','STSong','Noto Serif CJK SC','SimSun',serif"
+        font-weight="700" font-size="78" fill="#8e2a1d">墩</text>
+    </g>
+  </g>
+  <rect width="512" height="512" rx="112" fill="none" stroke="#000000" stroke-opacity="0.16" stroke-width="4"/>
+</svg>

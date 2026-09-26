@@ -17,6 +17,7 @@
     "selfplay": "node --experimental-strip-types src/cli/main.ts selfplay",
     "play": "node --experimental-strip-types src/cli/main.ts play",
     "dev": "vite",
+    "icon": "sed 's/rx=\"112\"/rx=\"0\"/' public/icon.svg > /tmp/icon-square.svg && qlmanage -t -s 512 -o /tmp /tmp/icon-square.svg >/dev/null 2>&1 && command mv -f /tmp/icon-square.svg.png public/icon-512.png && sips -Z 180 public/icon-512.png --out public/apple-touch-icon.png >/dev/null && sips -Z 32 public/icon-512.png --out public/icon-32.png >/dev/null && echo 已按 public/icon.svg 重画 icon-512 / apple-touch-icon / icon-32",
     "build": "vite build",
     "preview": "vite preview"
   },
