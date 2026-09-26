@@ -124,10 +124,24 @@ body {
   padding: 9px 13px;
   cursor: pointer;
   min-height: 40px;
+  transition: transform 120ms ease-out, filter 120ms ease-out, box-shadow 120ms ease-out;
+}
+
+/* 滑上去抬一点、亮一档，按下再落回来。
+   .dim 是「这会儿没人接」的按钮，抬起来等于骗人去点，排除掉；
+   整段包在 hover: hover 里——触屏点完 hover 会赖着不散，手机上就成了永久浮起。 */
+@media (hover: hover) {
+  .btn:not(.dim):hover,
+  .btn:not(.dim):focus-visible {
+    transform: translateY(-2px);
+    filter: brightness(1.14);
+    box-shadow: 0 4px 10px rgba(0, 0, 0, 0.38);
+  }
 }
 
 .btn:active {
   transform: translateY(1px);
+  box-shadow: none;
 }
 
 .btn.primary {
