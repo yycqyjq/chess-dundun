@@ -12,7 +12,7 @@ import { pieceLabel } from '../core/pieces.ts';
 import { nextDrawer, openMatch, recordGame, winners, type MatchBook } from '../core/match.ts';
 import { mulberry32 } from '../core/rng.ts';
 import { viewFor } from '../core/view.ts';
-import { ctrlLift, labelBands, LABEL_W, layout, pieceSize, stackSpots, type Board, type TableView } from './board.ts';
+import { ctrlLift, handCramped, labelBands, LABEL_W, layout, pieceSize, stackSpots, type Board, type TableView } from './board.ts';
 import { MOVE_MS, Pieces } from './pieces.ts';
 import { rules } from './rules.ts';
 import { Sound } from './sound.ts';
@@ -599,8 +599,8 @@ export class App {
     }
     if (this.ask === null || state.phase === 'over') return;
     if (!pendingSeats(state).includes(HUMAN) || !state.hands[HUMAN].includes(id)) return;
-    // 手牌叠着的时候先点一下把整排摊开：没摊开之前每张只露一条边，点的位置说不清是哪张
-    if (!this.view.spread) {
+    // 挤成一条边了才先点一下把整排摊开；宽桌面上扇形本来就张得开，点哪张就是哪张
+    if (!this.view.spread && handCramped(state.hands[HUMAN]!.length, this.size())) {
       this.view.spread = true;
       this.render(true);
       return;
@@ -679,7 +679,7 @@ export class App {
     this.shell.board.classList.toggle('tappable', this.ask !== null && !this.busy);
     this.paintChips(board);
     this.paintStacks(board);
-    this.paintPrompt();
+    this.paintPrompt(board);
     this.paintLog();
   }
 
@@ -749,7 +749,7 @@ export class App {
     });
   }
 
-  private paintPrompt(): void {
+  private paintPrompt(board: Board): void {
     const state = this.state;
     const shell = this.shell;
     shell.ctrl.innerHTML = '';
@@ -786,8 +786,8 @@ export class App {
     }
     const others = actors.filter((s) => s !== HUMAN);
     const atOnce = state.mode === 'kou' && state.trick && others.length > 0;
-    // 第一下是「把整排摊开」，不是「出这张」——鼠标和触屏都一样（抬起已删，路过不给反馈）
-    const tapFirst = this.view.spread ? '' : '先点一下把手牌摊开，再点那几张｜';
+    // 扇形本来就摊得开（宽桌面）就直接点那张，这句只在挤成一条边时才提示；第一下是「摊开」不是「出这张」
+    const tapFirst = this.view.spread || !handCramped(state.hands[HUMAN]!.length, board) ? '' : '先点一下把手牌摊开，再点那几张｜';
     shell.status.textContent =
       tapFirst +
       (atOnce ? `你和${others.map((s) => this.who(s)).join('、')}同时暗出，谁也看不见谁｜` : '') +

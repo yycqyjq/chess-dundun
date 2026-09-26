@@ -82,6 +82,13 @@ const CORNER_KEEP = 2.4;
 /** 扇形两边往下坠的幅度（乘 cw）：中间最高、两边最低，握在手里的那个弧度 */
 const FAN_DIP = 0.34;
 
+/**
+ * 每张露出来的宽度占牌径到这个比例，就直接点那张；再叠就得先点一下摊开。
+ * 扇形铺得开时是 0.84cw（桌面/横屏 8～16 张全在这一档），窄屏 8 张只剩 0.5～0.67cw 一条边。
+ * 按「露出的比例」判而不是按像素判：牌本来就跟着桌面缩放，缩到哪儿手感都按同一张脸的比例算。
+ */
+const FAN_LEGIBLE = 0.7;
+
 /** 摊开最多排几排：再多一排就顶到桌面那一墩上，看牌不能把牌桌盖了 */
 const HS_ROWS = 3;
 
@@ -101,6 +108,25 @@ export function handBand(board: Board): { top: number; bottom: number } {
   };
 }
 
+/** 手牌横向能铺多宽：左右各让出 CORNER_KEEP 个 cw，那两块归角上的收牌摞 */
+function handRoom(cw: number, board: Board): number {
+  return Math.max(cw, board.w - cw * CORNER_KEEP * 2);
+}
+
+/** 扇形里相邻两张的圆心距：铺得开就按 0.84cw 摆，铺不开就整体挤紧 */
+export function fanStep(n: number, board: Board): number {
+  const cw = pieceSize(board);
+  return n > 1 ? Math.min(cw * 0.84, (handRoom(cw, board) - cw) / (n - 1)) : cw;
+}
+
+/**
+ * 手牌叠到看不清边了没。宽桌面上 8～16 张各露 0.84cw，点哪张就是哪张，不必先摊开；
+ * 窄屏上同样的 8 张只剩半张脸的边（手机竖屏 20px），才要「点一下摊开、再点那张」那第一下。
+ */
+export function handCramped(n: number, board: Board): boolean {
+  return fanStep(n, board) < pieceSize(board) * FAN_LEGIBLE;
+}
+
 /**
  * 手牌摊开后的格子：每张各占一格、互不遮挡，从底边名字条上方往上排。
  * 先按原尺寸铺，铺不进 `HS_ROWS` 排就整排缩——宁可牌小一圈，也不许爬到桌面那一墩上盖住别人的牌。
@@ -109,7 +135,7 @@ export function handBand(board: Board): { top: number; bottom: number } {
 export function handSpread(n: number, board: Board): { x: number; y: number; scale: number }[] {
   const full = pieceSize(board);
   const band = handBand(board);
-  const room = Math.max(full, board.w - full * CORNER_KEEP * 2);
+  const room = handRoom(full, board);
   const stepFull = full * HS_GAP;
   const colsFit = Math.max(1, Math.floor(room / stepFull));
   // 排数取「铺得下的列数刚好用完」的最少排：能两排摆开就别挤三排，多一排就多盖一排桌面
@@ -412,9 +438,8 @@ export function layout(state: GameState, view: TableView, board: Board): Map<num
     const hand = state.hands[seat];
     if (seat === view.mine) {
       // 扇形以桌面正中为轴，左右各让出 CORNER_KEEP 个 cw 给角上那摞
-      const room = Math.max(cw, board.w - cw * CORNER_KEEP * 2);
       const lift = fanLift(board);
-      const step = hand.length > 1 ? Math.min(cw * 0.84, (room - cw) / (hand.length - 1)) : 0;
+      const step = fanStep(hand.length, board);
       const fans = fan(hand, (id) => state.byId.get(id)!.tier);
       // 摊开态：整块压过桌面和收牌摞，选完收回扇形——所以 z 给到全桌最高
       const spots = view.spread ? handSpread(fans.length, board) : null;

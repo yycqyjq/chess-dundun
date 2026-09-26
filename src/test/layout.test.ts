@@ -5,7 +5,7 @@
  */
 import { apply, createGame, type GameState } from '../core/game.ts';
 import { loadRules } from '../node/load_rules.ts';
-import { bottomBand, ctrlLift, handBand, labelBand, labelBands, layout, pieceSize, stackSpots, type Board, type TableView } from '../web/board.ts';
+import { bottomBand, ctrlLift, fanStep, handBand, handCramped, labelBand, labelBands, layout, pieceSize, stackSpots, type Board, type TableView } from '../web/board.ts';
 
 let failures = 0;
 function ok(name: string, condition: boolean, detail = ''): void {
@@ -434,6 +434,36 @@ for (const { name, board } of BOARDS) {
       over += state.hands[seat]!.filter((id) => fan.some((r) => hits(box.get(id)!, r))).length;
     }
     ok(`${name}｜${players} 人 手 ${hands.join('/')} 别家的坨不压扇形`, over === 0, `压住 ${over} 张`);
+  }
+}
+
+console.log('\n摊开不摊开：扇形本来就张得开的就别多要一下点击，挤成一条边的才要（用户口径：这种没必要点一下展开再选）');
+{
+  // 期望值写死成一张表，不重抄判定式（探针实测出来的依赖关系）：
+  // 窄屏 8 张那三格跟着 CORNER_KEEP 走——让量从 2.4cw 砍到 1.2cw 就全翻成「直接点」；
+  // 16 张怎么让都还是挤，钉在「先摊开」那头；桌面/横屏钉在扇形 0.84cw 的上限上，改让量也不动。
+  // 两头各守一条不同的几何，改哪头这张表都会红。
+  const want: Record<string, Record<number, boolean>> = {
+    '手机竖屏 390×844': { 8: true, 16: true },
+    '窄窗 558×668': { 8: true, 16: true },
+    '平板横屏 844×390': { 8: false, 16: false },
+    '桌面 1280×800': { 8: false, 16: false },
+    '极窄 320×568': { 8: true, 16: true },
+  };
+  for (const { name, board } of BOARDS) {
+    for (const n of [8, 16]) {
+      const step = fanStep(n, board);
+      const cramped = handCramped(n, board);
+      ok(
+        `${name}｜${n} 张 露 ${(step / pieceSize(board)).toFixed(2)}cw → ${cramped ? '先摊开' : '直接点'}`,
+        cramped === want[name]![n],
+        `期望 ${want[name]![n] ? '先摊开' : '直接点'}`,
+      );
+    }
+    // 同一种屏上张数只会越叠越挤，不许 8 张要摊开、16 张反倒不用
+    for (let n = 8; n < 16; n++) {
+      ok(`${name}｜${n}→${n + 1} 张不会变松`, !handCramped(n, board) || handCramped(n + 1, board), `${n + 1} 张成了直接点`);
+    }
   }
 }
 
