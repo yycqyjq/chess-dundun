@@ -128,11 +128,11 @@ body {
 }
 
 /* 滑上去抬一点、亮一档，按下再落回来。
-   .dim 是「这会儿没人接」的按钮，抬起来等于骗人去点，排除掉；
+   .dim 是「这会儿没人接」的按钮，抬起来等于骗人去点，排除掉；:disabled 同理（大厅里坐了人的椅子）；
    整段包在 hover: hover 里——触屏点完 hover 会赖着不散，手机上就成了永久浮起。 */
 @media (hover: hover) {
-  .btn:not(.dim):hover,
-  .btn:not(.dim):focus-visible {
+  .btn:not(.dim):not(:disabled):hover,
+  .btn:not(.dim):not(:disabled):focus-visible {
     transform: translateY(-2px);
     filter: brightness(1.14);
     box-shadow: 0 4px 10px rgba(0, 0, 0, 0.38);
@@ -154,6 +154,14 @@ body {
 .btn.dim {
   opacity: 0.45;
   cursor: default;
+}
+
+/* 大厅里坐着人的、已经归了别人的椅子：按不动，也就不该给小手 */
+.btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+  transform: none;
+  box-shadow: none;
 }
 
 /* 声音关掉时还是点得动的，只是淡一点——不能借 .dim，那个连小手都拿掉了 */
@@ -231,6 +239,11 @@ body {
 .chip.decider {
   border-color: var(--gold);
   background: rgba(90, 62, 18, 0.92);
+}
+
+/* 联机：这位子连着的是断掉的人。比 .off 更暗一档，条上那两个字（掉线／代打）才是给人看的 */
+.chip.gone {
+  opacity: 0.38;
 }
 
 /* 名字条的落点不住在这儿：board.ts 的 labelBands() 算，app.ts 写成内联 left/top，
@@ -542,6 +555,64 @@ body {
 .rank-row .t {
   font-size: 12px;
   color: var(--gold);
+}
+
+/* 大厅里的座位表：一行一把椅子。状态那句吃掉剩余宽度，按钮只占自己那点 */
+.seat-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 5px 0;
+  border-bottom: 1px solid #3b332b;
+}
+
+.seat-row .who {
+  font-weight: 600;
+}
+
+.seat-row .t {
+  flex: 1;
+  font-size: 12px;
+  opacity: 0.75;
+}
+
+.seat-row .btn {
+  padding: 6px 12px;
+}
+
+/* 大厅里那道邀请：二维码挨着地址摆。白底本身就是边界，没再套框线 */
+.invite {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 8px 0 2px;
+}
+
+.invite canvas.qr {
+  flex: 0 0 auto;
+  background: #fff;
+  /* 底图一格一像素，靠这条放大出来还是硬边方块 */
+  image-rendering: pixelated;
+}
+
+.invite-col {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+/* 长按全选，桌面端双击也是 */
+.invite-col .u {
+  font-size: 12px;
+  word-break: break-all;
+  user-select: all;
+  -webkit-user-select: all;
+}
+
+.invite-col .note {
+  margin: 2px 0 0;
 }
 
 .drawer {

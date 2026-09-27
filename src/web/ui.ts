@@ -1,3 +1,5 @@
+import { qrMatrix } from './qr.ts';
+
 /** 页面骨架：一次搭好，后面只改文字和位置。牌和座位标记都由 app.ts 摆 */
 export interface Shell {
   board: HTMLElement;
@@ -5,6 +7,8 @@ export interface Shell {
   status: HTMLElement;
   /** 操作按钮条，浮在桌面里、手牌扇形上方 */
   ctrl: HTMLElement;
+  /** 右上角那张：文字由 app.ts 定——单机「换桌」，联机「离桌」 */
+  setup: HTMLElement;
   chips: HTMLElement[];
   /** 摸签那一排「第 N 摞」标签：每块罩住一摞的领地，只管文字，点击目标是摞里的牌 */
   pileZones: HTMLElement[];
@@ -74,7 +78,7 @@ export function buildShell(
   drawer.append(head, lines);
 
   root.append(bar, hint, stage, toast, drawer);
-  return { board, status: hint, ctrl, chips, pileZones, toast, drawer, lines, meta, sound: btnSound };
+  return { board, status: hint, ctrl, setup: btnSetup, chips, pileZones, toast, drawer, lines, meta, sound: btnSound };
 }
 
 export function div(cls: string, text = ''): HTMLElement {
@@ -98,6 +102,32 @@ export function button(text: string, onClick?: () => void, cls = 'btn'): HTMLBut
   el.textContent = text;
   if (onClick) el.addEventListener('click', onClick);
   return el;
+}
+
+/**
+ * 把一句话画成能扫的二维码。canvas 底图一格一像素，靠 CSS 整数倍放大配 pixelated，
+ * 放大多少倍都还是方块，不会糊成一片灰。装不下（超 78 字节）回 null，让界面退回只显文字。
+ */
+export function qrCanvas(text: string, wantPx = 200): HTMLCanvasElement | null {
+  const grid = qrMatrix(text);
+  if (!grid) return null;
+  const quiet = 4; // 规范要求四周留 4 格留白，扫的人贴得再近也找得到边
+  const n = grid.length + quiet * 2;
+  const c = document.createElement('canvas');
+  c.width = n;
+  c.height = n;
+  const ctx = c.getContext('2d');
+  if (!ctx) return null;
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(0, 0, n, n);
+  ctx.fillStyle = '#000';
+  for (let y = 0; y < grid.length; y++)
+    for (let x = 0; x < grid.length; x++) if (grid[y]![x]!) ctx.fillRect(x + quiet, y + quiet, 1, 1);
+  // 显示尺寸必须是格数的整数倍，不然浏览器又要自己插值
+  c.style.width = `${n * Math.max(3, Math.round(wantPx / n))}px`;
+  c.className = 'qr';
+  c.setAttribute('aria-label', text);
+  return c;
 }
 
 /** 座位标记里的五格：本墩第几手出（顺时针序）/ 谁 / 此刻在干什么 / 手里几张 / 收了几个墩 */

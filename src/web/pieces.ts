@@ -38,6 +38,20 @@ export class Pieces {
     }
   }
 
+  /** 联机里牌名是分批到的：扣棋一墩打完才翻，翻开那一下这份快照才带着字。位置归 place，牌面归这儿 */
+  paint(deck: Piece[]): void {
+    for (const p of deck) {
+      if (!p.label) continue;
+      const el = this.els.get(p.id);
+      if (!el) continue;
+      const glyph = faceGlyph(p);
+      const face = el.querySelector<HTMLElement>('.face')!;
+      if (face.textContent === glyph && el.dataset.color === p.color) continue;
+      face.textContent = glyph;
+      el.dataset.color = p.color;
+    }
+  }
+
   /** 桌面尺寸变了要重算：位置照样落，但不补间，不然整桌牌拖成一片残影 */
   place(plan: Map<number, Placed>, animate: boolean): void {
     const from = this.at;

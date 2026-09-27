@@ -8,18 +8,21 @@ import {
   type Action,
   type GameState,
 } from '../core/game.ts';
-import { pieceLabel } from '../core/pieces.ts';
+import { pieceLabel, type Piece } from '../core/pieces.ts';
 import { nextDrawer, openMatch, recordGame, winners, type MatchBook } from '../core/match.ts';
 import { mulberry32 } from '../core/rng.ts';
 import { viewFor } from '../core/view.ts';
+import { deckFor, hydrate, type SeatInfo, type Seats, type ToClient } from '../net/wire.ts';
 import { ctrlLift, handCramped, labelBands, LABEL_W, layout, pieceSize, stackSpots, type Board, type TableView } from './board.ts';
+import { Link, recall, remember } from './net.ts';
 import { MOVE_MS, Pieces } from './pieces.ts';
 import { rules } from './rules.ts';
 import { Sound } from './sound.ts';
-import { buildShell, button, div, paintChip, popup, segment, toast, type Shell } from './ui.ts';
+import { buildShell, button, div, paintChip, popup, qrCanvas, segment, toast, type Shell } from './ui.ts';
 
-/** 真人永远坐 0 号位，其余座位交给电脑 */
-const HUMAN = 0;
+/** 联机那头的桌推过来的每一份快照 */
+type StatePush = Extract<ToClient, { t: 'state' }>;
+
 const LEVEL_CN: Record<Level, string> = { easy: '随手出', greedy: '挑省的', hard: '算赢面' };
 /** 电脑想想再出：太即时看着不像人，太长磨叽 */
 const AI_MS = 620;
@@ -75,6 +78,18 @@ function rollSeed(): number {
   return Date.now() % 1_000_000_000;
 }
 
+/**
+ * 大厅里那道邀请用的地址，第一个就是二维码的内容。
+ * 这台设备自己够得着的 origin 最准——它不是回环就说明这条路真能走；
+ * 房主在本机开页面时 origin 是 127.0.0.1，那份不能给别人扫，才退回房主进程报上来的局域网地址。
+ */
+function inviteUrls(lan: string[]): string[] {
+  const host = location.hostname;
+  const loop = /^127\.|^localhost$|^\[?::1/.test(host);
+  const here = !loop && (location.protocol === 'http:' || location.protocol === 'https:') ? `${location.origin}/` : '';
+  return [...new Set(here ? [here, ...lan] : lan)];
+}
+
 export class App {
   private shell!: Shell;
   private pieces!: Pieces;
@@ -100,6 +115,34 @@ export class App {
   private maskFrom = -1;
   private noMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   private rober: ResizeObserver | null = null;
+  /** 联机才有的这一截：连接一断，下面那些全是 null／空 */
+  private link: Link | null = null;
+  /** 我坐第几号位。单机把真人钉在 0 号位，联机的座位由桌说了算，画面全照这一个认「我」 */
+  private me = 0;
+  /** 各位子连着没、谁被代打了——名字条要画 */
+  private seats: SeatInfo[] | null = null;
+  /** 桌递给我这一手的合法着法，联机一律不自己算 */
+  private liveActs: Action[] = [];
+  /** 演到一半时来到的快照先攒在这儿，一份一份按 seq 演 */
+  private queue: StatePush[] = [];
+  private pull: ((m: StatePush | null) => void) | null = null;
+  private seqDone = 0;
+  /** welcome 到手之前，快照连自己是几号都还不知道，只能先攒着 */
+  private seated = false;
+  private myToken = '';
+  private hostSeat = 0;
+  /** 演过拍子的那一局。换一个种子就是开新局，整套画面跟着重来 */
+  private openedSeed = -1;
+  /** 结算卡摊着的话，close 就挂在这儿（开下一局、离桌都得收掉它） */
+  private resultClose: (() => void) | null = null;
+  /** 结算已经记进这本账的是哪一局，别跟着每份快照记一遍 */
+  private recordedSeed = -1;
+  private lobbyClose: (() => void) | null = null;
+  private lobbyFill: ((l: Seats) => void) | null = null;
+  private lobbyNote: HTMLElement | null = null;
+  private poll = 0;
+  /** 断线时那句提示，连着就是空串 */
+  private netNote = '';
 
   constructor(private root: HTMLElement) {
     this.pickTable();
@@ -150,23 +193,377 @@ export class App {
           }, 'btn primary'),
         );
         body.append(row);
+        const hint = div('note');
+        hint.textContent = '联机：先在房主那台机器上跑 npm run host，把它印出来的地址敲进每台设备的浏览器。桌那边定人定玩法，这边只挑一把椅子。';
+        const net = div('sheet-row');
+        net.append(
+          button('联机进桌', () => {
+            close();
+            this.openLobby();
+          }),
+        );
+        body.append(hint, net);
       },
       true,
     );
   }
 
+  // ---------- 联机 ----------
+
+  /**
+   * 大厅：桌上几个位子、谁坐着、谁是房主，一句一句问出来。
+   * 座位表是异步回的，所以这卡只搭一次架子，来一份填一份，别整张重刷。
+   */
+  private openLobby(): void {
+    for (const el of this.root.querySelectorAll('.sheet')) el.remove();
+    const link = (this.link ??= new Link({
+      onMsg: (m) => this.onPush(m),
+      onStatus: (text) => this.onNet(text),
+      onReady: () => this.onReady(),
+    }));
+    const head = div('note');
+    const rows = div('lobby-seats');
+    const note = div('note', '正在问这一桌……');
+    // 叫别人进来那一块：地址文本＋二维码。座位表一秒问一遍，所以按内容变了才重画
+    const invite = div('invite');
+    let inviteKey = '';
+    this.lobbyNote = note;
+    let built = -1;
+    const fill = (l: Seats) => {
+      this.hostSeat = l.hostSeat;
+      head.textContent = `${l.mode === 'ming' ? '明棋' : '扣棋'} · ${l.players} 人 · 第 ${l.gameNo} 局 · 房主 ${seatName(
+        l.hostSeat,
+      )}（只有他能开下一局）· 空位交给 ${LEVEL_CN[l.level]} 的电脑`;
+      const mine = recall();
+      if (built !== l.players) {
+        built = l.players;
+        rows.innerHTML = '';
+        for (const s of l.seats) {
+          const row = div('seat-row');
+          const who = div('who', seatName(s.seat));
+          const tag = div('t');
+          const sit = button('', undefined, 'btn');
+          row.append(who, tag, sit);
+          sit.addEventListener('click', () => this.takeSeat(s.seat));
+          rows.append(row);
+        }
+      }
+      l.seats.forEach((s, seat) => {
+        const row = rows.children[seat] as HTMLElement | undefined;
+        if (!row) return;
+        row.querySelector('.t')!.textContent = !s.online
+          ? s.taken
+            ? '掉线了，凭令牌坐得回来'
+            : '空着'
+          : s.ai
+            ? '由电脑代打中'
+            : '有人';
+        const btn = row.querySelector('button')!;
+        const back = mine?.seat === seat;
+        btn.textContent = back ? '回到这位' : s.taken ? '这把有主' : '坐下';
+        btn.disabled = s.online || (s.taken && !back);
+        btn.classList.toggle('primary', !btn.disabled);
+      });
+      const urls = inviteUrls(l.lan);
+      const key = urls.join(' ');
+      if (key === inviteKey) return;
+      inviteKey = key;
+      invite.innerHTML = '';
+      const qr = urls.length ? qrCanvas(urls[0]!) : null;
+      if (qr) invite.append(qr);
+      const col = div('invite-col');
+      for (const u of urls) col.append(div('u', u));
+      col.append(
+        div(
+          'note',
+          !urls.length
+            ? '没找到局域网地址：这台机器好像没连上路由器'
+            : !qr
+              ? '地址太长，画不出二维码，照着敲吧'
+              : '同一张网里的设备扫这个，或照地址敲进浏览器',
+        ),
+      );
+      invite.append(col);
+    };
+    this.lobbyFill = fill;
+    popup(
+      this.root,
+      '联机 · 挑一把椅子',
+      (body, close) => {
+        this.lobbyClose = () => {
+          this.lobbyClose = null;
+          this.lobbyFill = null;
+          this.lobbyNote = null;
+          window.clearInterval(this.poll);
+          this.poll = 0;
+          close();
+        };
+        const row = div('sheet-row');
+        row.append(
+          button('回去打单机', () => {
+            this.lobbyClose?.();
+            if (!this.seated) {
+              this.link?.close();
+              this.link = null;
+            }
+            this.pickTable();
+          }),
+          button('刷新', () => link.askLobby()),
+        );
+        body.append(head, rows, invite, note, row);
+        link.askLobby();
+        // 谁进谁出得看得见：还站在大厅里就一秒问一遍，坐下以后这份自己就不跑了
+        this.poll = window.setInterval(() => link.askLobby(), 1000);
+      },
+      true,
+    );
+  }
+
+  /** 坐下／回到某一把椅子：令牌对得上就认回原来那位，空椅子随便坐 */
+  private takeSeat(seat: number): void {
+    const link = this.link;
+    if (!link) return;
+    const mine = recall();
+    link.send({ t: 'join', seat, token: mine?.seat === seat ? mine.token : '' });
+    if (this.lobbyNote) this.lobbyNote.textContent = '正坐着看牌桌……';
+  }
+
+  /** 每次握手成功都走这儿：还站在大厅就重问座位表，已经坐下就凭令牌认回那把椅子 */
+  private onReady(): void {
+    if (!this.seated) {
+      this.link?.askLobby();
+      return;
+    }
+    // 断线这段时间别人可能已经把牌打出去好几手，补演一遍不如照最新那份摆。
+    // seq 也得清零：房主要是从存档重启过，桌那份计数是从头开始的
+    this.queue.length = 0;
+    this.seqDone = 0;
+    this.link?.send({ t: 'join', seat: this.me, token: this.myToken });
+  }
+
+  private onNet(text: string): void {
+    this.netNote = text;
+    if (this.shell) this.paintMeta();
+    // 站在大厅里时那张卡就是唯一的落脚处：那会儿连台面都还没搭，toast 没地方放
+    if (text && this.lobbyNote) this.lobbyNote.textContent = text;
+    if (text && this.shell) toast(this.shell.toast, text, 2000);
+  }
+
+  /** 桌说的一切话都先落这儿：入座前的快照攒着，reject 只有一句话 */
+  private onPush(m: ToClient): void {
+    switch (m.t) {
+      case 'seats':
+        if (!this.seated) this.lobbyFill?.(m);
+        return;
+      case 'welcome':
+        remember(m.seat, m.token);
+        this.me = m.seat;
+        this.myToken = m.token;
+        if (this.seated) return; // 重连认回原座，牌桌那边不用重开
+        this.seated = true;
+        this.lobbyClose?.();
+        void this.sitDown();
+        return;
+      case 'state':
+        if (this.seated) this.take(m);
+        else this.queue.push(m);
+        return;
+      case 'reject': {
+        const why = m.why;
+        if (this.lobbyNote) this.lobbyNote.textContent = why;
+        else if (this.shell) toast(this.shell.toast, why, 1600);
+        // 桌不认这一手，牌面也就没变、不会再推新的快照过来：循环还卡在等下一份，把按钮重新挂上，别让人干等
+        if (this.seated && this.pull) void this.waitForTurn();
+        return;
+      }
+      case 'pong':
+        return;
+    }
+  }
+
+  /** 一份快照演完之前来到的下一份就攒着，别把拍子踩乱 */
+  private take(m: StatePush): void {
+    if (m.seq <= this.seqDone) return;
+    const pull = this.pull;
+    if (pull) {
+      this.pull = null;
+      pull(m);
+      return;
+    }
+    this.queue.push(m);
+  }
+
+  /** 下一份要演的快照。null 表示这桌已经离了 */
+  private nextState(): Promise<StatePush | null> {
+    const hit = this.queue.shift();
+    if (hit) return Promise.resolve(hit);
+    return new Promise((res) => {
+      this.pull = res;
+    });
+  }
+
+  /** 坐下以后就是这一条路：桌推一份、这儿演一拍，本地不 apply、不算 AI、不掷骰子 */
+  private async sitDown(): Promise<void> {
+    const gen = ++this.gen;
+    const first = await this.nextState();
+    if (!first || gen !== this.gen) return;
+    this.setup = { players: first.view.players, mode: first.view.mode, level: this.setup.level, seed: first.view.seed };
+    this.book = openMatch(this.setup.players);
+    this.seqDone = first.seq;
+    this.openedSeed = -1;
+    this.stage(this.setup.players, deckFor(first.view));
+    try {
+      for (let m: StatePush | null = first; m && gen === this.gen; m = await this.nextState()) {
+        await this.applyPush(m);
+      }
+    } catch (e) {
+      if (e instanceof Aborted || gen !== this.gen) return;
+      console.error(e);
+      this.shell.status.textContent = `出了点问题：${(e as Error).message}｜按右上角「${this.link ? '离桌' : '换桌'}」${this.link ? '回大厅' : '重开'}`;
+    }
+  }
+
+  /** 演一份快照：先换牌面，再照 last 演那一手，最后该我出就把按钮挂上 */
+  private async applyPush(m: StatePush): Promise<void> {
+    this.seqDone = m.seq;
+    this.seats = m.seats;
+    this.liveActs = m.acts;
+    this.maskFrom = m.maskFrom;
+    const fresh = m.view.seed !== this.openedSeed;
+    const wonBefore = fresh ? [] : [...this.state.won];
+    const onTable = fresh ? null : this.view.freeze;
+    this.state = hydrate(m.view);
+    this.pieces.paint(deckFor(m.view));
+    if (fresh) this.beginGame(m);
+    else if (m.last) await this.frame(m.last.seat, m.last.action, wonBefore, onTable);
+    else {
+      // 没有要演的手（刚入座、有人进出桌、重连）：照桌给的牌面摆出来就行，别自己猜拍子
+      this.view.freeze = this.state.trick ? this.snapshot() : null;
+      this.rebuildPiles();
+      this.render(true);
+    }
+    if (this.state.phase === 'over' && (fresh || m.last)) this.showResult();
+    await this.waitForTurn();
+  }
+
+  /** 联机开一局：牌面和第几局都是桌定的，这里只把表现层那一套清零。中途坐下也会走这儿，收牌摞要照牌面补回来 */
+  private beginGame(m: StatePush): void {
+    this.openedSeed = m.view.seed;
+    this.gameNo = m.gameNo;
+    this.view = this.freshView(this.setup.players);
+    this.view.freeze = this.state.trick ? this.snapshot() : null;
+    this.rebuildPiles();
+    this.maskFrom = m.maskFrom;
+    this.paintMeta();
+    this.render(false);
+    this.resultClose?.();
+    toast(this.shell.toast, `第 ${this.gameNo} 局｜${this.who(this.state.drawer)} 起抽`, 1800);
+  }
+
+  /**
+   * 收牌摞重建：桌上没记「哪几张是谁收的」，按 won 的数目把已经不在手里、不在桌上的牌摊进去就行。
+   * 一墩打完那些牌全翻开了，牌面对谁都公开，摊错家也不泄底。
+   */
+  private rebuildPiles(): void {
+    const state = this.state;
+    const loose = new Set(state.pieces.map((p) => p.id));
+    for (const ids of [...state.hands, ...(state.draft?.stacks ?? [])]) for (const id of ids) loose.delete(id);
+    const trick = state.trick;
+    for (const ids of [...(trick?.plays ?? []), ...(trick?.discards ?? [])].map((p) => p.pieceIds))
+      for (const id of ids) loose.delete(id);
+    const pool = [...loose].sort((a, b) => a - b);
+    let at = 0;
+    this.view.piles = state.won.map((n) => pool.slice(at, (at += n)));
+  }
+
+  /** 该我出：把按钮挂在这儿，点了就递出去。这期间别人的落子只攒不演，我出牌前不该先看一圈 */
+  private waitForTurn(): Promise<void> {
+    if (this.state.phase === 'over' || this.liveActs.length === 0 || !pendingSeats(this.state).includes(this.me)) {
+      return Promise.resolve();
+    }
+    return new Promise<void>((res) => {
+      this.ask = (action) => {
+        this.ask = null;
+        // null 是从「换桌」那儿来的：这一手不递了，但循环得接着走
+        if (action) this.link?.send({ t: 'act', action });
+        res();
+      };
+      this.render(true);
+    });
+  }
+
+  /** 结算卡：联机不拦循环，房主按了下一局自己会推来新的一帧 */
+  private showResult(): void {
+    const state = this.state;
+    if (this.recordedSeed !== state.seed) {
+      this.recordedSeed = state.seed;
+      recordGame(this.book, state);
+    }
+    const host = this.me === this.hostSeat;
+    const top = winners(state);
+    const no = this.gameNo;
+    const next = nextDrawer(state);
+    const title =
+      top.length === 1
+        ? `第 ${no} 局｜${this.who(top[0]!)} 夺冠`
+        : top.length > 1
+          ? `第 ${no} 局｜${top.map((s) => this.who(s)).join('、')} 并列`
+          : `第 ${no} 局｜谁都没收到牌`;
+    this.sound.cue('win');
+    this.resultClose?.();
+    popup(
+      this.root,
+      title,
+      (body, close) => {
+        this.resultClose = () => {
+          this.resultClose = null;
+          close();
+        };
+        this.rankRows(body, next);
+        const note = div('note');
+        note.textContent = host ? `你是房主 ${seatName(this.me)}，下一局由你开。` : `等 ${this.who(this.hostSeat)} 开下一局。`;
+        body.append(note);
+        const row = div('sheet-row');
+        if (host)
+          row.append(
+            button('再来一局', () => {
+              this.resultClose = null;
+              close();
+              this.link?.send({ t: 'next' });
+            }, 'btn primary'),
+          );
+        row.append(button('复制战报', () => void this.copyReport(body, title)));
+        body.append(row);
+        this.bookRows(body);
+      },
+      true,
+    );
+  }
+
+  /** 离桌：椅子还留给这个令牌，回来凭它坐得回去 */
+  private leaveTable(): void {
+    this.resultClose?.();
+    this.link?.close();
+    this.link = null;
+    this.seated = false;
+    this.queue.length = 0;
+    this.seats = null;
+    this.liveActs = [];
+    this.netNote = '';
+    this.openLobby();
+  }
+
   private async match(setup: Setup): Promise<void> {
     const gen = ++this.gen;
     this.setup = setup;
+    // 单机把真人钉回 0 号位：刚从联机那桌下来时，这个字段记的还是桌给的那一位
+    this.me = 0;
     this.rng = mulberry32(setup.seed ^ 0x9e3779b9);
     this.book = openMatch(setup.players);
     this.gameNo = 0;
     this.drawer = -1;
     this.state = createGame({ rules, players: setup.players, mode: setup.mode, seed: setup.seed });
-    this.shell = buildShell(this.root, setup.players, () => this.resign(), () => this.toggleLog(), () => this.toggleSound());
-    this.paintSound();
-    this.pieces = new Pieces(this.shell.board, this.state.pieces);
-    this.wire();
+    this.stage(setup.players, this.state.pieces);
     let crashed = false;
     try {
       for (;;) {
@@ -186,18 +583,20 @@ export class App {
     }
   }
 
-  private newGame(): void {
-    this.state = createGame({
-      rules,
-      players: this.setup.players,
-      mode: this.setup.mode,
-      seed: this.setup.seed + this.gameNo * 7919,
-      ...(this.drawer >= 0 ? { drawer: this.drawer } : {}),
-    });
-    this.gameNo++;
-    this.view = {
-      mine: HUMAN,
-      piles: Array.from({ length: this.setup.players }, () => [] as number[]),
+  /** 搭台面：一次搭好壳子、牌摞和事件。单机用整副牌，联机先按快照里的牌面（没公开的还没字） */
+  private stage(players: number, deck: Piece[]): void {
+    this.shell = buildShell(this.root, players, () => this.resign(), () => this.toggleLog(), () => this.toggleSound());
+    this.shell.setup.textContent = this.link ? '离桌' : '换桌';
+    this.paintSound();
+    this.pieces = new Pieces(this.shell.board, deck);
+    this.wire();
+  }
+
+  /** 表现层自己攒的那一沓：收牌摞、选中态、动画进行到第几拍 */
+  private freshView(players: number): TableView {
+    return {
+      mine: this.me,
+      piles: Array.from({ length: players }, () => [] as number[]),
       sel: new Set(),
       hint: new Set(),
       justWon: new Set(),
@@ -210,10 +609,51 @@ export class App {
       lift: null,
       spread: false,
     };
+  }
+
+  private paintMeta(): void {
+    const mode = this.setup.mode === 'ming' ? '明棋' : '扣棋';
+    this.shell.meta.textContent = this.link
+      ? `联机 · ${mode} · ${this.setup.players} 人 · 第 ${this.gameNo} 局 · 我是 ${seatName(this.me)} · 种子 ${this.state.seed}${
+          this.netNote ? ` · ${this.netNote}` : ''
+        }`
+      : `${mode} · ${this.setup.players} 人 · 电脑${LEVEL_CN[this.setup.level]} · 第 ${this.gameNo} 局 · 种子 ${this.state.seed}`;
+  }
+
+  /** 结算卡里那几行名次，单机联机共用；drawer 是下一局起抽的那位 */
+  private rankRows(body: HTMLElement, drawer: number): void {
+    const rank = [...this.state.won.keys()].sort((a, b) => this.state.won[b]! - this.state.won[a]!);
+    for (const seat of rank) {
+      const row = div('rank-row');
+      row.append(
+        div('who', this.who(seat)),
+        div('n', `${this.state.won[seat]} 枚`),
+        div('t', seat === drawer ? '下一局起抽' : ''),
+      );
+      body.append(row);
+    }
+  }
+
+  private bookRows(body: HTMLElement): void {
+    const total = div('note');
+    total.textContent = `累计 ${this.book.games} 局：${this.book.titles
+      .map((t, seat) => `${this.who(seat)} 冠 ${t}`)
+      .join('　')}｜并列 ${this.book.ties} 局`;
+    body.append(total);
+  }
+
+  private newGame(): void {
+    this.state = createGame({
+      rules,
+      players: this.setup.players,
+      mode: this.setup.mode,
+      seed: this.setup.seed + this.gameNo * 7919,
+      ...(this.drawer >= 0 ? { drawer: this.drawer } : {}),
+    });
+    this.gameNo++;
+    this.view = this.freshView(this.setup.players);
     this.maskFrom = -1;
-    this.shell.meta.textContent = `${this.setup.mode === 'ming' ? '明棋' : '扣棋'} · ${this.setup.players} 人 · 电脑${
-      LEVEL_CN[this.setup.level]
-    } · 第 ${this.gameNo} 局 · 种子 ${this.state.seed}`;
+    this.paintMeta();
     this.render(false);
     toast(this.shell.toast, `第 ${this.gameNo} 局｜${this.who(this.state.drawer)} 起抽`, 1800);
   }
@@ -223,13 +663,13 @@ export class App {
       const seats = pendingSeats(this.state);
       if (seats.length === 0) return 'done';
       // 扣棋里几家是并列的：先把真人要的那手收走，他才不会看见别人已经出了什么
-      if (seats.includes(HUMAN)) {
+      if (seats.includes(this.me)) {
         const action = await new Promise<Action | null>((res) => {
           this.ask = res;
           this.render(true); // 先挂上 ask 再画：按钮只在「点了真有人接」时出现
         });
         if (action === null) return 'abort';
-        await this.act(HUMAN, action);
+        await this.act(this.me, action);
         continue;
       }
       const seat = seats[0]!;
@@ -242,16 +682,22 @@ export class App {
 
   // ---------- 一步棋 ----------
 
+  /** 单机这一手：自己落子再演拍子。联机那份快照已经落好了，直接走 frame */
   private async act(seat: number, action: Action): Promise<void> {
-    const logBefore = this.state.log.length;
     const wonBefore = [...this.state.won];
     const onTable = this.view.freeze;
+    const logBefore = this.state.log.length;
+    apply(this.state, seat, action);
+    this.mask(logBefore);
+    await this.frame(seat, action, wonBefore, onTable);
+  }
+
+  /** 一手的拍子：状态得是落好这一手以后的，两边共用这一套动画 */
+  private async frame(seat: number, action: Action, wonBefore: number[], onTable: OnTable[] | null): Promise<void> {
     this.busy = true;
     try {
-      apply(this.state, seat, action);
       this.view.sel.clear();
       this.view.spread = false;
-      this.mask(logBefore);
       // 一墩打完引擎就把 trick 清了，最后这一手得自己补进桌面快照，不然它飞不进牌摞
       const table = this.state.trick ? this.snapshot() : this.closedTable(seat, action, onTable, wonBefore);
       this.view.freeze = table;
@@ -409,16 +855,7 @@ export class App {
         this.root,
         title,
         (body, close) => {
-          const rank = [...state.won.keys()].sort((a, b) => state.won[b]! - state.won[a]!);
-          for (const seat of rank) {
-            const row = div('rank-row');
-            row.append(
-              div('who', this.who(seat)),
-              div('n', `${state.won[seat]} 枚`),
-              div('t', seat === this.drawer ? '下一局起抽' : ''),
-            );
-            body.append(row);
-          }
+          this.rankRows(body, this.drawer);
           const note = div('note');
           note.textContent =
             top.length === 1
@@ -438,21 +875,17 @@ export class App {
             button('复制战报', () => void this.copyReport(body, title)),
           );
           body.append(row);
-          const total = div('note');
-          total.textContent = `累计 ${this.book.games} 局：${this.book.titles
-            .map((t, seat) => `${this.who(seat)} 冠 ${t}`)
-            .join('　')}｜并列 ${this.book.ties} 局`;
-          body.append(total);
+          this.bookRows(body);
         },
         true,
       );
     });
   }
 
-  /** 结算那份复盘原文：座位名跟屏上口径一致（P1 就是你），日志里本来就写的 P1/P2 */
+  /** 结算那份复盘原文：座位名跟屏上口径一致（日志里写的 P1/P2，这儿标出哪一位是你） */
   private reportText(title: string): string {
     const state = this.state;
-    const head = `棋墩墩 · ${state.mode === 'ming' ? '明棋' : '扣棋'} · ${state.players} 人（我是 P1）· 种子 ${state.seed}`;
+    const head = `棋墩墩 · ${state.mode === 'ming' ? '明棋' : '扣棋'} · ${state.players} 人（我是 ${seatName(this.me)}）· 种子 ${state.seed}`;
     const total = `累计 ${this.book.games} 局：${this.book.titles
       .map((t, seat) => `${this.who(seat)} 冠 ${t}`)
       .join('　')}｜并列 ${this.book.ties} 局`;
@@ -478,24 +911,32 @@ export class App {
     toast(this.shell.toast, '复制不成，已摊开——长按/选中自己抄', 2000);
   }
 
+  /** 右上角那张：单机回开桌，联机回大厅。正在等的两件事都得散伙——一是人要点牌，二是循环在等下一份快照 */
   private resign(): void {
+    const online = this.link !== null;
     const go = () => {
       this.gen++;
       const ask = this.ask;
       this.ask = null;
       ask?.(null);
-      this.pickTable();
+      const pull = this.pull;
+      this.pull = null;
+      pull?.(null);
+      if (online) this.leaveTable();
+      else this.pickTable();
     };
     if (this.state.phase === 'over') {
       go();
       return;
     }
-    popup(this.root, '换桌', (body, close) => {
+    popup(this.root, online ? '离桌' : '换桌', (body, close) => {
       const p = div('note');
-      p.textContent = '这一局还没打完，换桌就不记账了。';
+      p.textContent = online
+        ? '这一局还没打完，离桌就不记账了。椅子给你留着，回来凭令牌还坐这一位。'
+        : '这一局还没打完，换桌就不记账了。';
       const row = div('sheet-row');
       row.append(
-        button('确认换桌', () => {
+        button(online ? '确认离桌' : '确认换桌', () => {
           close();
           go();
         }),
@@ -591,16 +1032,16 @@ export class App {
     }
     // 桌面上我自己那一套：触屏没 hover，点一下摊开亮给我看，再点一下收回
     if (!this.hasHover) {
-      const mine = this.view.freeze?.find((p) => p.seat === HUMAN && p.ids.includes(id));
+      const mine = this.view.freeze?.find((p) => p.seat === this.me && p.ids.includes(id));
       if (mine) {
         this.togglePeek(mine);
         return;
       }
     }
     if (this.ask === null || state.phase === 'over') return;
-    if (!pendingSeats(state).includes(HUMAN) || !state.hands[HUMAN].includes(id)) return;
+    if (!pendingSeats(state).includes(this.me) || !state.hands[this.me].includes(id)) return;
     // 挤成一条边了才先点一下把整排摊开；宽桌面上扇形本来就张得开，点哪张就是哪张
-    if (!this.view.spread && handCramped(state.hands[HUMAN]!.length, this.size())) {
+    if (!this.view.spread && handCramped(state.hands[this.me]!.length, this.size())) {
       this.view.spread = true;
       this.render(true);
       return;
@@ -668,7 +1109,8 @@ export class App {
   private render(animate: boolean): void {
     const board = this.size();
     const actors = this.pending();
-    this.acts = actors.includes(HUMAN) ? legalActions(this.state, HUMAN) : [];
+    // 联机不自己算合法着法：桌递什么按钮就画什么，本地这份 state 里别人的牌是空的，算也算不准
+    this.acts = actors.includes(this.me) ? (this.link ? this.liveActs : legalActions(this.state, this.me)) : [];
     this.view.hint = new Set(this.acts.flatMap((a) => ('pieceIds' in a ? a.pieceIds : [])));
     this.shell.board.style.setProperty('--cw', `${pieceSize(board)}px`);
     // 名字条的宽、按钮条浮起的高度，常数都住在 board.ts；CSS 只读变量，两边不会各自漂移
@@ -698,7 +1140,7 @@ export class App {
   }
 
   private who(seat: number): string {
-    return seat === HUMAN ? '你' : seatName(seat);
+    return seat === this.me ? '你' : seatName(seat);
   }
 
   private paintChips(board: Board): void {
@@ -722,12 +1164,19 @@ export class App {
         ord = ((seat - state.trick.leader + state.players) % state.players) + 1;
         const played =
           state.trick.plays.some((p) => p.player === seat) || state.trick.discards.some((d) => d.player === seat);
-        tag = played ? '已出' : state.hands[seat]!.length === 0 ? '没牌' : seat === HUMAN ? '你出' : '在想';
+        tag = played ? '已出' : state.hands[seat]!.length === 0 ? '没牌' : seat === this.me ? '你出' : '在想';
       } else if (state.phase !== 'over') {
         tag = state.leader === seat ? '先出' : '';
       }
+      // 联机：谁不在这儿，比「在想什么」要紧得多，直接顶掉那一格；条子暗下去一眼扫得出来
+      if (this.seats) {
+        const s = this.seats[seat];
+        if (s?.ai) tag = '代打';
+        else if (s && !s.online && s.taken) tag = '掉线';
+        chip.classList.toggle('gone', !!s && !s.online);
+      }
       // 「电脑」不写进条里：顶栏 meta 已经报过一次难度，而这条 pill 的宽度是几何量（LABEL_W），得省着用
-      const who = seat === HUMAN ? '你' : seatName(seat);
+      const who = seat === this.me ? '你' : seatName(seat);
       paintChip(chip, who, tag, state.hands[seat]!.length, state.won[seat]!, ord);
       chip.classList.toggle('now', actors.has(seat));
     }
@@ -760,7 +1209,7 @@ export class App {
     if (draft) {
       if (draft.stage === 'draw') {
         shell.status.textContent =
-          draft.drawer === HUMAN
+          draft.drawer === this.me
             ? this.hasHover
               ? '轮到你摸签：鼠标压上来那一摞就摊开，点哪张抽哪张'
               : '轮到你摸签：先点一摞把它摊开，再点你要抽的那张'
@@ -769,8 +1218,8 @@ export class App {
         const piece = state.byId.get(draft.drawn)!;
         shell.status.innerHTML = `${this.who(draft.drawer)} 翻出 <b>${pieceLabel(piece)}</b>，${piece.point} 点从自己数到 <b>${this.who(
           draft.decider,
-        )}</b>${draft.decider === HUMAN ? '：这 8 摞怎么分你定' : `：${this.who(draft.decider)} 定怎么分`}`;
-        if (draft.decider === HUMAN && clickable) for (const a of this.acts) this.addBtn(this.describe(a), () => this.commit(a));
+        )}</b>${draft.decider === this.me ? '：这 8 摞怎么分你定' : `：${this.who(draft.decider)} 定怎么分`}`;
+        if (draft.decider === this.me && clickable) for (const a of this.acts) this.addBtn(this.describe(a), () => this.commit(a));
       }
       return;
     }
@@ -779,15 +1228,15 @@ export class App {
       return;
     }
     const actors = pendingSeats(state);
-    if (!actors.includes(HUMAN)) {
+    if (!actors.includes(this.me)) {
       const who = actors.map((s) => this.who(s)).join('、');
       shell.status.textContent = state.mode === 'kou' && state.trick ? `${who} 同时暗出…` : `${who} 出牌中…`;
       return;
     }
-    const others = actors.filter((s) => s !== HUMAN);
+    const others = actors.filter((s) => s !== this.me);
     const atOnce = state.mode === 'kou' && state.trick && others.length > 0;
     // 扇形本来就摊得开（宽桌面）就直接点那张，这句只在挤成一条边时才提示；第一下是「摊开」不是「出这张」
-    const tapFirst = this.view.spread || !handCramped(state.hands[HUMAN]!.length, board) ? '' : '先点一下把手牌摊开，再点那几张｜';
+    const tapFirst = this.view.spread || !handCramped(state.hands[this.me]!.length, board) ? '' : '先点一下把手牌摊开，再点那几张｜';
     shell.status.textContent =
       tapFirst +
       (atOnce ? `你和${others.map((s) => this.who(s)).join('、')}同时暗出，谁也看不见谁｜` : '') +
