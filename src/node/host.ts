@@ -2,7 +2,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { readFileSync, existsSync, statSync } from 'node:fs';
 import { dirname, join, normalize, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { flag, hasFlag, openRoom } from './room.ts';
+import { hasFlag, intFlag, openRoom, type Room } from './room.ts';
 
 /**
  * 房主这一进程：同源把 dist/ 端出来，再在同一个端口上挂那张牌桌。
@@ -79,8 +79,7 @@ if (!existsSync(join(DIST, 'index.html'))) {
   process.exit(1);
 }
 
-const port = Number(flag(argv, 'port', String(DEFAULT_PORT)));
-const room = openRoom(argv, port);
+const { port, room } = openTable();
 const { table, setup } = room;
 
 const server = createServer(serve);
@@ -109,6 +108,17 @@ server.listen(port, '0.0.0.0', () => {
 
 process.once('SIGINT', quit);
 process.once('SIGTERM', quit);
+
+/** 参数写歪了就撂一句人话退台：终端上甩一串栈，谁都看不出是自己那行敲错了 */
+function openTable(): { port: number; room: Room } {
+  try {
+    const p = intFlag(argv, 'port', DEFAULT_PORT, 1, 65535);
+    return { port: p, room: openRoom(argv, p) };
+  } catch (e) {
+    console.error(`这桌开不起来：${(e as Error).message}（--help 看怎么写）`);
+    process.exit(2);
+  }
+}
 
 function quit(): void {
   room.close();

@@ -79,6 +79,10 @@ export class Table {
   status: TableStatus = 'waiting';
   private slots: Slot[];
   private seq = 0;
+  /** 这一局打完的账记进总账本了没：局末那一刻记一次，换牌面那几条路就不再多算一局 */
+  private booked = false;
+  /** 桌自己那条随机流走了几步：存档要靠它接上同一条流，别从头重放一遍 */
+  private rngSteps = 0;
   /** 暗棋这一墩没翻开之前，日志只发到这儿为止——和网页的 maskFrom 同一口径 */
   private maskFrom = -1;
   /** 刚落下的那一手，随下一份快照发出去就清空：客户端照它演一拍 */
@@ -97,8 +101,23 @@ export class Table {
     this.now = now;
     this.state = createGame({ ...setup, seed: setup.seed });
     this.book = openMatch(setup.players);
-    this.rng = mulberry32(setup.seed ^ 0x5eed);
+    this.rng = this.rewindRng(0);
     this.slots = this.freshSlots(setup.players);
+  }
+
+  /**
+   * 桌自己那条随机流：下一局的牌面种子、代打挑哪张都从这儿走。
+   * 存档只记「走过了几步」，重启照步数空转回去，接的还是同一条流——
+   * 从头重放的话，重启后接着打的那桌会摸出这一桌刚打过的那几副牌面。
+   */
+  private rewindRng(steps: number): () => number {
+    const base = mulberry32(this.setup.seed ^ 0x5eed);
+    for (let i = 0; i < steps; i++) base();
+    this.rngSteps = steps;
+    return () => {
+      this.rngSteps++;
+      return base();
+    };
   }
 
   /** 一把新椅子：没坐过人，也不归任何人打。候场期谁都不计时，所以 gone 留 0 */
@@ -150,6 +169,9 @@ export class Table {
       token: slot.token,
       status: this.status,
     };
+    // 入座那句话得排在快照前面发：客户端拿到快照时连自己是几号都还不知道，
+    // 只能先攒着一份一份猜——现在它是照自己那把椅子演，不再需要那套兜底
+    this.send(seat, msg);
     this.push();
     this.log(
       `${slot.name} ${fresh ? '坐下' : '回到'}了自己的位子${slot.queued ? '（这一局先由电脑打，下一局归他）' : ''}`,
@@ -273,7 +295,11 @@ export class Table {
     this.setup = { ...prev, players, mode, level };
     const reshuffled = players !== prev.players || mode !== prev.mode;
     const sameSeats = players === prev.players;
-    this.log(`配置换成了 ${players} 人 ${mode === 'kou' ? '扣棋' : '明棋'}，等房主开局`);
+    this.log(
+      `配置换成了 ${players} 人 ${mode === 'kou' ? '扣棋' : '明棋'}，等房主开局` +
+        // 重开是悄悄发生的还是说一声的，差别就在有人回头找「刚才那几局」时会不会以为账丢了
+        (sameSeats ? '' : '｜人数变了，跨局那本账从重开'),
+    );
     if (reshuffled) {
       // 换牌面前先把打完那一局结了：牌面一换就再没人记得它打过。
       // 只改代打档位走不到这儿，那一局的账照旧留给 start 去结（结两回就多算一局）
@@ -288,9 +314,11 @@ export class Table {
       });
       this.maskFrom = -1;
       this.last = null;
+      this.booked = false;
     }
     if (!sameSeats) {
-      // 人数一变，跨局那本账就得重开；坐过的椅子原样往前挪，谁都不用重新坐一遍
+      // 人数一变，跨局那本账就得重开（口径：2 人局一人 16 枚、4 人局一人 8 枚，两种局的数加在
+      // 同一列不是任何人的战绩，所以不伸缩、整本换新）。坐过的椅子原样往前挪，谁都不用重新坐一遍
       const old = this.slots;
       this.slots = this.freshSlots(players).map((slot, i) => {
         const was = old[i];
@@ -300,6 +328,8 @@ export class Table {
           ? { ...slot, name: was.name, token: was.token, nick: was.nick, online: was.online, gone: was.gone }
           : slot;
       });
+      // 上面那一趟 settleOver 把刚打完那局结进了旧本，旧本到这儿整本换新——结了也扔，
+      // 为的是让「牌面换掉之前先结账」这一道门只有一条出口；新局号、新本子从这一行一起起算
       this.book = openMatch(players);
       this.gameNo = 1;
       // 减人之后房主位可能落在已经不存在的椅子上：连「家」带现任一起收回第一把，谁坐下谁接手
@@ -327,12 +357,15 @@ export class Table {
 
   /**
    * 打完那一局的收尾：记账 + 定下下一局谁起抽（回 null 表示这会儿没有要结的账）。
-   * 只有这一处会记那一局的账，所以谁准备把 `phase==='over'` 那份牌面换掉，谁就得先走这道门——
-   * 原来只有 `start()` 走，于是「打完 → 在候场厅改了玩法 → 按开始」中间那一局就从总账里凭空没了。
+   * `booked` 兜着别记两遍：一局打完的那一刻就记（牌桌广播那份 over 快照时账已经在本子上），
+   * 可那一份牌面被换掉的路有好几条（按开始、候场厅改玩法、改人数），每条都走这道门。
    */
   private settleOver(): number | null {
     if (this.state.phase !== 'over') return null;
-    recordGame(this.book, this.state);
+    if (!this.booked) {
+      this.booked = true;
+      recordGame(this.book, this.state);
+    }
     return nextDrawer(this.state);
   }
 
@@ -341,6 +374,7 @@ export class Table {
     const drawer = this.settleOver();
     this.gameNo++;
     this.state = createGame({ ...this.setup, seed: (this.rng() * 0x100000000) | 0, drawer: drawer ?? undefined });
+    this.booked = false;
     this.maskFrom = -1;
   }
 
@@ -430,6 +464,9 @@ export class Table {
     }
     // 打完自动退回候场厅：下一局开不开、什么时候开，都归房主按
     if (this.state.phase === 'over') {
+      // 局末这一刻就把这一局记进总账：随这份快照一起发出去的账本才带着刚打完的那一局，
+      // 客户端照它画「累计几局」，不用再自己攒一本（攒的那本跟桌这本迟早对不上）
+      this.settleOver();
       this.status = 'waiting';
       // 那一局里掉线的人，椅子从局末这一刻再起算两分钟，别一按完最后一张就被收走
       for (const slot of this.slots) if (slot.token && !slot.online) slot.gone = this.now();
@@ -468,6 +505,7 @@ export class Table {
         t: 'state',
         seq: this.seq,
         gameNo: this.gameNo,
+        book: this.book,
         status: this.status,
         view: snapshotFor(this.state, slot.seat, this.maskFrom < 0 ? this.state.log.length : this.maskFrom),
         // 候场期一张牌都没出、排队那位这一局也不由他打：这两种人一律递空着法，别给他们「该我动了」的错觉
@@ -501,6 +539,11 @@ export class Table {
       book: this.book,
       slots: this.slots,
       maskFrom: this.maskFrom,
+      // 这三样不跟着存，重启就露馅：seq 归零 ⇒ 还开着的那页只认比手上号大的快照，从此一份不演；
+      // rngSteps 归零 ⇒ 下一局的牌面种子把重启前那串重放一遍；booked 丢 ⇒ 刚打完那局要么漏账要么记两遍
+      seq: this.seq,
+      booked: this.booked,
+      rngSteps: this.rngSteps,
       wire: fullWire(this.state),
     });
   }
@@ -513,6 +556,9 @@ export class Table {
       book: MatchBook;
       slots: Slot[];
       maskFrom: number;
+      seq?: number;
+      booked?: boolean;
+      rngSteps?: number;
       wire: WireState;
     };
     const table = new Table(raw.setup, send, log, now);
@@ -520,6 +566,10 @@ export class Table {
     table.book = raw.book;
     table.gameNo = raw.gameNo;
     table.maskFrom = raw.maskFrom;
+    table.seq = raw.seq ?? 0;
+    // 老存档没这两个字段：照「这一局的账还没记」接着走，起下一局时补记，跟它原来那套时序一致
+    table.booked = raw.booked ?? false;
+    table.rng = table.rewindRng(raw.rngSteps ?? 0);
     // 候场期打到的那一半也得接得回来；旧存档没这个字段就照「还没开局」算
     table.status = raw.status ?? 'waiting';
     // 候场期那半张桌没有「这一局」要接：旧令牌留着只会把椅子占成「这把有主」，

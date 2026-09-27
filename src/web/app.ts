@@ -9,7 +9,7 @@ import {
   type GameState,
 } from '../core/game.ts';
 import { pieceLabel, type Piece } from '../core/pieces.ts';
-import { nextDrawer, openMatch, recordGame, resizeMatch, winners, type MatchBook } from '../core/match.ts';
+import { nextDrawer, openMatch, recordGame, winners, type MatchBook } from '../core/match.ts';
 import { mulberry32 } from '../core/rng.ts';
 import { viewFor } from '../core/view.ts';
 import { deckFor, hydrate, type SeatInfo, type Seats, type TableStatus, type ToClient } from '../net/wire.ts';
@@ -144,8 +144,6 @@ export class App {
   private openedSeed = -1;
   /** 结算卡摊着的话，close 就挂在这儿（开下一局、离桌都得收掉它） */
   private resultClose: (() => void) | null = null;
-  /** 结算已经记进这本账的是哪一局，别跟着每份快照记一遍 */
-  private recordedSeed = -1;
   /** 候场厅那块常驻面板；null = 没摊开。note 借给断线提示和 reject 那句话用 */
   private room: { veil: HTMLElement; note: HTMLElement; fill: (l: Seats) => void } | null = null;
   /** 这桌此刻在候场还是正在打：按钮给不给、循环起不起，全照这个认 */
@@ -641,8 +639,10 @@ export class App {
     // 慢一步就是 chips[3] 空着按一下那一下
     if (m.view.players !== this.setup.players || m.view.mode !== this.setup.mode) {
       this.setup = { ...this.setup, players: m.view.players, mode: m.view.mode };
-      resizeMatch(this.book, m.view.players);
     }
+    // 跨局那本账只有桌上一本：改人数、重连、中途入座随便哪条路，这边照收到的那份画就行，
+    // 自己攒一本迟早跟桌这本对不上号
+    this.book = m.book;
     this.seqDone = m.seq;
     this.seats = m.seats;
     this.liveActs = m.acts;
@@ -726,10 +726,6 @@ export class App {
   /** 结算卡：联机不拦循环，房主按了下一局自己会推来新的一帧 */
   private showResult(): void {
     const state = this.state;
-    if (this.recordedSeed !== state.seed) {
-      this.recordedSeed = state.seed;
-      recordGame(this.book, state);
-    }
     const host = this.me === this.hostSeat;
     const top = winners(state);
     const no = this.gameNo;

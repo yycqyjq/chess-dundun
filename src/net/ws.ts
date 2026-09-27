@@ -32,6 +32,14 @@ function acceptKey(key: string): string {
   return createHash('sha1').update(key + GUID).digest('base64');
 }
 
+/** 把 `scheme://host:port/path` 削成 `host:port`：浏览器不把默认端口写进 Origin，比的时候两头都得摊平 */
+function hostPart(v: string): string {
+  let s = v;
+  const at = s.indexOf('//');
+  if (at >= 0) s = s.slice(at + 2);
+  return (s.split('/')[0] ?? '').toLowerCase().replace(/:(80|443)$/, '');
+}
+
 /** 服务端 → 客户端的帧：不掩码，长度三档各写各的 */
 function frame(opcode: number, payload: Buffer): Buffer {
   const n = payload.length;
@@ -62,8 +70,10 @@ function frame(opcode: number, payload: Buffer): Buffer {
 class Reader {
   private chunks: Buffer[] = [];
   private size = 0;
-  /** 分片消息拼在这儿 */
-  private frag: { opcode: number; parts: Buffer[] } | null = null;
+  /** 分片消息拼在这儿；bytes 是已经拼了多少——单帧有上限，拼起来可没人管过 */
+  private frag: { opcode: number; parts: Buffer[]; bytes: number } | null = null;
+  /** 一旦认定这条帧不对就关死：对端已经不可信了，攒着的字节别再接着解 */
+  private dead = false;
   private readonly onMsg: (opcode: number, payload: Buffer) => void;
   private readonly fail: (reason: string) => void;
 
@@ -73,6 +83,7 @@ class Reader {
   }
 
   push(chunk: Buffer): void {
+    if (this.dead) return;
     this.chunks.push(chunk);
     this.size += chunk.length;
     for (;;) {
@@ -82,15 +93,27 @@ class Reader {
     }
   }
 
+  /** 判这条连接说话不对：清空手上的一切，只说一次，剩下的字节一个都不再解 */
+  private bail(why: string): 'stop' {
+    if (!this.dead) {
+      this.dead = true;
+      this.chunks = [];
+      this.size = 0;
+      this.frag = null;
+      this.fail(why);
+    }
+    return 'stop';
+  }
+
   private take(): boolean | 'stop' | null {
+    if (this.dead) return 'stop';
     const first = this.peek(2);
     if (!first) return null;
     const fin = (first[0] & 0x80) !== 0;
     const opcode = first[0] & 0x0f;
     if ((first[1] & 0x80) === 0) {
       // 客户端帧必须掩码：协议硬规定，也是防请求走私的一道闸
-      this.fail('客户端帧必须掩码');
-      return 'stop';
+      return this.bail('客户端帧必须掩码');
     }
     let len = first[1] & 0x7f;
     let extra = 0;
@@ -102,52 +125,38 @@ class Reader {
     // 扩展长度读出来才算得出一帧到底多长：拿 126/127 这个标记值当长度，整帧就切歪了
     if (extra === 2) len = pre.readUInt16BE(2);
     else if (extra === 8) {
-      if (pre.readUInt32BE(2) !== 0) {
-        this.fail('消息太大');
-        return 'stop';
-      }
+      if (pre.readUInt32BE(2) !== 0) return this.bail('消息太大');
       len = pre.readUInt32BE(6);
     }
     const want = hdr + len;
-    if (want > MAX_MESSAGE) {
-      this.fail('消息太大');
-      return 'stop';
-    }
+    if (want > MAX_MESSAGE) return this.bail('消息太大');
     const all = this.peek(want);
     if (!all) return null;
     const mask = all.subarray(2 + extra, hdr);
     const payload = Buffer.from(all.subarray(hdr, want));
     for (let i = 0; i < payload.length; i++) payload[i] ^= mask[i & 3];
     this.eat(want);
-    this.consume(fin, opcode, payload);
-    return true;
+    return this.consume(fin, opcode, payload) === 'stop' ? 'stop' : true;
   }
 
-  private consume(fin: boolean, opcode: number, payload: Buffer): void {
+  private consume(fin: boolean, opcode: number, payload: Buffer): void | 'stop' {
     if (opcode === OP.close || opcode === OP.ping || opcode === OP.pong) {
       this.onMsg(opcode, payload);
       return;
     }
     if (opcode !== OP.cont && this.frag) {
-      this.fail('上一段分片还没完');
-      return;
+      // 上一段还没完就另起一帧：那摊拼好的字节得一起扔掉，不能留着让人白喂
+      return this.bail('上一段分片还没完');
     }
-    if (opcode === OP.cont) {
-      if (!this.frag) {
-        this.fail('平白多了个分片');
-        return;
-      }
-      this.frag.parts.push(payload);
-    } else {
-      this.frag = { opcode, parts: [payload] };
-    }
+    const frag = this.frag ?? { opcode, parts: [], bytes: 0 };
+    frag.bytes += payload.length;
+    if (frag.bytes > MAX_MESSAGE) return this.bail('分片拼起来也超限');
+    frag.parts.push(payload);
+    this.frag = frag;
     if (!fin) return;
     const { opcode: first, parts } = this.frag;
     this.frag = null;
-    if (first !== OP.text) {
-      this.fail('只认文本帧');
-      return;
-    }
+    if (first !== OP.text) return this.bail('只认文本帧');
     this.onMsg(OP.text, Buffer.concat(parts));
   }
 
@@ -164,7 +173,7 @@ class Reader {
 
 /**
  * 一个极简 WebSocket 服务端：只认文本帧，客户端必须掩码，分片自己拼，
- * ping/pong 照回，10 秒一探活、连着三次没动静就掐。
+ * Origin 不是这桌自己的页面不握手，ping/pong 照回，5 秒一探活、连着三次没动静就掐。
  * 为零依赖手写这一截的代价：不支持扩展、不支持流式压缩、载荷上限 1 MB。
  */
 export class WsServer {
@@ -185,6 +194,14 @@ export class WsServer {
     const key = req.headers['sec-websocket-key'];
     if (!/^websocket$/i.test(req.headers.upgrade ?? '') || typeof key !== 'string') {
       socket.destroy();
+      return;
+    }
+    // 浏览器开 WebSocket 一定带 Origin：不是这一桌自己的页面就握手不成，
+    // 否则别人家的站点能让访问者的浏览器悄悄坐上我们的牌桌。命令行客户端和测试不带这头，空着当自己人放
+    const origin = req.headers.origin;
+    if (origin !== undefined && hostPart(origin) !== hostPart(req.headers.host ?? '')) {
+      // end() 而不是 destroy()：先话说完再挂电话，不然这行 403 可能压根没发出去
+      socket.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');
       return;
     }
     socket.write(

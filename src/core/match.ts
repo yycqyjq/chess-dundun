@@ -33,20 +33,14 @@ export interface MatchBook {
   ties: number;
 }
 
+/**
+ * 总账只发新本，没有「把老本拉长截短」这一说：2 人局一人 16 枚、4 人局一人 8 枚，
+ * 墩数也差一倍，两种局的收牌枚数加进同一列就不是任何一个人的战绩。
+ * 所以桌换人数时整本换新（`net/table.ts`），这儿只保证新本子的格子刚好跟人数对上。
+ */
 export function openMatch(players: number): MatchBook {
   const zero = () => Array.from({ length: players }, () => 0);
   return { games: 0, draws: zero(), drawWins: zero(), titles: zero(), cards: zero(), ties: 0 };
-}
-
-/**
- * 桌换了人数：总账跟着伸缩。已经在册那几位的局数留着别抹，
- * 多出来的座位补零，砍掉的座位从尾巴上截掉。
- */
-export function resizeMatch(book: MatchBook, players: number): void {
-  for (const each of [book.draws, book.drawWins, book.titles, book.cards]) {
-    each.length = players;
-    for (let i = 0; i < players; i++) if (each[i] === undefined) each[i] = 0;
-  }
 }
 
 export function recordGame(book: MatchBook, state: GameState): void {

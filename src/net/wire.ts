@@ -1,4 +1,5 @@
 import { parseRules, type Action, type AllocWay, type GameState, type Rules } from '../core/game.ts';
+import type { MatchBook } from '../core/match.ts';
 import { LEVELS, type Level } from '../ai/agent.ts';
 import type { RankFile } from '../core/pieces.ts';
 import type { Color, Piece } from '../core/pieces.ts';
@@ -207,6 +208,8 @@ export type ToClient =
       seq: number;
       /** 桌自己是第几局。中途坐下的人得跟着桌报数，不能从「1」自己数 */
       gameNo: number;
+      /** 跨局那本账只在桌上一本，随快照发下去：客户端自己攒一本，改人数、重连、中途入座随便哪条路都会分叉 */
+      book: MatchBook;
       /** 候场厅里的快照一份牌都还没出；界面照这个决定画候场厅还是画牌桌 */
       status: TableStatus;
       view: WireState;

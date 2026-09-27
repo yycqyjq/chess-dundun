@@ -4,7 +4,8 @@ import { fileURLToPath } from 'node:url';
 import { networkInterfaces } from 'node:os';
 import type { IncomingMessage } from 'node:http';
 import type { Duplex } from 'node:stream';
-import type { Level } from '../ai/agent.ts';
+import { LEVELS } from '../ai/agent.ts';
+import type { Rules } from '../core/game.ts';
 import { loadRules } from './load_rules.ts';
 import { Table, type TableSetup } from '../net/table.ts';
 import { checkHost, type ToClient, type ToHost } from '../net/wire.ts';
@@ -32,6 +33,41 @@ export function flag(argv: string[], name: string, fallback: string): string {
 
 export function hasFlag(argv: string[], name: string): boolean {
   return argv.includes(`--${name}`);
+}
+
+/**
+ * 命令行上的数得先过一遍再交给桌：`--players=abc` 一路 Number 就成了 NaN，
+ * 牌桌抱着 NaN 摆牌，崩的地方离那行参数十万八千里远。当场把这句话说清楚，改了再来。
+ */
+export function intFlag(argv: string[], name: string, fallback: number, lo: number, hi: number): number {
+  const raw = flag(argv, name, '');
+  if (raw === '') return fallback;
+  if (!/^-?\d+$/.test(raw)) throw new Error(`--${name} 得是个整数，你给的是「${raw}」`);
+  const n = Number(raw);
+  if (n < lo || n > hi) throw new Error(`--${name} 只能在 ${lo} 到 ${hi} 之间，你给的是 ${n}`);
+  return n;
+}
+
+/** 命令行 → 这桌的默认配置。认不下的一句都当场抛，别开着一条废桌等人来发现 */
+export function setupFrom(argv: string[], rules: Rules): TableSetup {
+  const players = intFlag(argv, 'players', rules.playerCounts[0] ?? 2, 1, 8);
+  if (!rules.playerCounts.includes(players))
+    throw new Error(`--players 只能是 ${rules.playerCounts.join(' 或 ')}，你给的是 ${players}`);
+  // 从引擎那张清单里挑，而不是把字符串硬转成档位：自定义的 rules.json 少了哪种玩法，这儿就跟着少一种
+  const said = flag(argv, 'mode', 'kou');
+  const mode = rules.modes.find((m) => m === said);
+  if (!mode) throw new Error(`--mode 只有 ${rules.modes.join('、')} 这几种玩法，你给的是「${said}」`);
+  const level = flag(argv, 'level', 'hard');
+  const picked = LEVELS.find((l) => l === level);
+  if (!picked) throw new Error(`--level 只有 ${LEVELS.join('/')} 这几档，你给的是「${level}」`);
+  return {
+    rules,
+    players,
+    mode,
+    level: picked,
+    seed: intFlag(argv, 'seed', (Math.random() * 0x100000000) | 0, 0, 0xffffffff),
+    hostSeat: intFlag(argv, 'host-seat', 0, 0, players - 1),
+  };
 }
 
 /** 这些网卡上的地址出不了这块网：VPN、网桥、虚拟机、容器，别的设备照着敲只会撞墙 */
@@ -76,14 +112,7 @@ export interface Room {
 }
 
 export function openRoom(argv: string[], port: number): Room {
-  const setup: TableSetup = {
-    rules: loadRules(),
-    players: Number(flag(argv, 'players', '2')),
-    mode: flag(argv, 'mode', 'kou') === 'ming' ? 'ming' : 'kou',
-    level: flag(argv, 'level', 'hard') as Level,
-    seed: Number(flag(argv, 'seed', String((Math.random() * 0xffffffff) | 0))),
-    hostSeat: Number(flag(argv, 'host-seat', '0')),
-  };
+  const setup = setupFrom(argv, loadRules());
   const savePath = flag(argv, 'save', SAVE);
   /** 谁连着坐哪个位子：一条连接进来先没位子，join 成功才绑上 */
   const seatOf = new Map<Conn, number>();
@@ -196,7 +225,6 @@ export function openRoom(argv: string[], port: number): Room {
         // 同一个位子只许一个人连着：令牌对得上，就把旧那条连接踢掉
         // 同一条连接重新入座（改个代号、认回椅子）不算换人，别把自己踢下线
         if (prev && prev !== conn) prev.close('这把椅子换了人');
-        conn.send(JSON.stringify(r.msg satisfies ToClient));
         persist();
         return;
       }

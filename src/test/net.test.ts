@@ -5,7 +5,9 @@
 import { createServer, type Server } from 'node:http';
 import { connect as netConnect, type Socket } from 'node:net';
 import { pendingSeats, type Action, type GameState } from '../core/game.ts';
+import { openMatch } from '../core/match.ts';
 import { loadRules } from '../node/load_rules.ts';
+import { intFlag, setupFrom } from '../node/room.ts';
 import { Table, IDLE_MS, NICK_MAX, TAKEOVER_MS, type TableSetup } from '../net/table.ts';
 import {
   checkHost,
@@ -356,8 +358,8 @@ function pilesOf(state: GameState): number[][] {
   const tie = state1.won[0] === state1.won[1];
   const top = tie ? -1 : state1.won[0]! > state1.won[1]! ? 0 : 1;
   ok('这一局确实打完了', state1.phase === 'over' && table.lobby().status === 'waiting');
-  ok('打完停在候场厅时账还没记（要等结清那一刻）', table.book.games === 0 && table.gameNo === 1);
-  ok('改玩法这一趟先把上一局结了', table.changeSetup(0, { mode: 'ming' }).ok && table.book.games === 1);
+  ok('局末那一刻这一局就记进账了（结算卡上那份累计得带着它）', table.book.games === 1 && table.gameNo === 1);
+  ok('改玩法那一趟不会把它再结一遍', table.changeSetup(0, { mode: 'ming' }).ok && table.book.games === 1);
   ok('账上收的枚数就是刚打完那局', table.book.cards[0]! + table.book.cards[1]! === 32);
   ok('局号跟着账走：这副新牌是第 2 局', table.gameNo === 2);
   if (tie) ok('并列局不给人加冕', table.book.ties === 1 && table.book.titles.every((t) => t === 0));
@@ -370,18 +372,50 @@ function pilesOf(state: GameState): number[][] {
 
 {
   // 换人数是另一码事：那本账本来就要重开，上一局赢家指的也不是那把椅子了
-  const { table, clock } = makeTable({ mode: 'ming' });
-  table.join(0, '');
-  table.join(1, '');
+  const { table, clock, logs } = makeTable({ mode: 'ming', players: 4 });
+  for (const s of [0, 1, 2, 3]) table.join(s, '');
   table.start(0);
   finishDraft(table);
   playToEnd(table, clock);
-  ok('换人数前账是空的', table.book.games === 0 && table.gameNo === 1);
-  table.join(2, '');
-  table.join(3, '');
+  // 打到第二局才减人：只打一局的话局号本来就还是 1，「局号跟着账回 1」这一步压根没演到
+  table.start(0);
+  finishDraft(table);
+  playToEnd(table, clock);
+  ok('换人数前那两局已经记上了', table.book.games === 2 && table.gameNo === 2);
+  ok(
+    'P3、P4 还坐着，减人这一趟挡在门口',
+    !table.changeSetup(0, { players: 2 }).ok && table.book.games === 2 && table.state.players === 4,
+  );
+  table.stand(2);
+  table.stand(3);
   ok('四个人改成两个人', table.changeSetup(0, { players: 2 }).ok && table.state.players === 2);
-  ok('换成两把椅子那本账跟着重开', table.book.games === 0 && table.gameNo === 1 && table.book.draws.every((d) => d === 0));
+  ok(
+    '换成两把椅子那本账跟着重开',
+    table.book.games === 0 && table.gameNo === 1 && table.book.draws.every((d) => d === 0) &&
+      table.book.cards.every((c) => c === 0) &&
+      table.book.draws.length === 2,
+    JSON.stringify([table.book.games, table.gameNo, table.book.draws, table.book.cards]),
+  );
+  ok(
+    '重开之后四条账目都只剩两把椅子（打完那局不会串进新本子）',
+    [table.book.draws, table.book.drawWins, table.book.titles, table.book.cards].every((a) => a.length === 2),
+    JSON.stringify([table.book.drawWins, table.book.titles, table.book.cards]),
+  );
+  ok('候场厅里念得出来：人数变了，账是从重开的', logs.some((l) => l.includes('跨局那本账从重开')), logs.join('｜'));
   ok('新局里没有人还排着上一局的队', table.seatInfo().every((s) => !s.queued));
+  // 重开不是只把老账抹了就算：新本子得接得住重开之后的那局，一位不落、一位不多
+  table.start(0);
+  finishDraft(table);
+  playToEnd(table, clock);
+  ok(
+    '重开之后这一局的账记满了两把椅子：一局、32 枚、没有第三位',
+    table.book.games === 1 &&
+      table.gameNo === 1 &&
+      table.book.cards.reduce((a, c) => a + c, 0) === 32 &&
+      table.book.cards.length === 2 &&
+      table.book.draws.reduce((a, c) => a + c, 0) === 1,
+    JSON.stringify([table.book.games, table.gameNo, table.book.draws, table.book.cards]),
+  );
 }
 
 {
@@ -400,6 +434,119 @@ function pilesOf(state: GameState): number[][] {
   ok('满两分钟那一秒桌动了手（宿主该落一次盘）', table.tick());
   ok('那把椅子已经还给这桌', !table.seatInfo()[1]!.taken && !table.seatInfo()[1]!.online);
   ok('还给桌之后旧令牌不再挡人，凭它照样坐得回', table.join(1, tok1).ok);
+}
+
+// ───────────────────────── 那本账只有一本：随快照下去，存档里跟着走 ─────────────────────────
+
+{
+  // 客户端只画桌这本：它自己攒一本的话，改人数、重连、中途入座随便哪条路都会跟桌对不上号
+  const { table, inbox, clock } = makeTable({ mode: 'kou' });
+  table.join(0, '');
+  table.join(1, '');
+  table.start(0);
+  finishDraft(table);
+  ok('一局没打完：下去的账本是空的', inbox.last(1).book.games === 0);
+  playToEnd(table, clock);
+  ok('打完那一刻：下去的账本已经记上这一局', inbox.last(1).book.games === 1 && table.book.games === 1);
+  ok('候场厅里改成四个人', table.changeSetup(0, { players: 4 }).ok && table.state.players === 4);
+  table.join(2, '');
+  table.join(3, '');
+  ok('换人数之后下去的那份跟着重开，客户端不再留着老账', inbox.last(3).book.games === 0 && table.book.games === 0);
+}
+
+{
+  // 入座那句话排在快照前面：客户端拿到快照时已经知道自己坐的是哪把椅子
+  const { table, inbox } = makeTable({ mode: 'ming' });
+  table.join(0, '');
+  table.join(1, '');
+  const mine = inbox.all.filter((o) => o.seat === 1);
+  ok('新坐下的那位先收到 welcome，再收到快照', mine[0]?.msg.t === 'welcome' && mine[1]?.msg.t === 'state');
+  ok('welcome 说的就是这把椅子', mine[0]?.msg.t === 'welcome' && mine[0].msg.seat === 1);
+  ok('一条连接入座，桌只对它说这两句', mine.length === 2);
+}
+
+{
+  // 存档得接上同一条随机流、同一串快照号：光存牌面，重启后下一副是把老牌重放一遍，
+  // 还开着的那页更会从此一份不演——它只认比手上号新的快照
+  const a = makeTable({ mode: 'ming', seed: 11 });
+  a.table.join(0, '');
+  a.table.join(1, '');
+  a.table.start(0);
+  finishDraft(a.table);
+  playToEnd(a.table, a.clock);
+  const seqSaved = a.inbox.last(1).seq;
+  const json = a.table.save();
+  a.table.start(0);
+  const nextSeed = a.table.state.seed;
+  // 只认流位，一把椅子都不坐：按下开始洗出来的那一副，得和没重启那桌的下一副严丝合缝
+  const twin = Table.load(json, () => {}, () => {}, a.clock.now);
+  twin.start(0);
+  ok('重启后接着开的那局，种子跟没重启时是同一个', twin.state.seed === nextSeed, `${twin.state.seed} 对上 ${nextSeed}`);
+  ok('刚打完那一局不会在重启后补记成两笔', twin.book.games === 1);
+
+  // 坐回来每人要发一张令牌，那是在这条流上又走一步，所以这一路只对号、不对种子
+  const got: { seat: number; msg: ToClient }[] = [];
+  const restored = Table.load(
+    json,
+    (seat, msg) => got.push({ seat, msg }),
+    () => {},
+    a.clock.now,
+  );
+  restored.join(0, '');
+  const first = got[got.length - 1]?.msg;
+  ok(
+    '重启后头一份快照的号接着往上走',
+    !!first && first.t === 'state' && first.seq > seqSaved,
+    `${first && first.t === 'state' ? first.seq : '-'} 对上 ${seqSaved}`,
+  );
+
+  // 他磁盘上躺着的那份老存档没这三个字段，账本里也还没记打完的这一局（老代码到按开始才记）：
+  // 照那个口径接回来，别把整桌崩在 undefined 上
+  const legacyJson = JSON.stringify({
+    ...JSON.parse(json) as object,
+    seq: undefined,
+    booked: undefined,
+    rngSteps: undefined,
+    book: openMatch(2),
+  });
+  const legacy = Table.load(legacyJson, () => {}, () => {}, a.clock.now);
+  ok(
+    '老存档接回来：打完那一局还压在账外',
+    legacy.state.phase === 'over' && legacy.state.players === 2 && legacy.book.games === 0,
+  );
+  legacy.join(0, '');
+  legacy.start(0);
+  ok('老存档那一局照旧在按开始那一刻补记，不多不少', legacy.book.games === 1, JSON.stringify(legacy.book));
+}
+
+// ───────────────────────── 命令行那几行参数：认不下就当场说 ─────────────────────────
+
+{
+  const shout = (argv: string[]): string => {
+    try {
+      setupFrom(argv, rules);
+      return '';
+    } catch (e) {
+      return (e as Error).message;
+    }
+  };
+  const quiet = setupFrom([], rules);
+  ok(
+    '一行参数不给：默认两人、扣棋、hard、房主坐 P1',
+    quiet.players === 2 && quiet.mode === 'kou' && quiet.level === 'hard' && quiet.hostSeat === 0 && Number.isInteger(quiet.seed),
+  );
+  const given = setupFrom(['--players', '4', '--mode=ming', '--level=easy', '--seed=7', '--host-seat', '3'], rules);
+  ok('--名 值 和 --名=值 两种写法都认', given.players === 4 && given.mode === 'ming' && given.level === 'easy' && given.seed === 7 && given.hostSeat === 3);
+  ok('空着等值（--players=）当没给，照默认来', setupFrom(['--players='], rules).players === 2);
+  ok('--players=abc 说清是哪三个字，不抱着 NaN 开桌', shout(['--players=abc']).includes('abc'));
+  ok('--players=3 不是这桌的档位', shout(['--players=3']).includes('2 或 4'));
+  ok('--mode=明 认不出这种玩法', shout(['--mode=明']).includes('mode'));
+  ok('--level=zzz 认不出这档', shout(['--level=zzz']).includes('level'));
+  ok('--host-seat=9 超出一把椅子都没有', shout(['--host-seat=9']).length > 0);
+  ok('--seed=-1 负数不接', shout(['--seed=-1']).length > 0);
+  ok('--players=1.5 也不算整数', shout(['--players=1.5']).includes('players'));
+  ok('--port 那行同样由这道闸兜：写歪了抛，不抛给 node 的 listen', (() => { try { intFlag(['--port=abc'], 'port', 5200, 1, 65535); return false; } catch { return true; } })());
+  ok('端口不给就用默认值，给了 0 也算出界', intFlag([], 'port', 5200, 1, 65535) === 5200 && (() => { try { intFlag(['--port=0'], 'port', 5200, 1, 65535); return false; } catch { return true; } })());
 }
 
 // ───────────────────────── 一秒一次的表：动了手才要落盘 ─────────────────────────
@@ -1100,12 +1247,12 @@ interface RawClient {
   close(): void;
 }
 
-/** 手搓一个客户端：帧自己掩码，这样服务端「不掩码就拒」那条才有对证 */
-function rawClient(port: number, path = '/'): Promise<RawClient> {
+/** 手搓一个客户端：帧自己掩码，这样服务端「不掩码就拒」那条才有对证；headers 用来补 Origin 这类握手头 */
+function rawClient(port: number, path = '/', headers: string[] = []): Promise<RawClient> {
   return new Promise((res, rej) => {
     const sock = netConnect(port, '127.0.0.1', () => {
       sock.write(
-        `GET ${path} HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n` +
+        `GET ${path} HTTP/1.1\r\nHost: x\r\n${headers.join('\r\n')}${headers.length ? '\r\n' : ''}Upgrade: websocket\r\nConnection: Upgrade\r\n` +
           'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n',
       );
     });
@@ -1320,6 +1467,53 @@ await withServer(async (port, srv) => {
   });
   ok('不像 WebSocket 的升级请求一律掐掉', dead);
   sock.destroy();
+});
+
+await withServer(async (port, _srv, _ws, counter) => {
+  // Origin 这道闸：浏览器开 WebSocket 必带，别的页面想悄悄坐上来就靠它挡；命令行客户端不带，得放行
+  const none = await rawClient(port);
+  ok('不带 Origin 的（命令行、测试）照样握上手', /^HTTP\/1\.1 101 /.test(none.head), none.head.split('\r\n')[0] ?? '');
+  const same = await rawClient(port, '/', ['Origin: http://x']);
+  ok('Origin 跟 Host 对上就放行', /^HTTP\/1\.1 101 /.test(same.head), same.head.split('\r\n')[0] ?? '');
+  // 浏览器不把默认端口写进 Origin：http://x:80 和 Host: x 得算一个地址，不然正经页面被误杀
+  const flat = await rawClient(port, '/', ['Origin: http://x:80']);
+  ok('Origin 带默认端口、Host 不带：摊平了算同一个', /^HTTP\/1\.1 101 /.test(flat.head), flat.head.split('\r\n')[0] ?? '');
+  await nap(60);
+  ok('放行那几条一条没被掐', counter.open === 3 && !none.closed && !same.closed && !flat.closed);
+  same.close();
+  flat.close();
+  none.close();
+
+  const foe = await rawClient(port, '/', ['Origin: http://evil.example']);
+  ok('Origin 不是这一桌的，握手直接回 403', /^HTTP\/1\.1 403 /.test(foe.head), foe.head.split('\r\n')[0] ?? '');
+  const opaque = await rawClient(port, '/', ['Origin: null']);
+  ok('Origin 是 null（本地文件、沙箱页）也拒', /^HTTP\/1\.1 403 /.test(opaque.head), opaque.head.split('\r\n')[0] ?? '');
+  await nap(60);
+  ok('被拒那两条连上没记进连接表', counter.open === 3 && foe.closed && opaque.closed);
+  foe.close();
+  opaque.close();
+});
+
+await withServer(async (port, _srv, _ws, counter) => {
+  // 判死之后：对端已经不可信了，那之后攒着的字节一个都不该再解
+  const c = await rawClient(port);
+  c.sendRaw(Buffer.concat([maskFrame(0x1, Buffer.from('起头', 'utf8'), false), maskFrame(0x2, Buffer.from('插一脚', 'utf8'))]));
+  await nap(80);
+  ok('分片没完就另起一帧：当场掐', c.closed);
+  ok('掐了之后那一帧没被当成消息递上去', !counter.texts.some((t) => t.includes('插一脚')), counter.texts.join('｜'));
+  c.close();
+});
+
+await withServer(async (port, _srv, _ws, counter) => {
+  // 单帧有 1 MB 上限，分片拼起来却没人管过：六分片各 200 KB 拼出 1.2 MB，内存就该在这儿收住
+  const c = await rawClient(port);
+  const seg = Buffer.alloc(200 * 1024, 0x61);
+  c.sendRaw(maskFrame(0x1, seg, false));
+  for (let i = 0; i < 5; i++) c.sendRaw(maskFrame(0x0, seg, i === 4));
+  await nap(150);
+  ok('分片拼起来超限就掐', c.closed);
+  ok('拼过头那一条没被递上去', counter.texts.length === 0, `收到 ${counter.texts.length} 条`);
+  c.close();
 });
 
 function nap(ms: number): Promise<void> {
