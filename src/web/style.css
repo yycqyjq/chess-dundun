@@ -135,7 +135,7 @@ body {
 }
 
 /* 滑上去抬一点、亮一档，按下再落回来。
-   .dim 是「这会儿没人接」的按钮，抬起来等于骗人去点，排除掉；:disabled 同理（大厅里坐了人的椅子）；
+   .dim 是「这会儿没人接」的按钮，抬起来等于骗人去点，排除掉；:disabled 同理（候场厅里坐了人的椅子）；
    整段包在 hover: hover 里——触屏点完 hover 会赖着不散，手机上就成了永久浮起。 */
 @media (hover: hover) {
   .btn:not(.dim):not(:disabled):hover,
@@ -163,7 +163,7 @@ body {
   cursor: default;
 }
 
-/* 大厅里坐着人的、已经归了别人的椅子：按不动，也就不该给小手 */
+/* 候场厅里坐着人的、已经归了别人的椅子：按不动，也就不该给小手 */
 .btn:disabled {
   opacity: 0.4;
   cursor: default;
@@ -411,6 +411,91 @@ body {
 .piece.won .face,
 .piece.won .back {
   animation: pop 460ms ease-out;
+}
+
+/* ---------- 首页：进门那一层 ---------- */
+
+/* 盖住整块屏幕的一层，不是排在牌桌下面——单机收杆退回来时身后还立着那副牌面，
+   所以背景必须是不透明的（跟 body 那道渐变同一份配方，别让首页看着像另一个 app） */
+.home {
+  position: fixed;
+  inset: 0;
+  z-index: 1900;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: max(28px, env(safe-area-inset-top)) 20px calc(14px + var(--safe-b));
+  overflow: auto;
+  background: radial-gradient(120% 90% at 50% 0%, #35291f, var(--bg) 70%);
+}
+
+/* 四块各占一份卡片宽，窄屏自然收到 100%，不用另写一档 */
+.home-title,
+.home-brief,
+.home-entries,
+.home-foot {
+  width: min(var(--card-w), 100%);
+}
+
+.home-title {
+  margin: 0;
+  font-size: 34px;
+  font-weight: 700;
+  letter-spacing: 8px;
+  color: var(--gold);
+}
+
+.home-brief {
+  font-size: 13px;
+  opacity: 0.62;
+}
+
+.home-entries {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+/* 整块就是那颗按钮，里面不再嵌小按钮：热区不许大过操作对象。
+   木色不是金色——这一层是挑玩法，不是确认动作，金色留给「开桌／开始这一局」 */
+.home-entry {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  min-height: 72px;
+  padding: 13px 15px;
+  text-align: left;
+}
+
+.home-entry .e {
+  font-size: 17px;
+  font-weight: 600;
+}
+
+.home-entry .n {
+  font-size: 12px;
+  opacity: 0.72;
+}
+
+/* 提示和版本压到最底：拇指落点那一头，也是「这版代码是哪一笔」唯一露出来的地方 */
+.home-foot {
+  margin-top: auto;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 12px;
+  opacity: 0.6;
+}
+
+.home-foot .v {
+  /* 版本号跟顶栏那句一样：可以被挤到下一行，不能被省略号吃掉 */
+  white-space: normal;
+  overflow-wrap: anywhere;
+  font-variant-numeric: tabular-nums;
 }
 
 /* ---------- 浮层 ---------- */
@@ -726,6 +811,23 @@ body {
 @media (min-width: 820px) {
   .sheet-card {
     width: min(var(--card-w-wide), 92vw);
+  }
+
+  /* 首页：两条入口并排（手机上就是上下两条，各占一份卡宽） */
+  .home-title,
+  .home-brief,
+  .home-entries,
+  .home-foot {
+    width: min(var(--card-w-wide), 100%);
+  }
+
+  .home-entries {
+    flex-direction: row;
+  }
+
+  .home-entry {
+    flex: 1 1 0;
+    min-width: 0;
   }
 
   .room .sheet-body {

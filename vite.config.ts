@@ -1,5 +1,9 @@
+import { readFileSync } from 'node:fs';
 import { defineConfig, type Plugin, type ViteDevServer } from 'vite';
 import { openRoom, type Room } from './src/node/room.ts';
+
+/** 只把版本号那一个字符串注进 bundle，首页底部那一行用它 */
+const version = (JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8')) as { version: string }).version;
 
 /**
  * 把那张牌桌直接挂进开发服务器：npm run dev 一条命令就能联机，不用再单开一个
@@ -34,6 +38,7 @@ function tableRoom(): Plugin {
 export default defineConfig({
   // 相对路径：之后 Capacitor（安卓）和 Tauri/Electron（Win/Mac）都是把 dist 塞进壳里，绝对路径会白屏
   base: './',
+  define: { __APP_VERSION__: JSON.stringify(version) },
   build: { outDir: 'dist', target: 'es2022' },
   // 5173 被本机另一个项目（pocket-kit）占着，这里钉死一个不撞车的端口
   server: { host: true, port: 5199, strictPort: true },

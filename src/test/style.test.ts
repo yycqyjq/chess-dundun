@@ -155,5 +155,42 @@ console.log('\n牌桌：几何还是 board.ts 说了算');
   ok('操作条离底边那一档由 --ctrl-lift 定', /var\(--ctrl-lift/.test(val('.ctrl', 'bottom') ?? ''));
 }
 
+// ---------- 首页那一层 ----------
+
+console.log('\n首页：盖住屏幕的一层，两条入口竖着排，宽屏才并排');
+{
+  const home = at('.home')[0];
+  ok('.home 有声明（不是漏了这一块）', !!home);
+  ok('它是盖住整块屏幕的一层（fixed + inset 0）', val('.home', 'position') === 'fixed' && val('.home', 'inset') === '0');
+  // 身后还立着打完那副牌面：背景透了就会隔着一层看见牌
+  ok('背景不透明（认的是 --bg 那道渐变）', /var\(--bg\)/.test(val('.home', 'background') ?? ''), val('.home', 'background') ?? '‹没写›');
+  ok('手机横屏装不下时能滚（overflow: auto）', val('.home', 'overflow') === 'auto');
+  const zHome = Number(val('.home', 'z-index'));
+  const zSheet = Number(val('.sheet', 'z-index'));
+  ok('首页压在牌桌之上、任何卡之下', zHome > 0 && zSheet > zHome, `.home ${zHome}／.sheet ${zSheet}`);
+  ok('首页自己不加常驻框线（.home 没声明 border）', val('.home', 'border') === undefined);
+
+  const blocks = ['.home-title', '.home-brief', '.home-entries', '.home-foot'];
+  for (const sel of blocks)
+    ok(`${sel} 的宽度认的是 var(--card-w)`, /var\(--card-w\)/.test(val(sel, 'width') ?? ''), val(sel, 'width') ?? '‹没写›');
+  for (const sel of blocks)
+    ok(`${sel} 在宽屏那档换成 --card-w-wide`, /var\(--card-w-wide\)/.test(val(sel, 'width', WIDE) ?? ''), val(sel, 'width', WIDE) ?? '‹没写›');
+
+  ok('两条入口默认竖着排', val('.home-entries', 'display') === 'flex' && val('.home-entries', 'flex-direction') === 'column');
+  ok('横排只出现在宽屏那条 media 里', val('.home-entries', 'flex-direction', WIDE) === 'row' && val('.home-entries', 'flex-direction', '') === 'column');
+  ok('宽屏两条等宽、装不下自己收（flex: 1 1 0 + min-width: 0）', val('.home-entry', 'flex', WIDE) === '1 1 0' && val('.home-entry', 'min-width', WIDE) === '0');
+
+  // 整块就是那颗按钮：热区要明显大过卡片里那些小按钮
+  const entryMin = Number.parseInt(val('.home-entry', 'min-height') ?? '0', 10);
+  const btnMin = Number.parseInt(val('.btn', 'min-height') ?? '0', 10);
+  ok(`入口那块比一般按钮高一大截（${entryMin}px 对 ${btnMin}px）`, entryMin >= 64 && entryMin > btnMin, `entry ${entryMin}／btn ${btnMin}`);
+  ok('入口里的字靠左排（不是居中海报）', val('.home-entry', 'text-align') === 'left');
+  ok('入口没自己把小手改回默认（cursor 交给 .btn）', val('.home-entry', 'cursor') === undefined);
+
+  ok('提示和版本压到最底（margin-top: auto）', val('.home-foot', 'margin-top') === 'auto');
+  // 版本号被省略号吃掉就等于没写，跟顶栏那句同一口径
+  ok('版本那一行不截断（white-space: normal，也没写 ellipsis）', val('.home-foot .v', 'white-space') === 'normal' && (val('.home-foot .v', 'text-overflow') ?? 'none') === 'none');
+}
+
 console.log(failures ? `\n${failures} 条没过` : '\n全部通过');
 process.exit(failures ? 1 : 0);

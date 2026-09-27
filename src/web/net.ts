@@ -28,7 +28,7 @@ export interface NetHandlers {
   onMsg(m: ToClient): void;
   /** 断了就报一句话，连上给空串 */
   onStatus(text: string): void;
-  /** 每次握手成功都来一趟：还站在大厅就在这儿重问座位表，已经坐下就在这儿凭令牌坐回那把椅子 */
+  /** 每次握手成功都来一趟：还站在候场厅就在这儿重问座位表，已经坐下就在这儿凭令牌坐回那把椅子 */
   onReady(): void;
 }
 

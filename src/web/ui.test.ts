@@ -8,6 +8,7 @@
  * 全文件（连假元素自己）都不许用构造器参数属性——`--experimental-strip-types` 只抹类型，不改写赋值。
  */
 import { buildShell, button, card, paintChip, popup, rich, segment, toast, type Shell } from './ui.ts';
+import { appVersion, homePanel, initialScreen, isLoopback } from './home.ts';
 import { buildPieceSet, buildRanks, type Piece } from '../core/pieces.ts';
 import { Pieces } from './pieces.ts';
 import { Sound } from './sound.ts';
@@ -396,6 +397,53 @@ function planOf(spotFor: (i: number) => Placed): Map<number, Placed> {
   };
   const t = new Sound();
   ok('存得下来的那台机器：翻一次就记住，下次开桌还认', t.toggle() === false && store.get('chess-dundun:sound') === 'off' && new Sound().enabled === false);
+}
+
+// ---------- 首页：进门落在哪一页、那两个入口点了往哪儿走 ----------
+
+{
+  const homeHosts = ['localhost', '127.0.0.1', '127.8.9.9', '::1', '[::1]'];
+  const roomHosts = ['192.168.1.7', '10.0.0.3', '172.16.0.9', 'chess.lan', 'example.com'];
+  const badHome = homeHosts.filter((h) => initialScreen(h) !== 'home');
+  const badRoom = roomHosts.filter((h) => initialScreen(h) !== 'room');
+  ok('本机那几个地址都停在首页', badHome.length === 0, badHome.join(','));
+  ok('别处的地址一律直落候场厅：拿着链接进来的人不再被问一遍', badRoom.length === 0, badRoom.join(','));
+  ok('首页不写进邀请那把尺子是同一个口径', isLoopback('127.0.0.1') && !isLoopback('192.168.1.7'));
+
+  let solo = 0;
+  let net = 0;
+  const panel = F(homePanel(() => solo++, () => net++));
+  const names = [...panel.names];
+  ok('首页是一整块 .home，里头四块依序排', names.includes('home'), names.join('+'));
+  const kids = panel.children.map((c) => [...c.names][0]);
+  ok('抬头／要点／入口／脚，四块一块不多一块不少', kids.join(',') === 'home-title,home-brief,home-entries,home-foot', kids.join(','));
+  ok('抬头是名字、要点是那三个数', panel.children[0]!.raw === '棋墩墩' && /32 枚.*黑 < 红/.test(panel.children[1]!.raw), panel.children[1]!.raw);
+
+  const entries = panel.findAll('button');
+  ok('两个入口各是一整块按钮，不是 div（键盘 Tab 走得到）', entries.length === 2 && entries.every((e) => e.tag === 'button' && e.type === 'button'));
+  ok('顺序是「自己玩」在前、「同一张网」在后', entries[0]!.textContent.includes('自己玩') && entries[1]!.textContent.includes('同一张网'));
+  ok(
+    '每块里两个格：大字说做什么、小字说谁来补',
+    entries.every((e) => {
+      const head = e.find('e');
+      const note = e.find('n');
+      return !!head && !!note && head.raw !== '' && note.raw !== '';
+    }),
+    entries.map((e) => e.children.map((c) => [...c.names][0]).join('+')).join(','),
+  );
+  entries[0]!.click();
+  ok('点第一块只去单机，不顺手把连接也开起来', solo === 1 && net === 0, `solo ${solo}／net ${net}`);
+  entries[1]!.click();
+  entries[1]!.click();
+  ok('点第二块去联机，点两下就是走两下（没串到单机那半）', solo === 1 && net === 2, `solo ${solo}／net ${net}`);
+  ok('首页这一整块不往 HTML 里塞任何一句话', panel.countHtml() === 0, panel.allHtml.join('｜'));
+
+  const foot = panel.find('home-foot')!;
+  ok('没注上版本时宁可少那一行，也不念一个 undefined', !foot.find('v') && appVersion() === '', foot.children.map((c) => c.raw).join(','));
+  G.__APP_VERSION__ = '0.1.0';
+  const withVersion = F(homePanel(() => {}, () => {})).find('home-foot')!;
+  ok('注上了就在脚上念 v0.1.0，那句联机提示还在', withVersion.find('v')!.raw === 'v0.1.0' && withVersion.children.length === 2, withVersion.children.map((c) => c.raw).join(','));
+  delete G.__APP_VERSION__;
 }
 
 console.log(failures ? `\n${failures} 条没过` : '\n全部通过');

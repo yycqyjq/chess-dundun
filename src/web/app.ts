@@ -14,6 +14,7 @@ import { mulberry32 } from '../core/rng.ts';
 import { viewFor } from '../core/view.ts';
 import { deckFor, hydrate, type SeatInfo, type Seats, type TableStatus, type ToClient } from '../net/wire.ts';
 import { ctrlLift, handCramped, labelBands, LABEL_W, layout, pieceSize, stackSpots, type Board, type TableView } from './board.ts';
+import { homePanel, initialScreen, isLoopback } from './home.ts';
 import { deviceNick, forget, Link, recall, remember } from './net.ts';
 import { MOVE_MS, Pieces } from './pieces.ts';
 import { rules } from './rules.ts';
@@ -81,9 +82,6 @@ function rollSeed(): number {
   return Date.now() % 1_000_000_000;
 }
 
-/** 只有这台设备自己敲得开的地址：别人扫了没用，所以它不能当邀请 */
-const LOOPBACK = /^127\.|^localhost$|^\[?::1/;
-
 /**
  * 邀请别人用的那串地址，第一个就是二维码的内容。
  * 这台设备自己够得着的 origin 最准——它不是回环就说明这条路真能走；
@@ -91,7 +89,7 @@ const LOOPBACK = /^127\.|^localhost$|^\[?::1/;
  */
 function inviteUrls(lan: string[]): string[] {
   const host = location.hostname;
-  const here = !LOOPBACK.test(host) && (location.protocol === 'http:' || location.protocol === 'https:') ? `${location.origin}/` : '';
+  const here = !isLoopback(host) && (location.protocol === 'http:' || location.protocol === 'https:') ? `${location.origin}/` : '';
   return [...new Set(here ? [here, ...lan] : lan)];
 }
 
@@ -163,9 +161,9 @@ export class App {
   private reseat = false;
 
   constructor(private root: HTMLElement) {
-    // 地址是别人给的那就是来入桌的，直接进候场厅；本机自己打开才先问要不要摆一桌
-    if (!LOOPBACK.test(location.hostname)) this.openRoom();
-    else this.pickTable();
+    // 地址是别人给的那就是来入桌的，直接进候场厅；本机自己打开才先落在首页，由人自己挑玩法
+    if (initialScreen(location.hostname) === 'room') this.openRoom();
+    else this.showHome();
     // 手机切到别的 app 再回来：路由器早把他那条线收了，浏览器却还以为连着。
     // 与其等下一份快照等不来，不如回来这一刻就重新敲一次门
     document.addEventListener('visibilitychange', () => {
@@ -175,8 +173,27 @@ export class App {
     window.setInterval(() => this.link?.beat(), 1000);
   }
 
+  // ---------- 首页 ----------
+
+  /**
+   * 全屏首页：两个入口各占一条大热区，选完才进各自的配置。
+   * 它是盖在屏幕上的一层，不是排在牌桌下面——单机打完一局退回来时身后还立着那副牌面。
+   * 版面住在 home.ts（那儿进得了 node 测试），这儿只管往 root 上摘挂。
+   */
+  private showHome(): void {
+    this.closeRoom();
+    for (const el of this.root.querySelectorAll('.sheet, .home')) el.remove();
+    this.root.append(
+      homePanel(
+        () => this.pickTable(),
+        () => this.openRoom(),
+      ),
+    );
+  }
+
   // ---------- 开桌 ----------
 
+  /** 从首页那颗「自己玩」进来，身后就是首页：点空白退回那儿，不再是「不摆一桌就出不去的一张卡」 */
   private pickTable(): void {
     this.closeRoom();
     for (const el of this.root.querySelectorAll('.sheet')) el.remove();
@@ -222,20 +239,8 @@ export class App {
         );
         // 主按钮进 foot：手机上这三排选项加说明早超出一屏，开桌那颗跟着滚就等于要人先滚到底再摸黑点
         foot.append(row);
-        const hint = div('note');
-        hint.textContent =
-          '联机：npm run dev 一条命令就把页面和这张桌一起端出来，房主把终端印的局域网地址发给同网的设备（候场厅里也有二维码）。人坐定后由房主按开始；这边只挑一把椅子。';
-        const net = div('sheet-row');
-        net.append(
-          button('联机进桌', () => {
-            close();
-            this.openRoom();
-          }),
-        );
-        body.append(hint);
-        foot.append(net);
       },
-      true,
+      false,
     );
   }
 
@@ -276,13 +281,13 @@ export class App {
     const leave = button(
       '',
       () => {
-        // 后面有牌桌就是「回去看一眼」，没有就是退回单机那张开桌卡——差的正是这条连接
+        // 后面有牌桌就是「回去看一眼」，没有就是退回首页——差的正是这条连接
         const toBoard = !!this.shell;
         this.closeRoom();
         if (toBoard) return;
         this.link?.close();
         this.link = null;
-        this.pickTable();
+        this.showHome();
       },
       'btn mini',
     );
@@ -442,8 +447,8 @@ export class App {
 
       start.hidden = !(waiting && isHost);
       start.textContent = short > 0 ? `开始这一局（${short} 个位子由电脑补）` : '开始这一局';
-      // 出去的路看后面有没有牌桌：候场期这块面板底下是空的，合上它就只剩白屏，那种时候只给「回去打单机」
-      leave.textContent = this.shell ? '看牌桌' : '回去打单机';
+      // 出去的路看后面有没有牌桌：候场期这块面板底下是空的，合上它就只剩白屏，那种时候只给「回首页」
+      leave.textContent = this.shell ? '看牌桌' : '回首页';
     };
     this.room = { veil, note, fill };
     link.askLobby();
@@ -621,7 +626,7 @@ export class App {
     } catch (e) {
       if (e instanceof Aborted || gen !== this.gen) return;
       console.error(e);
-      this.shell.status.textContent = `出了点问题：${(e as Error).message}｜按右上角「${this.link ? '离桌' : '换桌'}」${this.link ? '回大厅' : '重开'}`;
+      this.shell.status.textContent = `出了点问题：${(e as Error).message}｜按右上角「${this.link ? '离桌' : '换桌'}」回首页`;
     }
   }
 
@@ -775,7 +780,7 @@ export class App {
     );
   }
 
-  /** 离桌：连接断掉，椅子还留给这个令牌，回来凭它坐得回去 */
+  /** 离桌：连接断掉，椅子还留给这个令牌，从首页那颗「同一张网」回来凭它还坐这一位 */
   private leaveTable(): void {
     this.resultClose?.();
     this.gen++; // 占着的那条循环散伙，sitGen 一老，候场厅里再坐下才起得来
@@ -786,7 +791,7 @@ export class App {
     this.seats = null;
     this.liveActs = [];
     this.netNote = '';
-    this.openRoom();
+    this.showHome();
   }
 
   private async match(setup: Setup): Promise<void> {
@@ -812,10 +817,10 @@ export class App {
       // 循环一死牌面就废了。静默吞掉的话按钮还画着但点了没反应——把话撂在状态栏，别把玩家丢在那儿
       crashed = true;
       console.error(e);
-      this.shell.status.textContent = `出了点问题：${(e as Error).message}｜种子 ${this.state.seed}｜按右上角「换桌」重开`;
+      this.shell.status.textContent = `出了点问题：${(e as Error).message}｜种子 ${this.state.seed}｜按右上角「换桌」回首页`;
     } finally {
-      // 收杆回到开桌，别把玩家丢在一幅打完的牌面上；崩了就留着牌面，好截图看
-      if (gen === this.gen && !crashed) this.pickTable();
+      // 收杆回到首页，别把玩家丢在一幅打完的牌面上；崩了就留着牌面，好截图看
+      if (gen === this.gen && !crashed) this.showHome();
     }
   }
 
@@ -1159,7 +1164,7 @@ export class App {
     toast(this.shell.toast, '复制不成，已摊开——长按/选中自己抄', 2000);
   }
 
-  /** 右上角那张：单机回开桌，联机回大厅。正在等的两件事都得散伙——一是人要点牌，二是循环在等下一份快照 */
+  /** 右上角那张：单机联机都退回首页。正在等的两件事都得散伙——一是人要点牌，二是循环在等下一份快照 */
   private resign(): void {
     const online = this.link !== null;
     const go = () => {
@@ -1171,7 +1176,7 @@ export class App {
       this.pull = null;
       pull?.(null);
       if (online) this.leaveTable();
-      else this.pickTable();
+      else this.showHome();
     };
     if (this.state.phase === 'over') {
       go();
@@ -1180,7 +1185,7 @@ export class App {
     popup(this.root, online ? '离桌' : '换桌', (body, close) => {
       const p = div('note');
       p.textContent = online
-        ? '这一局还没打完，离桌就不记账了。椅子给你留着，回来凭令牌还坐这一位。'
+        ? '这一局还没打完，离桌就不记账了。椅子给你留着，从首页再点「同一张网」还坐这一位。'
         : '这一局还没打完，换桌就不记账了。';
       const row = div('sheet-row');
       row.append(
