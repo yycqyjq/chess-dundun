@@ -38,6 +38,17 @@ export function openMatch(players: number): MatchBook {
   return { games: 0, draws: zero(), drawWins: zero(), titles: zero(), cards: zero(), ties: 0 };
 }
 
+/**
+ * 桌换了人数：总账跟着伸缩。已经在册那几位的局数留着别抹，
+ * 多出来的座位补零，砍掉的座位从尾巴上截掉。
+ */
+export function resizeMatch(book: MatchBook, players: number): void {
+  for (const each of [book.draws, book.drawWins, book.titles, book.cards]) {
+    each.length = players;
+    for (let i = 0; i < players; i++) if (each[i] === undefined) each[i] = 0;
+  }
+}
+
 export function recordGame(book: MatchBook, state: GameState): void {
   const seat = state.drawer;
   book.games++;

@@ -6,6 +6,11 @@
   --ink: #f3e7d3;
   --gold: #ffd76a;
   --safe-b: env(safe-area-inset-bottom, 0px);
+  /* 卡片宽度这一档：手机 94vw、桌面放宽到能摆两栏。440/720 只写在这儿一次 */
+  --card-w: 440px;
+  --card-w-wide: 720px;
+  /* 互斥选项一排里每颗至少占这么宽，装不下自己换行 */
+  --seg-min: 96px;
 }
 
 * {
@@ -42,8 +47,9 @@ body {
 
 .bar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 10px;
+  gap: 2px 10px;
   padding: 8px 12px 4px;
 }
 
@@ -54,13 +60,14 @@ body {
 }
 
 .meta {
-  flex: 1;
+  /* 一行塞不下就整条挪到下一行：被省略号吃掉的「第几局」「我是 P1」等于没写。
+     顶栏多一行、牌桌少十几个像素，这笔账划算——断线那句提示也住在这儿 */
+  flex: 1 1 160px;
   min-width: 0;
   font-size: 12px;
   opacity: 0.62;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .btns {
@@ -413,7 +420,7 @@ body {
   left: 50%;
   top: 16%;
   transform: translateX(-50%) scale(0.96);
-  max-width: min(440px, 86vw);
+  max-width: min(var(--card-w), 86vw);
   padding: 10px 16px;
   border-radius: 12px;
   background: rgba(18, 14, 10, 0.9);
@@ -449,10 +456,14 @@ body {
   cursor: default;
 }
 
+/* 配置卡：卡片自己不滚，滚的是中间那块内容——底栏是卡片的直接孩子，不跟着滚，
+   所以「开始这一局／开桌」永远停在拇指够得着的地方，不会被推走（他原话：主按钮不许滚出可视区） */
 .sheet-card {
-  width: min(440px, 94vw);
+  width: min(var(--card-w), 94vw);
   max-height: 88dvh;
-  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
   padding: 14px 16px 16px;
   border-radius: 16px;
   background: #2d2721;
@@ -464,6 +475,44 @@ body {
   font-size: 17px;
   font-weight: 600;
   margin-bottom: 10px;
+}
+
+.sheet-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+/* 卡底：一竖排动作。空的就别占那 10 条缝（结算卡、提示卡没有底栏） */
+.sheet-foot {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 10px;
+  padding-bottom: var(--safe-b);
+}
+
+.sheet-foot:empty {
+  display: none;
+}
+
+.sheet-row {
+  display: flex;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.sheet-row .btn {
+  flex: 1;
+}
+
+.sheet-foot .sheet-row {
+  margin-top: 0;
+}
+
+.sheet-foot .sheet-row:empty {
+  display: none;
 }
 
 .seg-row {
@@ -485,8 +534,9 @@ body {
 }
 
 .seg-btn {
-  flex: 1 1 auto;
-  min-width: 96px;
+  flex: 1 1 var(--seg-min);
+  /* 上一版是 min-width：卡窄了就把整排顶出去。basis 才允许收缩，挤不下才换行 */
+  min-width: 0;
   font-size: 13px;
   padding: 8px 9px;
 }
@@ -495,16 +545,6 @@ body {
   border-color: var(--gold);
   background: linear-gradient(#a3792f, #7d5a20);
   color: #fff8e6;
-}
-
-.sheet-row {
-  display: flex;
-  gap: 6px;
-  margin-top: 4px;
-}
-
-.sheet-row .btn {
-  flex: 1;
 }
 
 /* 重掷只占自己那点宽，剩下的留给开桌；种子贴在左边 */
@@ -557,35 +597,72 @@ body {
   color: var(--gold);
 }
 
-/* 大厅里的座位表：一行一把椅子。状态那句吃掉剩余宽度，按钮只占自己那点 */
+/* 候场厅里的座位表：一行一把椅子，摊成两排——
+   上一版状态那句和按钮抢同一行，「有人 · 代号 · 这一局先由电脑打」在手机上被挤成一团。
+   现在左边两行留给「谁 + 什么状态」，按钮独占右侧那一格 */
 .seat-row {
-  display: flex;
-  gap: 8px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-rows: auto auto;
+  gap: 1px 8px;
   align-items: center;
-  padding: 5px 0;
+  padding: 6px 0;
   border-bottom: 1px solid #3b332b;
 }
 
 .seat-row .who {
+  grid-area: 1 / 1;
   font-weight: 600;
 }
 
 .seat-row .t {
-  flex: 1;
+  grid-area: 2 / 1;
   font-size: 12px;
   opacity: 0.75;
 }
 
-.seat-row .btn {
-  padding: 6px 12px;
+.seat-act {
+  grid-area: 1 / 2 / 3;
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
-/* 大厅里那道邀请：二维码挨着地址摆。白底本身就是边界，没再套框线 */
+.seat-row .btn {
+  padding: 6px 12px;
+  font-size: 13px;
+}
+
+/* 让座那颗只挂在自己那把椅子上，别的位置连占位都不占 */
+.seat-row .btn.stand {
+  display: none;
+  flex: 0 0 auto;
+  padding: 6px 10px;
+  font-size: 12px;
+  opacity: 0.8;
+}
+
+.seat-row.mine .btn.stand {
+  display: block;
+}
+
+/* 候场厅：这张卡常驻，翻开来是配置、椅子、邀请码和房主那颗开始。
+   手机单列就是 cfg-col → seat-col 的自然顺序；两栏只在宽屏出现（见文末那条 media） */
+.room .room-cfg {
+  margin-bottom: 2px;
+}
+
+.room .lobby-seats {
+  margin-bottom: 4px;
+}
+
+/* 候场厅里那道邀请：二维码挨着地址摆。白底本身就是边界，没再套框线。
+   间距只在这儿定一次——上一版 .room .invite 又覆了一遍 margin，两处读数对不上 */
 .invite {
   display: flex;
   align-items: flex-start;
   gap: 10px;
-  margin: 8px 0 2px;
+  margin: 10px 0 2px;
 }
 
 .invite canvas.qr {
@@ -643,6 +720,25 @@ body {
   line-height: 1.75;
   white-space: pre-wrap;
   opacity: 0.86;
+}
+
+/* 大屏：候场厅摊成两栏（左配置、右椅子＋地址），卡片跟着放宽；小屏还是单列一路滚到底 */
+@media (min-width: 820px) {
+  .sheet-card {
+    width: min(var(--card-w-wide), 92vw);
+  }
+
+  .room .sheet-body {
+    display: flex;
+    align-items: flex-start;
+    gap: 0 22px;
+  }
+
+  .room .cfg-col,
+  .room .seat-col {
+    flex: 1 1 0;
+    min-width: 0;
+  }
 }
 
 /* 大屏：复盘改成左下角浮层，不盖牌桌；小屏照旧从底部上滑 */

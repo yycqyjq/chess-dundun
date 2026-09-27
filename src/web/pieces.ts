@@ -33,6 +33,12 @@ export class Pieces {
       turn.append(face, back);
       el.append(turn);
       el.hidden = true;
+      // 补间跑完摘掉过渡，下一拍才不被这拍的余韵拖着走。只挂这一次：
+      // 每挪一张挂一个 once 的话，挪得快的牌上会攒一堆半路掐掉下一拍的监听器。
+      // 子元素（翻面）结束不算，只看这张牌自己。
+      el.addEventListener('transitionend', (ev) => {
+        if (ev.target === el) el.style.transition = '';
+      });
       this.els.set(p.id, el);
       root.append(el);
     }
@@ -56,6 +62,16 @@ export class Pieces {
   place(plan: Map<number, Placed>, animate: boolean): void {
     const from = this.at;
     this.at = new Map();
+    const at = (q: Placed, x: number, y: number) =>
+      `translate(${x}px, ${y}px) rotate(${q.rot}deg) scale(${q.scale})`;
+    // 挪位、转正、放大都算「这一帧和上一帧不一样」，都得补间——摸签「抽出」只改缩放，
+    // 光比坐标的话那一下会变成瞬间弹大
+    const moved = (was: Placed, p: Placed) =>
+      Math.abs(was.x - p.x) >= 0.5 ||
+      Math.abs(was.y - p.y) >= 0.5 ||
+      Math.abs(was.rot - p.rot) >= 0.5 ||
+      Math.abs(was.scale - p.scale) >= 0.005;
+    const tween: { el: HTMLElement; p: Placed }[] = [];
     for (const el of this.els.values()) el.hidden = true;
     for (const [id, p] of plan) {
       const el = this.els.get(id)!;
@@ -66,34 +82,23 @@ export class Pieces {
       el.style.zIndex = String(p.z);
       const was = animate ? from.get(id) : undefined;
       this.at.set(id, p);
-      const at = (q: Placed, x: number, y: number) =>
-        `translate(${x}px, ${y}px) rotate(${q.rot}deg) scale(${q.scale})`;
-      // 挪位、转正、放大都算「这一帧和上一帧不一样」，都得补间——摸签「抽出」只改缩放，
-      // 光比坐标的话那一下会变成瞬间弹大
-      const moved =
-        was !== undefined &&
-        (Math.abs(was.x - p.x) >= 0.5 ||
-          Math.abs(was.y - p.y) >= 0.5 ||
-          Math.abs(was.rot - p.rot) >= 0.5 ||
-          Math.abs(was.scale - p.scale) >= 0.005);
-      if (!was || !moved) {
+      if (!was || !moved(was, p)) {
         el.style.transition = '';
         el.style.transform = at(p, p.x, p.y);
         continue;
       }
-      // FLIP：先按上一帧的样子摆回去，撑过一帧再放开过渡补间到这一帧
+      // FLIP 前半：先按上一帧的样子摆回去。这里只写不读，读留到下面那一次
       el.style.transition = 'none';
       el.style.transform = at(was, was.x, was.y);
-      void el.offsetWidth;
+      tween.push({ el, p });
+    }
+    if (!tween.length) return;
+    // FLIP 后半：整桌摆回旧位置之后只逼一次重排，再一起放开过渡补间到新位置。
+    // 原来那一次 read 夹在循环里，一桌子牌就是三十来次「写完就问布局」，掉帧就掉在这儿
+    void tween[0]!.el.offsetWidth;
+    for (const { el, p } of tween) {
       el.style.transition = `transform ${MOVE_MS}ms cubic-bezier(.2,.75,.25,1) ${p.delay}ms`;
       el.style.transform = at(p, p.x, p.y);
-      el.addEventListener(
-        'transitionend',
-        () => {
-          el.style.transition = '';
-        },
-        { once: true },
-      );
     }
   }
 }

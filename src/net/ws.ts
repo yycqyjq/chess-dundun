@@ -19,8 +19,9 @@ export interface ConnHandlers {
 
 /** 一条消息最多这么多字节：整桌状态也就几 KB，超了不是正常玩家 */
 const MAX_MESSAGE = 1 << 20;
-/** 服务端探活间隔与容忍次数；手机端页面被冻结后就靠这两下判掉线 */
-const PING_MS = 10_000;
+/** 服务端探活间隔与容忍次数；手机端页面被冻结后就靠这两下判掉线。
+ *  15 秒判死是「路由器抖了一下」和「这人真走了」之间来回横跳的分界，别再往长了放 */
+const PING_MS = 5_000;
 const PING_MISS = 3;
 
 const GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';

@@ -56,7 +56,7 @@
 
 ```bash
 npm install
-npm run dev      # 浏览器版，电脑和手机一套界面：http://localhost:5199
+npm run dev      # 浏览器版，电脑和手机一套界面：http://localhost:5199 —— 这一条就把页面和那张牌桌一起端出来，同网的设备直接打开终端印出来的局域网地址就能进候场厅
 ```
 
 不想开浏览器就在终端里玩：

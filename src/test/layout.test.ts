@@ -5,7 +5,7 @@
  */
 import { apply, createGame, type GameState } from '../core/game.ts';
 import { loadRules } from '../node/load_rules.ts';
-import { bottomBand, ctrlLift, fanStep, handBand, handCramped, labelBand, labelBands, layout, PILE_SIZE, pieceSize, stackSpots, type Board, type TableView } from '../web/board.ts';
+import { bottomBand, ctrlLift, fanStep, handBand, handCramped, labelBand, labelBands, LABEL_X, layout, PILE_SIZE, pieceSize, stackSpots, type Board, type TableView } from '../web/board.ts';
 
 let failures = 0;
 function ok(name: string, condition: boolean, detail = ''): void {
@@ -83,6 +83,8 @@ function midGame(players: number, seed: number, hands: number[], piles: number[]
 
 const BOARDS: { name: string; board: Board }[] = [
   { name: '手机竖屏 390×844', board: { w: 374, h: 520 } },
+  // 16 张摊开在这块尺寸上最容易出事：竖着只塞得下 1.3 张牌，原来只看横向够不够，最上那排就爬到按钮条上了
+  { name: '大屏手机竖屏 598×844', board: { w: 580, h: 707 } },
   { name: '窄窗 558×668', board: { w: 542, h: 517 } },
   { name: '平板横屏 844×390', board: { w: 812, h: 325 } },
   { name: '桌面 1280×800', board: { w: 1264, h: 700 } },
@@ -172,7 +174,7 @@ for (const { name, board } of BOARDS) {
       const box = boxes(state, view, board);
       let covered = 0;
       // 不看「谁的牌」，看「桌上所有牌」：别家的摞爬过来压住名字条，一样是读不出归属
-      for (const band of labelBands(players, board)) covered += [...box.values()].filter((r) => hits(r, band)).length;
+      for (const band of labelBands(players, board, view.mine)) covered += [...box.values()].filter((r) => hits(r, band)).length;
       ok(
         `${name}｜${players} 人 手 ${hands.join('/')} 摞 ${piles.join('/')} 名字条下无牌`,
         covered === 0,
@@ -381,7 +383,7 @@ for (const { name, board } of BOARDS) {
       const cw = pieceSize(board);
       let far = 0;
       let none = 0;
-      for (const band of labelBands(players, board)) {
+      for (const band of labelBands(players, board, view.mine)) {
         const ids = view.piles[band.seat] ?? [];
         if (!ids.length) continue;
         // 挨着 = 这张牌到名字条矩形的空隙；超出一个牌宽就是爬到别家那边去了
@@ -401,7 +403,50 @@ for (const { name, board } of BOARDS) {
   }
 }
 
-console.log('\n手牌摊开：每张各占一格、互不遮挡，还在自己那块地盘里（按钮条以上、名字条以上）');
+console.log('\n名字条钉哪一头：跟着自家那摞在同一侧，钉的那一头还得贴到桌边那条内缩上');
+{
+  // app.ts 那句内联样式（left/right 照 band.edge 写）进不了 node 测试，这儿钉两份等价的：
+  // ① edge 说的半边＝自家那摞真的所在那半边；② 钉的那一头离桌边正好 LABEL_X。
+  // 任一被改回去，条就会飘在桌心那一侧（截图里「对面的条跑我这儿来了」有一半是这个）
+  const FULL: Record<number, [number[], number[]]> = {
+    2: [[8, 8], [8, 8]],
+    4: [[4, 4, 4, 4], [4, 4, 4, 4]],
+  };
+  for (const { name, board } of BOARDS) {
+    for (const players of [2, 4]) {
+      const [hands, piles] = FULL[players]!;
+      for (let mine = 0; mine < players; mine++) {
+        const { state, view } = midGame(players, 20, hands, piles);
+        view.mine = mine;
+        const box = boxes(state, view, board);
+        let side = 0;
+        let inset = 0;
+        for (const band of labelBands(players, board, mine)) {
+          const ids = view.piles[band.seat] ?? [];
+          const cx = ids.reduce((s, id) => {
+            const r = box.get(id)!;
+            return s + r.x + r.w / 2;
+          }, 0) / ids.length;
+          if ((cx > board.w / 2) !== (band.edge === 'right')) side++;
+          const at = band.edge === 'left' ? band.x : board.w - band.x - band.w;
+          if (Math.abs(at - LABEL_X) > 0.01) inset++;
+        }
+        ok(
+          `${name}｜${players} 人 我坐 P${mine + 1} 每条名字条和自家那摞同侧`,
+          side === 0,
+          `${side} 条钉反了半边`,
+        );
+        ok(
+          `${name}｜${players} 人 我坐 P${mine + 1} 钉的那头离桌边 ${LABEL_X} 像素`,
+          inset === 0,
+          `${inset} 条没贴角`,
+        );
+      }
+    }
+  }
+}
+
+console.log('\n手牌摊开：每张各占一格、互不遮挡，还在自己那块地盘里（按钮条以下、名字条以上）');
 for (const { name, board } of BOARDS) {
   for (const players of [2, 4]) {
     for (const [hands, piles] of CASES[players]!) {
@@ -416,13 +461,20 @@ for (const { name, board } of BOARDS) {
       const out = rs.filter((r) => r.x < -1 || r.y < -1 || r.x + r.w > board.w + 1 || r.y + r.h > board.h + 1).length;
       const band = handBand(board);
       const escape = rs.filter((r) => r.y < band.top - 0.5 || r.y + r.h > band.bottom + 0.5).length;
-      const onLabel = rs.reduce((n, r) => n + labelBands(players, board).filter((b) => hits(r, b)).length, 0);
+      // 按钮条那块矩形自己量一遍：band 算错了（把条的底边当成顶边）只有这条会红
+      const ctrl = [1, 2].map((rows) => {
+        const w = Math.min(320, board.w - 20);
+        const h = rows * 40 + (rows - 1) * 6;
+        return { x: board.w / 2 - w / 2, y: board.h - ctrlLift(board) - h, w, h } as Rect;
+      });
+      const onCtrl = rs.reduce((n, r) => n + ctrl.filter((b) => hits(r, b)).length, 0);
+      const onLabel = rs.reduce((n, r) => n + labelBands(players, board, view.mine).filter((b) => hits(r, b)).length, 0);
       const onPile = rs.reduce((n, r) => n + view.piles.flat().filter((q) => hits(r, box.get(q)!)).length, 0);
       const scaled = [...layout(state, view, board).values()].filter((p) => p.cls.includes('spread')).length;
       ok(
         `${name}｜${players} 人 手 ${hands.join('/')} 摊开 ${ids.length} 张`,
-        overlap === 0 && out === 0 && escape === 0 && onLabel === 0 && onPile === 0 && scaled === ids.length,
-        `互压 ${overlap}｜出界 ${out}｜越界带 ${escape}｜压名字条 ${onLabel}｜压摞 ${onPile}｜spread 标记 ${scaled}/${ids.length}`,
+        overlap === 0 && out === 0 && escape === 0 && onCtrl === 0 && onLabel === 0 && onPile === 0 && scaled === ids.length,
+        `互压 ${overlap}｜出界 ${out}｜越界带 ${escape}｜压按钮条 ${onCtrl}｜压名字条 ${onLabel}｜压摞 ${onPile}｜spread 标记 ${scaled}/${ids.length}`,
       );
     }
   }
@@ -465,6 +517,62 @@ for (const { name, board } of BOARDS) {
   }
 }
 
+console.log('\n谁坐哪号都只是转个角度：联机坐到 P2/P3/P4 那几把椅子上，整张桌要按我这条边重排');
+{
+  /** 各家张数摆成一样多，旋转之后每一家的落点框才互相比得出来；再顺手给每家一墩在桌面上 */
+  const seatTable = (board: Board, players: number, mine: number) => {
+    const each = players === 2 ? 8 : 6;
+    const hands = Array.from({ length: players }, () => each);
+    const piles = Array.from({ length: players }, () => (32 - each * players) / players);
+    const { state, view } = midGame(players, 31, hands, piles);
+    view.mine = mine;
+    view.freeze = state.hands.map((h, seat) => ({ seat, ids: h.slice(0, 2), pledge: false, best: false }));
+    for (const p of view.freeze) state.hands[p.seat] = state.hands[p.seat]!.slice(2);
+    return { state, view, b: boxes(state, view, board) };
+  };
+  /** 一家在这一桌上的全部落点（手里＋收进来的＋桌面上那一墩）的外框 */
+  const spanOf = (t: { state: GameState; view: TableView; b: Map<number, Rect> }, seat: number) => {
+    const ids = [
+      ...t.state.hands[seat]!,
+      ...(t.view.piles[seat] ?? []),
+      ...(t.view.freeze?.find((p) => p.seat === seat)?.ids ?? []),
+    ];
+    const rs = ids.map((id) => t.b.get(id)!);
+    return {
+      x: Math.min(...rs.map((r) => r.x)),
+      y: Math.min(...rs.map((r) => r.y)),
+      x2: Math.max(...rs.map((r) => r.x + r.w)),
+      y2: Math.max(...rs.map((r) => r.y + r.h)),
+    };
+  };
+  for (const { name, board } of BOARDS) {
+    for (const players of [2, 4]) {
+      const home = seatTable(board, players, 0);
+      for (const mine of Array.from({ length: players }, (_, i) => i)) {
+        const here = seatTable(board, players, mine);
+        let off = 0;
+        for (let seat = 0; seat < players; seat++) {
+          // P(座) 在「我坐 P(mine+1)」时该站的位置＝P1 视角下 P((座-mine) mod 家数) 站的位置
+          const was = spanOf(home, (seat - mine + players) % players);
+          const now = spanOf(here, seat);
+          if (Math.abs(was.x - now.x) > 0.01 || Math.abs(was.y - now.y) > 0.01 || Math.abs(was.x2 - now.x2) > 0.01 || Math.abs(was.y2 - now.y2) > 0.01) off++;
+        }
+        ok(
+          `${name}｜${players} 人 我坐 P${mine + 1} 每一家都转到该站的那格`,
+          off === 0,
+          `${off} 家还留在绝对座位的老位置上`,
+        );
+        const low = labelBands(players, board, mine).filter((x) => x.y > board.h / 2);
+        ok(
+          `${name}｜${players} 人 我坐 P${mine + 1} 底边只有我那条名字条`,
+          low.length === 1 && low[0]!.seat === mine,
+          `底边站着 ${low.map((x) => `P${x.seat + 1}`).join('/') || '没人'}`,
+        );
+      }
+    }
+  }
+}
+
 console.log('\n摊开不摊开：扇形本来就张得开的就别多要一下点击，挤成一条边的才要（用户口径：这种没必要点一下展开再选）');
 {
   // 期望值写死成一张表，不重抄判定式（探针实测出来的依赖关系）：
@@ -473,6 +581,7 @@ console.log('\n摊开不摊开：扇形本来就张得开的就别多要一下�
   // 两头各守一条不同的几何，改哪头这张表都会红。
   const want: Record<string, Record<number, boolean>> = {
     '手机竖屏 390×844': { 8: true, 16: true },
+    '大屏手机竖屏 598×844': { 8: true, 16: true },
     '窄窗 558×668': { 8: true, 16: true },
     '平板横屏 844×390': { 8: false, 16: false },
     '桌面 1280×800': { 8: false, 16: false },

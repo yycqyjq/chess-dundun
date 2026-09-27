@@ -450,7 +450,7 @@ ok(
 );
 console.log('\n跨局驱动：上一局赢家担任下一局起抽人');
 const matchImport = await import('../core/match.ts');
-const { nextDrawer, openMatch, recordGame, winners } = matchImport;
+const { nextDrawer, openMatch, recordGame, resizeMatch, winners } = matchImport;
 
 /** 打出一局真局，再把收牌数摆成想要的名次（只用来验跨局那几条判定） */
 function played(won: number[], drawer: number): GameState {
@@ -511,6 +511,41 @@ ok(
   book.drawWins.every((w, seat) => w <= (book.draws[seat] ?? 0)) &&
     book.drawWins.reduce((a, b) => a + b, 0) <= book.titles.reduce((a, b) => a + b, 0),
 );
+
+console.log('\n桌中途换人数：总账跟着伸缩，不抹老账也不留洞');
+{
+  const b = openMatch(2);
+  const one = played([19, 13], 0);
+  recordGame(b, one);
+  resizeMatch(b, 4);
+  ok(
+    '2 人涨到 4 人：那两位的局数一位没抹',
+    b.draws[0] === 1 && b.titles[0] === 1 && b.cards[0] === one.won[0],
+    JSON.stringify([b.draws, b.titles, b.cards]),
+  );
+  ok(
+    '多出来的两位补的是零，不是 undefined',
+    [b.draws, b.drawWins, b.titles, b.cards].every((a) => a.length === 4 && a[2] === 0 && a[3] === 0),
+  );
+  const two = played([11, 9, 13, 7], 3);
+  recordGame(b, two);
+  ok(
+    '新座位记上一局也落得进格子（undefined+1 那种洞不会再出现）',
+    b.cards[3] === 7 && b.draws[3] === 1 && b.titles[2] === 1 && b.games === 2,
+    JSON.stringify([b.draws, b.titles, b.cards, b.games]),
+  );
+  const keep = [...b.cards];
+  resizeMatch(b, 2);
+  ok(
+    '4 人砍回 2 人：尾巴那两位截掉，前两位分毫不动，局数照旧认',
+    b.cards.length === 2 && b.cards[0] === keep[0] && b.cards[1] === keep[1] && b.games === 2 && b.draws.length === 2,
+    JSON.stringify([b.draws, b.cards]),
+  );
+  let hole = '';
+  for (const a of [b.draws, b.drawWins, b.titles, b.cards])
+    if (a.some((n) => typeof n !== 'number')) hole = JSON.stringify(a);
+  ok('四条账目里没有一处不是数', hole === '', hole);
+}
 
 console.log('\n守恒与收敛（每种局面各 200 局）');
 for (const players of [2, 4]) {

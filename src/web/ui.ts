@@ -10,6 +10,8 @@ export interface Shell {
   /** 右上角那张：文字由 app.ts 定——单机「换桌」，联机「离桌」 */
   setup: HTMLElement;
   chips: HTMLElement[];
+  /** 每条名字条里那五个格：搭壳子那一次就记下来，画面一秒刷十来回，别再一格一格 querySelector */
+  chipEls: ChipEls[];
   /** 摸签那一排「第 N 摞」标签：每块罩住一摞的领地，只管文字，点击目标是摞里的牌 */
   pileZones: HTMLElement[];
   toast: HTMLElement;
@@ -20,9 +22,22 @@ export interface Shell {
   sound: HTMLElement;
 }
 
+export interface ChipEls {
+  ord: HTMLElement;
+  who: HTMLElement;
+  tag: HTMLElement;
+  count: HTMLElement;
+  won: HTMLElement;
+}
+
+/**
+ * 台面壳子。座位标记按 `maxSeats` 建够、只亮 `players` 条：
+ * 房主在候场厅把 2 人改成 4 人，画面这边不用重搭壳子——重搭会把牌、事件、动画全丢在原地。
+ */
 export function buildShell(
   root: HTMLElement,
   players: number,
+  maxSeats: number,
   onSetup: () => void,
   onLog: () => void,
   onSound: () => void,
@@ -45,11 +60,15 @@ export function buildShell(
   const stage = div('stage');
   const board = div('board');
   const chips: HTMLElement[] = [];
-  for (let seat = 0; seat < players; seat++) {
+  const chipEls: ChipEls[] = [];
+  for (let seat = 0; seat < maxSeats; seat++) {
     const chip = div('chip');
     chip.dataset.seat = String(seat);
-    chip.append(div('ord'), div('who'), div('tag'), div('count'), div('won'));
+    chip.hidden = seat >= players;
+    const parts: ChipEls = { ord: div('ord'), who: div('who'), tag: div('tag'), count: div('count'), won: div('won') };
+    chip.append(parts.ord, parts.who, parts.tag, parts.count, parts.won);
     chips.push(chip);
+    chipEls.push(parts);
     board.append(chip);
   }
   const pileZones: HTMLElement[] = [];
@@ -78,7 +97,20 @@ export function buildShell(
   drawer.append(head, lines);
 
   root.append(bar, hint, stage, toast, drawer);
-  return { board, status: hint, ctrl, setup: btnSetup, chips, pileZones, toast, drawer, lines, meta, sound: btnSound };
+  return {
+    board,
+    status: hint,
+    ctrl,
+    setup: btnSetup,
+    chips,
+    chipEls,
+    pileZones,
+    toast,
+    drawer,
+    lines,
+    meta,
+    sound: btnSound,
+  };
 }
 
 export function div(cls: string, text = ''): HTMLElement {
@@ -133,23 +165,41 @@ export function qrCanvas(text: string, wantPx = 200): HTMLCanvasElement | null {
 /** 座位标记里的五格：本墩第几手出（顺时针序）/ 谁 / 此刻在干什么 / 手里几张 / 收了几个墩 */
 export function paintChip(
   chip: HTMLElement,
+  parts: ChipEls,
   who: string,
   tag: string,
   count: number,
   won: number,
   ord: number | null,
 ): void {
-  chip.querySelector('.ord')!.textContent = ord === null ? '' : String(ord);
-  chip.querySelector('.who')!.textContent = who;
-  chip.querySelector('.tag')!.textContent = tag;
-  chip.querySelector('.count')!.textContent = count > 0 ? `${count} 张` : '';
-  chip.querySelector('.won')!.textContent = won > 0 ? `收 ${won}` : '';
+  parts.ord.textContent = ord === null ? '' : String(ord);
+  parts.who.textContent = who;
+  parts.tag.textContent = tag;
+  parts.count.textContent = count > 0 ? `${count} 张` : '';
+  parts.won.textContent = won > 0 ? `收 ${won}` : '';
   // 没 tag 就是「这一墩轮到他的牌已经出完了」：不画出来的话，扣着的牌堆看着像在等他出
   chip.classList.toggle('off', ord === null && tag === '');
 }
 
-export function toast(el: HTMLElement, html: string, ms: number): void {
-  el.innerHTML = html;
+/**
+ * 状态栏那句提示：加粗的两个名字是拼出来的，别再走 innerHTML——
+ * 这一条路现在也给了 toast，而 toast 里会有别人自填的代号，那是要能原样显示的文本。
+ */
+export function rich(el: HTMLElement, parts: (string | { b: string })[]): void {
+  el.textContent = '';
+  for (const p of parts) {
+    if (typeof p === 'string') el.append(document.createTextNode(p));
+    else {
+      const b = document.createElement('b');
+      b.textContent = p.b;
+      el.append(b);
+    }
+  }
+}
+
+/** 一句话浮在台面上。文字照原样显，别当 HTML 解析——桌上别人的代号里可能带尖括号 */
+export function toast(el: HTMLElement, text: string, ms: number): void {
+  el.textContent = text;
   el.hidden = false;
   el.classList.remove('show');
   void el.offsetWidth;
@@ -160,30 +210,41 @@ export function toast(el: HTMLElement, html: string, ms: number): void {
 }
 
 /**
- * 居中弹一张卡：开桌、结算走它（分牌三选一走底部按钮条，牌还得看得见）。
- * build 里拿到 body 自己往里塞，close 由按钮调；lock=true 时点遮罩不算关（不然一局没打完就没了）。
+ * 一张卡：标题在顶、内容自己滚、底栏不跟着滚。`build` 拿到 body 往里塞配置，
+ * 主按钮塞 foot——那颗按钮要是住在 body 里，手机上滚到底才看得见它，等于按不到。
+ * `close` 由按钮调；lock=true 时点遮罩不算关（不然一局没打完就没了）。
  */
 export function popup(
   root: HTMLElement,
   title: string,
-  build: (body: HTMLElement, close: () => void) => void,
+  build: (body: HTMLElement, close: () => void, foot: HTMLElement) => void,
   lock = false,
 ): void {
-  const veil = div('sheet');
-  const card = div('sheet-card');
-  const head = div('sheet-head');
-  head.textContent = title;
-  const body = div('sheet-body');
-  const close = () => veil.remove();
+  const c = card(root, title);
   if (!lock) {
     // 点空白处能关，就得在空白处给出小手（卡里面不跟着给，免得读成哪儿都能点）
-    veil.classList.add('tap-close');
-    veil.addEventListener('click', (ev) => (ev.target === veil ? close() : undefined));
+    c.veil.classList.add('tap-close');
+    c.veil.addEventListener('click', (ev) => (ev.target === c.veil ? c.close() : undefined));
   }
-  card.append(head, body);
-  veil.append(card);
+  build(c.body, c.close, c.foot);
+}
+
+/** 摆一张卡进 root，返回那三块。候场厅常驻，直接用它，不走 popup 那层临场搭拆 */
+export function card(
+  root: HTMLElement,
+  title: string,
+  cls = '',
+): { veil: HTMLElement; head: HTMLElement; body: HTMLElement; foot: HTMLElement; close: () => void } {
+  const veil = div('sheet');
+  const el = div(`sheet-card ${cls}`);
+  const head = div('sheet-head', title);
+  const body = div('sheet-body');
+  const foot = div('sheet-foot');
+  // 三块都是卡片的直接孩子：滚动只发生在 body 里，foot 因此在 CSS 上钉得住
+  el.append(head, body, foot);
+  veil.append(el);
   root.append(veil);
-  build(body, close);
+  return { veil, head, body, foot, close: () => veil.remove() };
 }
 
 /** 一排互斥选项，点谁把谁标上 on。开桌那张卡用它选人设、玩法、难度 */

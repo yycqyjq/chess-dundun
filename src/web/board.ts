@@ -61,7 +61,7 @@ const SPREAD = 1.04;
  */
 export const LABEL_W = 168;
 export const LABEL_H = 26;
-const LABEL_X = 8;
+export const LABEL_X = 8;
 const LABEL_TOP = 6;
 const LABEL_BOTTOM = 3;
 /** 牌让开名字条的缝（桌面像素），摞和扇形都按它算，别靠肉眼估 */
@@ -114,21 +114,23 @@ const FAN_DIP = 0.34;
  */
 const FAN_LEGIBLE = 0.7;
 
-/** 摊开最多排几排：再多一排就顶到桌面那一墩上，看牌不能把牌桌盖了 */
+/** 摊开最多排几排：排数由 `handSpread` 按「哪一档把每张铺得最大」挑，这条只是上限 */
 const HS_ROWS = 3;
 
 /** 摊开时两张牌的圆心距（乘牌径），大于 1 才互不遮挡、每张各自点得着 */
 const HS_GAP = 1.06;
 
-/** 按钮条按两行量（窄屏三个分牌按钮必折行，和布局测试同一口径）：摊开不许顶进它 */
-const BTN_ROWS = 2;
-const BTN_H = 40;
-const BTN_GAP = 6;
+/** 摊开最上那排牌离按钮条留这条缝：贴边了看着就像盖住，白摊 */
+const SPREAD_PAD = 8;
 
-/** 摊开手牌能吃的那块地：底边名字条以上、按钮条以下 */
+/**
+ * 摊开手牌能吃的那块地：底边名字条以上、按钮条以下。
+ * `.ctrl` 是 `bottom: var(--ctrl-lift)`，从桌底往上长，所以 `ctrlLift` 量的就是它**底边**离桌底多远
+ * ——这块地的上界直接取那条底边，不能再减一次按钮高度，减了等于放行让牌爬到按钮条上。
+ */
 export function handBand(board: Board): { top: number; bottom: number } {
   return {
-    top: board.h - ctrlLift(board) - (BTN_ROWS * BTN_H + (BTN_ROWS - 1) * BTN_GAP),
+    top: board.h - ctrlLift(board) + SPREAD_PAD,
     bottom: board.h - labelBand(),
   };
 }
@@ -154,22 +156,26 @@ export function handCramped(n: number, board: Board): boolean {
 
 /**
  * 手牌摊开后的格子：每张各占一格、互不遮挡，从底边名字条上方往上排。
- * 先按原尺寸铺，铺不进 `HS_ROWS` 排就整排缩——宁可牌小一圈，也不许爬到桌面那一墩上盖住别人的牌。
+ * 排数在 1..HS_ROWS 里挑「把每张铺得最大」那一档，横竖两头一起算：原来只看横向，
+ * 于是窄屏 16 张三排铺不满那块地，最上面一排就直接爬到按钮条上（截图里就是它）。
+ * 挑完还铺不进就整体缩——宁可牌小一圈，也不许盖住按钮条和别人的牌。
  * 返回的是**未缩放方框的左上角**（和 `layout` 的 Placed 同一口径）和该用的 `scale`。
  */
 export function handSpread(n: number, board: Board): { x: number; y: number; scale: number }[] {
   const full = pieceSize(board);
   const band = handBand(board);
   const room = handRoom(full, board);
+  const bandH = band.bottom - band.top;
   const stepFull = full * HS_GAP;
-  const colsFit = Math.max(1, Math.floor(room / stepFull));
-  // 排数取「铺得下的列数刚好用完」的最少排：能两排摆开就别挤三排，多一排就多盖一排桌面
-  let rows = Math.min(HS_ROWS, Math.max(1, Math.ceil(n / colsFit)));
-  let step = stepFull;
-  // 原尺寸铺不进三排就整排缩：先按张数定几列，再看横向和纵向哪头先不够
-  if (Math.ceil(n / colsFit) > HS_ROWS) {
-    rows = HS_ROWS;
-    step = Math.min(room / Math.ceil(n / rows), (band.bottom - band.top) / rows);
+  // 同一张牌在 r 排里能长多大：横着几列、竖着几排，谁紧听谁的；并列取排数少的那档
+  let rows = 1;
+  let step = 0;
+  for (let r = 1; r <= HS_ROWS; r++) {
+    const each = Math.min(stepFull, room / Math.ceil(n / r), bandH / r);
+    if (each > step) {
+      rows = r;
+      step = each;
+    }
   }
   const cw = step / HS_GAP;
   const scale = Math.min(1, cw / full);
@@ -232,17 +238,45 @@ export function ctrlLift(board: Board): number {
 
 /**
  * 各家名字条的矩形（桌面像素坐标）：贴在自家那摞收牌摞旁边，和 `pileGeom` 一一对应。
- * 4 人局里 P2 不贴左下角（那条边整个归你，摆在那儿只会被当成你的牌），改成挂在 P3 那排摞底下、
- * 顺着左边往下数第一个空位。
+ * 4 人局里坐左手边那家不贴左下角（那条边整个归你，摆在那儿只会被当成你的牌），改成挂在
+ * 上边那排摞底下、顺着左边往下数第一个空位。
+ * `mine` 是看桌的人坐哪号：**四个位置按「离我多远」转过来发**，不然联机坐 P2 时，
+ * 自己那条名字条会挂到对面那角上（截图里「你 16 张」跑到左上角就是这么来的）。
+ * 矩形是 168 宽的最坏预留（收牌摞照它让位），条里的字通常不到一半，所以还得说清**从哪一头长**：
+ * `edge` 住右半场就是 'right'，app.ts 据此把条钉在矩形右边——左对齐会把它留在框的左头，
+ * 看着就是飘在桌心那一侧。
  */
-export function labelBands(players: number, board: Board): { seat: number; x: number; y: number; w: number; h: number }[] {
-  const band = (x: number, y: number, seat: number) => ({ seat, x, y, w: LABEL_W, h: LABEL_H });
+export interface LabelBand {
+  seat: number;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  edge: 'left' | 'right';
+}
+
+export function labelBands(players: number, board: Board, mine: number): LabelBand[] {
+  // edge 挨着位置一起给，不是算出来的：桌窄到两个 168 的框在中间搭界时，
+  // 「这条属于哪一边的地盘」仍然得说得住——它跟的是 `pileGeom` 那半边，不是谁过半
+  const band = (rel: number, x: number, y: number, edge: 'left' | 'right'): LabelBand => ({
+    seat: (rel + mine) % players,
+    x,
+    y,
+    w: LABEL_W,
+    h: LABEL_H,
+    edge,
+  });
   const top = LABEL_TOP;
   const bottom = board.h - LABEL_H - LABEL_BOTTOM;
   const left = LABEL_X;
   const right = board.w - LABEL_W - LABEL_X;
-  if (players === 2) return [band(right, bottom, 0), band(left, top, 1)];
-  return [band(right, bottom, 0), band(left, topBand(board) + LABEL_GAP, 1), band(left, top, 2), band(right, top, 3)];
+  if (players === 2) return [band(0, right, bottom, 'right'), band(1, left, top, 'left')];
+  return [
+    band(0, right, bottom, 'right'),
+    band(1, left, topBand(board) + LABEL_GAP, 'left'),
+    band(2, left, top, 'left'),
+    band(3, right, top, 'right'),
+  ];
 }
 
 /** 摆摞阶段的几何：8 摞在哪、多大，摆牌的和那一排的领地用同一套常数 */
@@ -277,35 +311,39 @@ interface Point {
   y: number;
 }
 
-/** 从桌子中心指向这个座位的单位向量，出牌区和牌摞都靠它外推 */
-function dir(seat: number, players: number): Point {
-  if (players === 2) return seat === 0 ? { x: 0, y: 1 } : { x: 0, y: -1 };
-  return [{ x: 0, y: 1 }, { x: -1, y: 0 }, { x: 0, y: -1 }, { x: 1, y: 0 }][seat]!;
+/**
+ * 从桌子中心指向这个座位的单位向量，出牌区和牌摞都靠它外推。
+ * 传进来的都是**相对座位**：0＝看桌的人自己（永远在下方），往后顺时针一家。
+ */
+function dir(rel: number, players: number): Point {
+  if (players === 2) return rel === 0 ? { x: 0, y: 1 } : { x: 0, y: -1 };
+  return [{ x: 0, y: 1 }, { x: -1, y: 0 }, { x: 0, y: -1 }, { x: 1, y: 0 }][rel]!;
 }
 
 /**
  * 座位锚点：0 号永远在下方正中（他的牌摊成扇形），其余三家贴自己那条边。
- * 另一头也不再居中——各朝自己右手边那个角偏过去（P2 偏下、P3 偏左、P4 偏上），
+ * 另一头也不再居中——各朝自己右手边那个角偏过去（左边那家偏下、对面偏左、右边那家偏上），
  * 三家都压在中轴上就等于挤在桌心，出的牌反而没地方摆。
  */
-function seatAnchor(seat: number, players: number, board: Board, cw: number): Point {
+function seatAnchor(rel: number, players: number, board: Board, cw: number): Point {
   const inset = cw * 1.6;
-  if (seat === 0) return { x: board.w / 2, y: board.h - inset };
+  if (rel === 0) return { x: board.w / 2, y: board.h - inset };
   if (players === 2) return { x: board.w / 2, y: inset };
-  if (seat === 1) return { x: inset, y: board.h * 0.62 };
-  if (seat === 3) return { x: board.w - inset, y: board.h * 0.38 };
+  if (rel === 1) return { x: inset, y: board.h * 0.62 };
+  if (rel === 3) return { x: board.w - inset, y: board.h * 0.38 };
   return { x: board.w * 0.34, y: inset };
 }
 
-/** P2（4 人局坐左手边那家）名字条的 y：挂在顶边那条带底下，收牌摞紧贴着它往下排 */
+/** 坐左手边那家（相对座位 1）名字条的 y：挂在顶边那条带底下，收牌摞紧贴着它往下排 */
 function sideLabelY(board: Board): number {
   return topBand(board) + LABEL_GAP;
 }
 
 /**
- * 收牌摞长在哪：各家的**右手边那个角**（南家的右手在屏幕右、西家在下、北家在左、东家在上），
- * 从那个角沿边排开、排满了往桌心叠第二排。名字条就贴在同一个角下面。
- * 4 人局的 P2 是唯一的例外：底边那一条整个是你的地盘（扇形铺满），摞摆左下角会被读成你的牌，
+ * 收牌摞长在哪（按**相对座位**：0＝看桌的人自己）：各家的**右手边那个角**（下方那家的右手在屏幕右、
+ * 左边那家在下、对面在左、右边那家在上），从那个角沿边排开、排满了往桌心叠第二排。
+ * 名字条就贴在同一个角下面。
+ * 4 人局的左手边那家是唯一的例外：底边那一条整个是你的地盘（扇形铺满），摞摆左下角会被读成你的牌，
  * 所以它挂到左边那条边的上半段——还是自己那一边，只是不再贴角。
  * `alongX` 为真沿横边排、为假沿竖边排，`sa` 是排开方向，`si` 是朝桌心叠排的方向。
  */
@@ -317,20 +355,20 @@ interface PileGeom {
   si: number;
 }
 
-function pileGeom(seat: number, players: number, board: Board, cw: number): PileGeom {
+function pileGeom(rel: number, players: number, board: Board, cw: number): PileGeom {
   const s = cw * 0.62;
   // 锚点就是这块地盘的边角线：`layout` 里按小牌实际尺寸摆可见框，缩多少都同一条边，不会往桌心漂
   const below = LABEL_TOP + LABEL_H + LABEL_GAP;
   const above = board.h - bottomBand(board);
   // 2 人局对面坐北，右手边＝左上角
   if (players === 2) {
-    return seat === 0
+    return rel === 0
       ? { x: board.w - s, y: above, alongX: true, sa: -1, si: -1 }
       : { x: s, y: below, alongX: true, sa: 1, si: 1 };
   }
-  if (seat === 0) return { x: board.w - s, y: above, alongX: true, sa: -1, si: -1 };
-  if (seat === 1) return { x: s, y: sideLabelY(board) + LABEL_H + LABEL_GAP, alongX: false, sa: 1, si: 1 };
-  if (seat === 2) return { x: s, y: below, alongX: true, sa: 1, si: 1 };
+  if (rel === 0) return { x: board.w - s, y: above, alongX: true, sa: -1, si: -1 };
+  if (rel === 1) return { x: s, y: sideLabelY(board) + LABEL_H + LABEL_GAP, alongX: false, sa: 1, si: 1 };
+  if (rel === 2) return { x: s, y: below, alongX: true, sa: 1, si: 1 };
   return { x: board.w - s, y: below, alongX: false, sa: 1, si: -1 };
 }
 
@@ -365,6 +403,14 @@ export function layout(state: GameState, view: TableView, board: Board): Map<num
     if (view.holdDown.has(id)) return false;
     return mine || !isFaceDown(state, id);
   };
+
+  /**
+   * 绝对座位 → 相对座位（0＝看桌的人自己，永远在下方）。
+   * 手牌那一支本来就按 `view.mine` 画在底下，可收牌摞、出牌区、名字条以前全按绝对座位摆——
+   * 于是联机坐 P2 时整套地盘反了 180°：对面赢的旗落在我这条边，我的名字条挂到对面那角。
+   * 几何一律过这一道，谁坐哪号都只是转个角度。
+   */
+  const rel = (seat: number) => (seat - view.mine + state.players) % state.players;
 
   if (state.phase === 'draft' && state.draft) {
     const draft = state.draft;
@@ -415,7 +461,7 @@ export function layout(state: GameState, view: TableView, board: Board): Map<num
   // 地盘是固定大小的方框（`pileBox`），组数超过框里原有的四格就把小牌缩一档、格数加排，
   // 所以一家独吞 32 张也是八组各占一格排整齐，不会叠成一坨（他原话：超过 4 摞也要按顺序排好）。
   for (let seat = 0; seat < state.players; seat++) {
-    const g = pileGeom(seat, state.players, board, cw);
+    const g = pileGeom(rel(seat), state.players, board, cw);
     const ids = view.piles[seat] ?? [];
     const u = pileUnit(Math.ceil(ids.length / PILE_SIZE), cw);
     ids.forEach((id, k) => {
@@ -439,8 +485,8 @@ export function layout(state: GameState, view: TableView, board: Board): Map<num
   // 落点取「座位到桌心」的中点，抵押那套再往桌心挪一截，四家各占一条，不会跟手牌叠在一起
   const mid = { x: board.w / 2, y: board.h / 2 };
   for (const play of view.freeze ?? []) {
-    const d = dir(play.seat, state.players);
-    const a = seatAnchor(play.seat, state.players, board, cw);
+    const d = dir(rel(play.seat), state.players);
+    const a = seatAnchor(rel(play.seat), state.players, board, cw);
     const bx = a.x + (mid.x - a.x) * 0.52 - d.x * cw * (play.pledge ? 0.62 : 0);
     const by = a.y + (mid.y - a.y) * 0.52 - d.y * cw * (play.pledge ? 0.62 : 0);
     play.ids.forEach((id, k) => {
@@ -464,7 +510,7 @@ export function layout(state: GameState, view: TableView, board: Board): Map<num
       const lift = fanLift(board);
       const step = fanStep(hand.length, board);
       const fans = fan(hand, (id) => state.byId.get(id)!.tier);
-      // 摊开态：整块压过桌面和收牌摞，选完收回扇形——所以 z 给到全桌最高
+      // 摊开态：选完收回扇形，这中间它就是全桌最该看清的一块，z 给到最高，别被别家的坨压住
       const spots = view.spread ? handSpread(fans.length, board) : null;
       fans.forEach((f, k) => {
         const s = spots?.[k];
@@ -480,7 +526,7 @@ export function layout(state: GameState, view: TableView, board: Board): Map<num
         });
       });
     } else {
-      const a = seatAnchor(seat, state.players, board, cw);
+      const a = seatAnchor(rel(seat), state.players, board, cw);
       hand.forEach((id, k) => {
         put(id, {
           x: a.x - (cw * 0.6) / 2 + (k % 4) * cw * 0.16,

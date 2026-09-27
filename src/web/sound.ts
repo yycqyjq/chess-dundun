@@ -16,10 +16,30 @@ const VOICES: Record<Cue, { freqs: number[]; each: number; type: OscillatorType;
 
 const KEY = 'chess-dundun:sound';
 
+/**
+ * 无痕模式的 Safari 一碰 localStorage 就抛（不是返回 null）。
+ * 这儿是开桌第一下就碰它，没兜住的话整张桌白屏，所以读写各包一层。
+ */
+function remembered(): string | null {
+  try {
+    return localStorage.getItem(KEY);
+  } catch {
+    return null;
+  }
+}
+
+function remember(value: 'on' | 'off'): void {
+  try {
+    localStorage.setItem(KEY, value);
+  } catch {
+    // 记不住就这一局管用，下次开桌默认响
+  }
+}
+
 export class Sound {
   private ctx: AudioContext | null = null;
   private broken = false;
-  private on = localStorage.getItem(KEY) !== 'off';
+  private on = remembered() !== 'off';
 
   get enabled(): boolean {
     return this.on;
@@ -28,7 +48,7 @@ export class Sound {
   /** 顶栏那个开关：翻一下状态并记住，别下次开桌又响了 */
   toggle(): boolean {
     this.on = !this.on;
-    localStorage.setItem(KEY, this.on ? 'on' : 'off');
+    remember(this.on ? 'on' : 'off');
     if (this.on) this.cue('pick');
     return this.on;
   }

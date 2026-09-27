@@ -62,12 +62,21 @@ export interface SeatInfo {
   taken: boolean;
   /** 这一手的牌由桌代发 */
   ai: boolean;
+  /** 这一局归真人（开局那一刻定下的）。掉线被代打位仍是真人位，回来还接得上 */
+  human: boolean;
+  /** 人已经坐下，但这一局仍由电脑代打，下一局开局才归他——中途进来就站这个状态 */
+  queued: boolean;
+  /** 这台设备自己起的短代号，空串＝还没人报过。候场厅拿它分辨「哪把椅子是谁」 */
+  nick: string;
 }
+
+/** 桌的两态：候场厅里等人开局，开局以后才真在打 */
+export type TableStatus = 'waiting' | 'playing';
 
 /** 演一拍要知道桌刚落了哪一手。这些信息快照里本来就有（谁出了哪几张 id），单独说一遍不算泄底 */
 export type LastMove = { seat: number; action: Action };
 
-/** 还没入座就能看见的那点事：几个位子、谁坐过、谁是房主、第几局、什么玩法 */
+/** 还没入座就能看见的那点事：几个位子、谁坐过、谁是房主、第几局、什么玩法、开没开局 */
 export interface Lobby {
   players: number;
   hostSeat: number;
@@ -75,6 +84,7 @@ export interface Lobby {
   mode: 'ming' | 'kou';
   level: Level;
   seats: SeatInfo[];
+  status: TableStatus;
 }
 
 /**
@@ -85,19 +95,26 @@ export type Seats = Lobby & { lan: string[] };
 
 export type ToHost =
   | { t: 'lobby' }
-  | { t: 'join'; seat: number; token: string }
+  | { t: 'join'; seat: number; token: string; nick?: string }
   | { t: 'act'; action: Action }
-  | { t: 'next' }
+  /** 房主在候场厅按的那颗开始：头一局和下一局走同一扇门 */
+  | { t: 'start' }
+  /** 还在候场厅时改这桌的配置，只有房主说了算 */
+  | { t: 'setup'; players?: number; mode?: 'ming' | 'kou'; level?: Level }
+  /** 候场厅里把自己那把椅子还回去：坐错位、或者这桌要减人都得先走这一步 */
+  | { t: 'stand' }
   | { t: 'ping'; at: number };
 
 export type ToClient =
   | ({ t: 'seats' } & Seats)
-  | { t: 'welcome'; seat: number; token: string; host: string }
+  | { t: 'welcome'; seat: number; token: string; status: TableStatus }
   | {
       t: 'state';
       seq: number;
       /** 桌自己是第几局。中途坐下的人得跟着桌报数，不能从「1」自己数 */
       gameNo: number;
+      /** 候场厅里的快照一份牌都还没出；界面照这个决定画候场厅还是画牌桌 */
+      status: TableStatus;
       view: WireState;
       acts: Action[];
       seats: SeatInfo[];
