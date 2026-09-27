@@ -271,25 +271,40 @@ export class Table {
     }
     const prev = this.setup;
     this.setup = { ...prev, players, mode, level };
+    const reshuffled = players !== prev.players || mode !== prev.mode;
+    const sameSeats = players === prev.players;
     this.log(`配置换成了 ${players} 人 ${mode === 'kou' ? '扣棋' : '明棋'}，等房主开局`);
-    if (players !== prev.players) {
+    if (reshuffled) {
+      // 换牌面前先把打完那一局结了：牌面一换就再没人记得它打过。
+      // 只改代打档位走不到这儿，那一局的账照旧留给 start 去结（结两回就多算一局）
+      const drawer = this.settleOver();
+      // 局号得跟着账走：刚结清一局、座位还是那几把，那这副新牌就是「下一局」，别还印着老局号
+      if (sameSeats) this.gameNo += drawer === null ? 0 : 1;
+      this.state = createGame({
+        ...this.setup,
+        seed: (this.rng() * 0x100000000) | 0,
+        // 起抽人只在座位还是那几把时才接得上：换了人数，上一局的赢家指的已经不是那把椅子
+        drawer: sameSeats ? (drawer ?? undefined) : undefined,
+      });
+      this.maskFrom = -1;
+      this.last = null;
+    }
+    if (!sameSeats) {
       // 人数一变，跨局那本账就得重开；坐过的椅子原样往前挪，谁都不用重新坐一遍
       const old = this.slots;
       this.slots = this.freshSlots(players).map((slot, i) => {
         const was = old[i];
-        return was ? { ...slot, name: was.name, token: was.token, nick: was.nick, online: was.online } : slot;
+        // 掉线计时也得跟着椅子挪：只搬 online 不搬 gone，那把「人走了、凭令牌还得回来」的椅子
+        // 就再没人收（sweepIdle 见 gone 为 0 直接跳过），这桌少一把能坐的椅子
+        return was
+          ? { ...slot, name: was.name, token: was.token, nick: was.nick, online: was.online, gone: was.gone }
+          : slot;
       });
       this.book = openMatch(players);
       this.gameNo = 1;
       // 减人之后房主位可能落在已经不存在的椅子上：连「家」带现任一起收回第一把，谁坐下谁接手
       if ((this.setup.hostSeat ?? 0) >= players) this.setup.hostSeat = 0;
       if ((this.setup.homeSeat ?? 0) >= players) this.setup.homeSeat = 0;
-    }
-    if (players !== prev.players || mode !== prev.mode) {
-      // 牌是按人数洗的、玩法烙在 GameState 里，这两样一变就得重洗一副
-      this.state = createGame({ ...this.setup, seed: (this.rng() * 0x100000000) | 0 });
-      this.maskFrom = -1;
-      this.last = null;
     }
     this.push();
     return { ok: true };
@@ -310,17 +325,27 @@ export class Table {
     return { ok: true };
   }
 
+  /**
+   * 打完那一局的收尾：记账 + 定下下一局谁起抽（回 null 表示这会儿没有要结的账）。
+   * 只有这一处会记那一局的账，所以谁准备把 `phase==='over'` 那份牌面换掉，谁就得先走这道门——
+   * 原来只有 `start()` 走，于是「打完 → 在候场厅改了玩法 → 按开始」中间那一局就从总账里凭空没了。
+   */
+  private settleOver(): number | null {
+    if (this.state.phase !== 'over') return null;
+    recordGame(this.book, this.state);
+    return nextDrawer(this.state);
+  }
+
   /** 记这一局的账、摊开下一副。起抽人照上一局的赢家往下传 */
   private newGame(): void {
-    recordGame(this.book, this.state);
-    const drawer = nextDrawer(this.state);
+    const drawer = this.settleOver();
     this.gameNo++;
-    this.state = createGame({ ...this.setup, seed: (this.rng() * 0x100000000) | 0, drawer });
+    this.state = createGame({ ...this.setup, seed: (this.rng() * 0x100000000) | 0, drawer: drawer ?? undefined });
     this.maskFrom = -1;
   }
 
-  /** 一秒一次的表：开打中掉线够久的座位交给电脑打；候场期那把空椅子等人等到期就还给这桌 */
-  tick(): void {
+  /** 一秒一次的表。回 true 表示这一秒真改了点什么，宿主就该落一次盘 */
+  tick(): boolean {
     if (this.status !== 'playing') return this.sweepIdle();
     const t = this.now();
     let changed = false;
@@ -335,8 +360,13 @@ export class Table {
     if (changed) this.push();
     for (const seat of pendingSeats(this.state)) {
       // 只有已经判了代打的座位才由桌出手；在线但在想牌的人，桌一律不催
-      if (this.slots[seat]?.ai) this.auto(seat);
+      if (!this.slots[seat]?.ai) continue;
+      const before = this.state.log.length;
+      this.auto(seat);
+      // 代打真落了一手（哪怕顺带把这一局打完、退回候场）：这一秒就不算白走
+      if (this.state.log.length > before) changed = true;
     }
+    return changed;
   }
 
   /**
@@ -345,7 +375,7 @@ export class Table {
    * 房主那颗开始也就永远点不出来。满 IDLE_MS 就整把洗回没人坐过的样子。
    * 开打中一律不收——那一局还等着他回来接着打。
    */
-  private sweepIdle(): void {
+  private sweepIdle(): boolean {
     const t = this.now();
     let swept = 0;
     for (const slot of this.slots) {
@@ -354,9 +384,10 @@ export class Table {
       Object.assign(slot, this.freshSlots(slot.seat + 1)[slot.seat]!);
       swept++;
     }
-    if (!swept) return;
+    if (!swept) return false;
     this.restHost();
     this.push();
+    return true;
   }
 
   /** 收掉的正好是房主位那把时：交给还坐在这桌的活人；一个活人都不剩就留在原地当「空房主位」 */

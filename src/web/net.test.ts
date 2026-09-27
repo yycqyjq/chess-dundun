@@ -1,12 +1,13 @@
 /**
  * 这一头那条连接的测试：拿一条假 WebSocket 把 Link 的脾气钉住，不碰浏览器也不碰真网络。
- * 钉的是三件最容易要命的事——
+ * 钉的是四件最容易要命的事——
  * 断线时按下的那一手不许排队（排队就会在连回来那一刻递出一手旧牌，桌只会回一句不合法），
  * 握手成功那一下得先认椅子再补发攒下的话（反过来那句会被桌当成「没坐下的人递的」默默丢掉，人就锁死了），
- * 桌上安静不等于断线（对面想牌六秒太正常，先问一声 ping，问而不答才拆线）。
+ * 桌上安静不等于断线（对面想牌六秒太正常，先问一声 ping，问而不答才拆线），
+ * 以及卡在「等我出牌」时来的那份现状快照得把等待解开（不然对面重连回来了，这边还冻在写着「掉线」的那一帧）。
  * 这个文件住在 src/web：它要替 window/location/WebSocket 造假，只有这份 tsconfig 带着 DOM。
  */
-import { deviceNick, forget, Link, PROBE_MS, QUIET_MS, recall, remember } from './net.ts';
+import { deviceNick, forget, Link, PROBE_MS, QUIET_MS, recall, remember, shouldWake } from './net.ts';
 
 let failures = 0;
 function ok(name: string, condition: boolean, detail = ''): void {
@@ -269,6 +270,20 @@ function make(now?: () => number): { link: Link; sock: () => FakeSocket; log: st
   ok('不用 I/O/0/1 这些看着一样的字符', !/[IO01]/.test(n1), n1);
   session.set('chess-dundun.nick', 'ZZZ');
   ok('存过的代号照用，不重掷', deviceNick() === 'ZZZ');
+}
+
+// ---------- 卡在「等我出牌」时来了新快照：该解的必须解 ----------
+{
+  const mine = { kind: 'noop' as const };
+  const play = { seat: 1, action: mine };
+  // 断线那位重连回来，桌只推了一份「现状变了」：没有要演的手。
+  // 这一份不解开等待，画面就冻在掉线那一刻——名字条里的「掉线」擦不掉，对面已经打下去了。
+  ok('只是现状变了（谁进出桌／重连）：解开等待，追最新那份', shouldWake({ last: null, acts: [mine] }));
+  // 扣棋里别人刚落的一手，而我还该出：这一份得攒着，我出完之前不该先看一圈。
+  ok('别人落的一手、还该我出：照旧攒着，别提前演', !shouldWake({ last: play, acts: [mine] }));
+  // 挂着的那一手已经不作数了（被代打、或者这一墩翻篇）：再攒下去就是死等
+  ok('已经不该我出：哪怕带着要演的手也得解', shouldWake({ last: play, acts: [] }));
+  ok('既没要演的手、也不该我出：更要解', shouldWake({ last: null, acts: [] }));
 }
 
 console.log(failures === 0 ? '\n全部通过\n' : `\n${failures} 项失败\n`);

@@ -7,7 +7,7 @@ import type { Duplex } from 'node:stream';
 import type { Level } from '../ai/agent.ts';
 import { loadRules } from './load_rules.ts';
 import { Table, type TableSetup } from '../net/table.ts';
-import type { ToClient, ToHost } from '../net/wire.ts';
+import { checkHost, type ToClient, type ToHost } from '../net/wire.ts';
 import { WsServer, type Conn } from '../net/ws.ts';
 
 /**
@@ -136,99 +136,25 @@ export function openRoom(argv: string[], port: number): Room {
 
   const ws = new WsServer({
     onMessage(conn, text) {
-      let msg: ToHost;
+      // 这一整段兜住：一条连接说不来一句桌办不了的话，就该它自己下桌，凭什么叫全桌跟着掉线
       try {
-        msg = JSON.parse(text) as ToHost;
-      } catch {
-        conn.close('说的话看不懂');
-        return;
-      }
-      const seat = seatOf.get(conn);
-      switch (msg.t) {
-        case 'lobby':
-          conn.send(
-            JSON.stringify({ t: 'seats', ...table.lobby(), lan: inviteUrls() } satisfies ToClient),
-          );
-          return;
-        case 'join': {
-          // 先把椅子认给这条连接再落座：桌在 join 里就要广播一份快照，晚一步那份就发飞了
-          const prev = connOf.get(msg.seat);
-          const from = seatOf.get(conn);
-          seatOf.set(conn, msg.seat);
-          connOf.set(msg.seat, conn);
-          const r = table.join(msg.seat, msg.token, msg.nick, from);
-          if (!r.ok || !r.msg) {
-            // 换椅子没换成：原来那把还得是他的，别一句「坐不下」把人连原有的椅子一起摘了
-            if (from !== undefined) seatOf.set(conn, from);
-            else seatOf.delete(conn);
-            if (prev) connOf.set(msg.seat, prev);
-            else connOf.delete(msg.seat);
-            conn.send(JSON.stringify({ t: 'reject', why: r.why ?? '坐不下' } satisfies ToClient));
-            return;
-          }
-          // 换椅子：旧那把的连接认得回来了，不再替那把椅子说话
-          if (from !== undefined && from !== msg.seat && connOf.get(from) === conn)
-            connOf.delete(from);
-          // 同一个位子只许一个人连着：令牌对得上，就把旧那条连接踢掉
-          // 同一条连接重新入座（改个代号、认回椅子）不算换人，别把自己踢下线
-          if (prev && prev !== conn) prev.close('这把椅子换了人');
-          conn.send(JSON.stringify(r.msg satisfies ToClient));
-          persist();
+        let raw: unknown;
+        try {
+          raw = JSON.parse(text);
+        } catch {
+          conn.close('说的话看不懂');
           return;
         }
-        case 'act': {
-          // 没坐下就递话一定要回一句：客户端那边按下这一手就当递出去了，牌面不动它不会自己醒
-          if (seat === undefined) {
-            conn.send(NO_SEAT);
-            return;
-          }
-          const r = table.act(seat, msg.action);
-          if (!r.ok)
-            conn.send(JSON.stringify({ t: 'reject', why: r.why ?? '这手不合法' } satisfies ToClient));
-          persist();
+        const checked = checkHost(raw, table.state.players, table.state.rules);
+        if (typeof checked === 'string') {
+          tell(`拒了一句：${checked}（来自 ${conn.addr}）`);
+          conn.send(JSON.stringify({ t: 'reject', why: checked } satisfies ToClient));
           return;
         }
-        case 'start': {
-          if (seat === undefined) {
-            conn.send(NO_SEAT);
-            return;
-          }
-          const r = table.start(seat);
-          if (!r.ok)
-            conn.send(JSON.stringify({ t: 'reject', why: r.why ?? '开不了局' } satisfies ToClient));
-          persist();
-          return;
-        }
-        case 'setup': {
-          if (seat === undefined) {
-            conn.send(NO_SEAT);
-            return;
-          }
-          const r = table.changeSetup(seat, { players: msg.players, mode: msg.mode, level: msg.level });
-          if (!r.ok)
-            conn.send(JSON.stringify({ t: 'reject', why: r.why ?? '这会儿改不了' } satisfies ToClient));
-          persist();
-          return;
-        }
-        case 'stand': {
-          if (seat === undefined) {
-            conn.send(NO_SEAT);
-            return;
-          }
-          const r = table.stand(seat);
-          if (!r.ok) {
-            conn.send(JSON.stringify({ t: 'reject', why: r.why ?? '让不了座' } satisfies ToClient));
-            return;
-          }
-          // 椅子还回候场厅了，这条连接也就不再代表哪位；想再坐得重新挑一把
-          seatOf.delete(conn);
-          if (connOf.get(seat) === conn) connOf.delete(seat);
-          persist();
-          return;
-        }
-        case 'ping':
-          conn.send(JSON.stringify({ t: 'pong', at: msg.at } satisfies ToClient));
-          return;
+        handle(conn, checked);
+      } catch (e) {
+        tell(`这句办砸了（${String((e as Error).message)}），先把 ${conn.addr} 请下桌`);
+        conn.close('这句办不了');
       }
     },
     onClose(conn) {
@@ -243,13 +169,104 @@ export function openRoom(argv: string[], port: number): Room {
     },
   });
 
+  function handle(conn: Conn, msg: ToHost): void {
+    const seat = seatOf.get(conn);
+    switch (msg.t) {
+      case 'lobby':
+        conn.send(JSON.stringify({ t: 'seats', ...table.lobby(), lan: inviteUrls() } satisfies ToClient));
+        return;
+      case 'join': {
+        // 先把椅子认给这条连接再落座：桌在 join 里就要广播一份快照，晚一步那份就发飞了
+        const prev = connOf.get(msg.seat);
+        const from = seatOf.get(conn);
+        seatOf.set(conn, msg.seat);
+        connOf.set(msg.seat, conn);
+        const r = table.join(msg.seat, msg.token, msg.nick, from);
+        if (!r.ok || !r.msg) {
+          // 换椅子没换成：原来那把还得是他的，别一句「坐不下」把人连原有的椅子一起摘了
+          if (from !== undefined) seatOf.set(conn, from);
+          else seatOf.delete(conn);
+          if (prev) connOf.set(msg.seat, prev);
+          else connOf.delete(msg.seat);
+          conn.send(JSON.stringify({ t: 'reject', why: r.why ?? '坐不下' } satisfies ToClient));
+          return;
+        }
+        // 换椅子：旧那把的连接认得回来了，不再替那把椅子说话
+        if (from !== undefined && from !== msg.seat && connOf.get(from) === conn) connOf.delete(from);
+        // 同一个位子只许一个人连着：令牌对得上，就把旧那条连接踢掉
+        // 同一条连接重新入座（改个代号、认回椅子）不算换人，别把自己踢下线
+        if (prev && prev !== conn) prev.close('这把椅子换了人');
+        conn.send(JSON.stringify(r.msg satisfies ToClient));
+        persist();
+        return;
+      }
+      case 'act': {
+        // 没坐下就递话一定要回一句：客户端那边按下这一手就当递出去了，牌面不动它不会自己醒
+        if (seat === undefined) {
+          conn.send(NO_SEAT);
+          return;
+        }
+        const r = table.act(seat, msg.action);
+        if (!r.ok) conn.send(JSON.stringify({ t: 'reject', why: r.why ?? '这手不合法' } satisfies ToClient));
+        persist();
+        return;
+      }
+      case 'start': {
+        if (seat === undefined) {
+          conn.send(NO_SEAT);
+          return;
+        }
+        const r = table.start(seat);
+        if (!r.ok) conn.send(JSON.stringify({ t: 'reject', why: r.why ?? '开不了局' } satisfies ToClient));
+        persist();
+        return;
+      }
+      case 'setup': {
+        if (seat === undefined) {
+          conn.send(NO_SEAT);
+          return;
+        }
+        const r = table.changeSetup(seat, { players: msg.players, mode: msg.mode, level: msg.level });
+        if (!r.ok) conn.send(JSON.stringify({ t: 'reject', why: r.why ?? '这会儿改不了' } satisfies ToClient));
+        persist();
+        return;
+      }
+      case 'stand': {
+        if (seat === undefined) {
+          conn.send(NO_SEAT);
+          return;
+        }
+        const r = table.stand(seat);
+        if (!r.ok) {
+          conn.send(JSON.stringify({ t: 'reject', why: r.why ?? '让不了座' } satisfies ToClient));
+          return;
+        }
+        // 椅子还回候场厅了，这条连接也就不再代表哪位；想再坐得重新挑一把
+        seatOf.delete(conn);
+        if (connOf.get(seat) === conn) connOf.delete(seat);
+        persist();
+        return;
+      }
+      case 'ping':
+        conn.send(JSON.stringify({ t: 'pong', at: msg.at } satisfies ToClient));
+        return;
+    }
+  }
+
   /** 别的设备能不能直接敲进浏览器，全看这个端口是谁的：房主 5200、dev 5199 */
   function inviteUrls(): string[] {
     return lanAddresses().map((ip) => `http://${ip}:${port}/`);
   }
 
   ws.start();
-  const ticker = setInterval(() => table.tick(), 1000);
+  /**
+   * 一秒一次的表。桌真动了手才落盘：代打那几手、局末退回候场、两分钟收椅子，
+   * 原来全都不落（只有收到客户端话时才 persist），一桌全 AI 能连打几局而存档一个字不变。
+   * 反过来，全桌都在想牌的那一秒啥也没变，也就不必惊动硬盘。
+   */
+  const ticker = setInterval(() => {
+    if (table.tick()) persist();
+  }, 1000);
 
   return {
     table,

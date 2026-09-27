@@ -1,5 +1,5 @@
-import { parseRules, type Action, type GameState, type Rules } from '../core/game.ts';
-import type { Level } from '../ai/agent.ts';
+import { parseRules, type Action, type AllocWay, type GameState, type Rules } from '../core/game.ts';
+import { LEVELS, type Level } from '../ai/agent.ts';
 import type { RankFile } from '../core/pieces.ts';
 import type { Color, Piece } from '../core/pieces.ts';
 
@@ -104,6 +104,100 @@ export type ToHost =
   /** 候场厅里把自己那把椅子还回去：坐错位、或者这桌要减人都得先走这一步 */
   | { t: 'stand' }
   | { t: 'ping'; at: number };
+
+/** 这几张清单照着引擎里的联合类型列：多写一个合法值都不许，`check` 盯得住漏、盯得住多 */
+const KINDS: readonly Action['kind'][] = ['draw', 'allocate', 'lead', 'follow', 'discard', 'noop'];
+const WAYS: readonly AllocWay[] = ['layered', 'stacks-left', 'stacks-right'];
+
+function isObj(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null && !Array.isArray(v);
+}
+
+/** 整数就是整数：`"1"` 和 `1` 在 Map 的键上是两把椅子，这个亏吃一次就够 */
+function isInt(v: unknown): v is number {
+  return typeof v === 'number' && Number.isInteger(v);
+}
+
+function oneOf<T extends string>(list: readonly T[], v: unknown): v is T {
+  return typeof v === 'string' && (list as readonly string[]).includes(v);
+}
+
+/** 出牌那一伙：张数得是真的有，空着的意思「不出一张」引擎压根不认 */
+function isIds(v: unknown): v is number[] {
+  return Array.isArray(v) && v.length > 0 && v.every(isInt);
+}
+
+/**
+ * 一句线上的话过一遍形：字段齐不齐、取值在不在列。回 `ToHost` 是认了，回一句话就是拒。
+ * 这一道是「不合形的字节进不了权威状态」的唯一关口，原来两头都漏过：
+ * `mode:"zzz"` 被原样写进 GameState（流程像扣棋、规则却按明棋那套走），
+ * `seat:"1"` 让桌认下了椅子却把快照发给不存在的第 1 号位（Map 的键是字符串），
+ * 而 `action:{}` 更干脆——`sameAction` 里 `[...undefined]` 抛出去就把房主整个进程带走。
+ * 几个人、哪几种玩法以桌上那张规则表为准，电脑档位跟 AI 那份清单同源；
+ * 出得出去哪一手仍归桌按 `legalActions` 判，这儿只管形状。
+ */
+export function checkHost(raw: unknown, seats: number, rules: Pick<Rules, 'modes' | 'playerCounts'>): ToHost | string {
+  if (!isObj(raw)) return '说不清的一句话';
+  switch (raw.t) {
+    case 'lobby':
+      return { t: 'lobby' };
+    case 'start':
+      return { t: 'start' };
+    case 'stand':
+      return { t: 'stand' };
+    case 'ping':
+      return typeof raw.at === 'number' && Number.isFinite(raw.at) ? { t: 'ping', at: raw.at } : 'ping 的那个数说不清';
+    case 'join': {
+      if (!isInt(raw.seat) || raw.seat < 0 || raw.seat >= seats) return `没这个座位：这桌只 ${seats} 把椅子`;
+      if (typeof raw.token !== 'string') return '令牌得是一串字';
+      if (raw.nick !== undefined && typeof raw.nick !== 'string') return '代号得是一串字';
+      return { t: 'join', seat: raw.seat, token: raw.token, nick: raw.nick };
+    }
+    case 'setup': {
+      const out: { players?: number; mode?: 'ming' | 'kou'; level?: Level } = {};
+      if (raw.players !== undefined) {
+        if (!isInt(raw.players) || !rules.playerCounts.includes(raw.players)) {
+          return `这桌只能 ${rules.playerCounts.join(' 或 ')} 人`;
+        }
+        out.players = raw.players;
+      }
+      if (raw.mode !== undefined) {
+        if (!oneOf(rules.modes, raw.mode)) return `没听过这种玩法：这桌只有 ${rules.modes.join('、')}`;
+        out.mode = raw.mode;
+      }
+      if (raw.level !== undefined) {
+        if (!oneOf(LEVELS, raw.level)) return '没听过这档电脑';
+        out.level = raw.level;
+      }
+      return { t: 'setup', ...out };
+    }
+    case 'act': {
+      const a = raw.action;
+      if (!isObj(a) || !oneOf(KINDS, a.kind)) return '这一手说不出是什么';
+      switch (a.kind) {
+        case 'noop':
+          return { t: 'act', action: { kind: 'noop' } };
+        case 'draw': {
+          if (!isInt(a.stackIdx) || a.stackIdx < 0) return '抽的那一摞说不清';
+          if (a.pieceId === undefined) return { t: 'act', action: { kind: 'draw', stackIdx: a.stackIdx } };
+          return isInt(a.pieceId)
+            ? { t: 'act', action: { kind: 'draw', stackIdx: a.stackIdx, pieceId: a.pieceId } }
+            : '抽的那张说不清';
+        }
+        case 'allocate':
+          return oneOf(WAYS, a.way)
+            ? { t: 'act', action: { kind: 'allocate', way: a.way } }
+            : '没听过这种切法';
+        default:
+          return isIds(a.pieceIds)
+            ? { t: 'act', action: { kind: a.kind, pieceIds: a.pieceIds } }
+            : '出的张数不对';
+      }
+    }
+    default:
+      return '看不懂这句';
+  }
+}
 
 export type ToClient =
   | ({ t: 'seats' } & Seats)

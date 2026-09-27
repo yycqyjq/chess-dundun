@@ -1,5 +1,5 @@
 /**
- * 联机层测试：桌（权威状态、令牌、代打、落盘）+ 打码快照 + 手写 WebSocket 服务端。
+ * 联机层测试：桌（权威状态、令牌、代打、落盘）+ 线上一句话的形状闸门 + 打码快照 + 手写 WebSocket 服务端。
  * 全部在 Node 里跑，不碰浏览器、不碰真网络，靠假时钟和假连接把整局打完。
  */
 import { createServer, type Server } from 'node:http';
@@ -7,7 +7,16 @@ import { connect as netConnect, type Socket } from 'node:net';
 import { pendingSeats, type Action, type GameState } from '../core/game.ts';
 import { loadRules } from '../node/load_rules.ts';
 import { Table, IDLE_MS, NICK_MAX, TAKEOVER_MS, type TableSetup } from '../net/table.ts';
-import { fullWire, hydrate, snapshotFor, type ToClient, type WirePiece, type WireState } from '../net/wire.ts';
+import {
+  checkHost,
+  fullWire,
+  hydrate,
+  snapshotFor,
+  type ToClient,
+  type ToHost,
+  type WirePiece,
+  type WireState,
+} from '../net/wire.ts';
 import { WsServer } from '../net/ws.ts';
 import { layout, type Board, type TableView } from '../web/board.ts';
 
@@ -273,6 +282,150 @@ function pilesOf(state: GameState): number[][] {
   ok('开打了改不了配置', !table.changeSetup(0, { mode: 'kou' }).ok);
   ok('开局那一刻没人坐的位子交给电脑补', table.seatInfo()[3]!.ai);
   ok('开局把排队的都清了', table.seatInfo().every((s) => !s.queued));
+}
+
+// ───────────────────────── 一句话过闸：不合形的进不了桌 ─────────────────────────
+
+{
+  const pass = (raw: unknown): ToHost | string => checkHost(raw, 4, rules);
+  const why = (raw: unknown): string => {
+    const r = pass(raw);
+    return typeof r === 'string' ? r : '';
+  };
+  const held = (raw: unknown): ToHost | null => {
+    const r = pass(raw);
+    return typeof r === 'string' ? null : r;
+  };
+
+  ok('候场厅那一句问座位表认', held({ t: 'lobby' })?.t === 'lobby');
+  ok('按开始认', held({ t: 'start' })?.t === 'start');
+  ok('让座认', held({ t: 'stand' })?.t === 'stand');
+  ok('探活那句原样递（连它带的时间戳一起）', JSON.stringify(held({ t: 'ping', at: 1234 })) === '{"t":"ping","at":1234}');
+  ok('带整数座位的入座认', held({ t: 'join', seat: 2, token: 'tk', nick: 'AB' })?.t === 'join');
+  ok('没报代号也算一句完整的入座', held({ t: 'join', seat: 0, token: '' })?.t === 'join');
+  ok('改配置挑得到的组合认', held({ t: 'setup', players: 2, mode: 'kou', level: 'easy' })?.t === 'setup');
+  ok('出牌那一手照原样的那几张认', JSON.stringify(held({ t: 'act', action: { kind: 'lead', pieceIds: [7, 3, 7] } })) === '{"t":"act","action":{"kind":"lead","pieceIds":[7,3,7]}}');
+  ok('摸签认到摞就够（那张由桌来翻）', JSON.stringify(held({ t: 'act', action: { kind: 'draw', stackIdx: 3 } })) === '{"t":"act","action":{"kind":"draw","stackIdx":3}}');
+  ok('触屏摸签带的那张认', held({ t: 'act', action: { kind: 'draw', stackIdx: 1, pieceId: 9 } })?.t === 'act');
+  ok('分牌挑哪种切法都认', held({ t: 'act', action: { kind: 'allocate', way: 'stacks-right' } })?.t === 'act');
+  ok('不出一张的那句认', JSON.stringify(held({ t: 'act', action: { kind: 'noop' } })) === '{"t":"act","action":{"kind":"noop"}}');
+  ok('认下来的那句里不多带野字段', JSON.stringify(held({ t: 'start', 顺手: '抹掉' })) === '{"t":"start"}');
+  ok(
+    '改配置那句带的野字段也不跟着往下递',
+    JSON.stringify(held({ t: 'setup', players: 2, 顺手: '抹掉' })) === '{"t":"setup","players":2}',
+  );
+
+  // 这几句都是实测能把桌打穿的：过不了闸就是它把整桌救下来
+  ok('座位写成字符串就坐不下（椅子占上却收不到快照）', why({ t: 'join', seat: '1', token: '' }).length > 0);
+  ok('座位是小数坐不下', why({ t: 'join', seat: 1.5, token: '' }).length > 0);
+  ok('座位超出这桌的椅子数坐不下', why({ t: 'join', seat: 4, token: '' }).length > 0);
+  ok('座位是负数坐不下', why({ t: 'join', seat: -1, token: '' }).length > 0);
+  ok('令牌不是字坐不下', why({ t: 'join', seat: 1, token: 7 }).length > 0);
+  ok('人数不在档位上改不动', why({ t: 'setup', players: 3 }).length > 0);
+  ok('人数写成字符串改不动', why({ t: 'setup', players: '2' }).length > 0);
+  ok('没听过的玩法进不了桌', why({ t: 'setup', mode: 'zzz' }).length > 0);
+  ok('没听过的档位进不了桌', why({ t: 'setup', level: 'unheard' }).length > 0);
+  ok('一手缺字段的不递到桌前（原来这一句能把房主进程打死）', why({ t: 'act', action: {} }).length > 0);
+  ok('一手是 null 的不递到桌前', why({ t: 'act', action: null }).length > 0);
+  ok('没听过的着手不收', why({ t: 'act', action: { kind: 'zoom' } }).length > 0);
+  ok('lead 少一张不收', why({ t: 'act', action: { kind: 'lead' } }).length > 0);
+  ok('出零张不收（引擎压根不认这一手）', why({ t: 'act', action: { kind: 'lead', pieceIds: [] } }).length > 0);
+  ok('牌 id 掺进字不收', why({ t: 'act', action: { kind: 'lead', pieceIds: [1, 'x'] } }).length > 0);
+  ok('牌 id 是小数不收', why({ t: 'act', action: { kind: 'lead', pieceIds: [1.2] } }).length > 0);
+  ok('抽负数那一摞不收', why({ t: 'act', action: { kind: 'draw', stackIdx: -1 } }).length > 0);
+  ok('抽的那一摞写成字符串不收', why({ t: 'act', action: { kind: 'draw', stackIdx: '0' } }).length > 0);
+  ok('切法没听过不收', why({ t: 'act', action: { kind: 'allocate', way: 'middle' } }).length > 0);
+  ok('探活的时间戳是 NaN 不收', why({ t: 'ping', at: Number.NaN }).length > 0);
+  ok('没听过的话不收', why({ t: 'nope' }).length > 0);
+  ok('一个数组不是话', why([1, 2]).length > 0);
+  ok('null 不是话', why(null).length > 0);
+  ok('一个字不是话', why('x').length > 0);
+  ok('一个数不是话', why(42).length > 0);
+}
+
+// ───────────────────────── 打完那一局的账：谁来结、结几回 ─────────────────────────
+
+{
+  // 局末停在候场厅，房主先在候场厅改了玩法再按开始：中间那一局不能凭空没了
+  const { table, clock } = makeTable({ mode: 'kou' });
+  table.join(0, '');
+  table.join(1, '');
+  table.start(0);
+  finishDraft(table);
+  const state1 = playToEnd(table, clock);
+  const tie = state1.won[0] === state1.won[1];
+  const top = tie ? -1 : state1.won[0]! > state1.won[1]! ? 0 : 1;
+  ok('这一局确实打完了', state1.phase === 'over' && table.lobby().status === 'waiting');
+  ok('打完停在候场厅时账还没记（要等结清那一刻）', table.book.games === 0 && table.gameNo === 1);
+  ok('改玩法这一趟先把上一局结了', table.changeSetup(0, { mode: 'ming' }).ok && table.book.games === 1);
+  ok('账上收的枚数就是刚打完那局', table.book.cards[0]! + table.book.cards[1]! === 32);
+  ok('局号跟着账走：这副新牌是第 2 局', table.gameNo === 2);
+  if (tie) ok('并列局不给人加冕', table.book.ties === 1 && table.book.titles.every((t) => t === 0));
+  else ok('夺冠那位记上了', table.book.titles[top] === 1 && table.book.titles[1 - top] === 0);
+  ok('新局还是两把椅子、32 枚', table.state.players === 2 && table.state.pieces.length === 32);
+  if (!tie) ok('起抽人照旧往上一局的赢家传', table.state.drawer === top);
+  ok('只改代打档位不该再结一遍', table.changeSetup(0, { level: 'easy' }).ok && table.book.games === 1 && table.gameNo === 2);
+  ok('再按开始才结下一笔（没打完的这局不算）', table.start(0).ok && table.book.games === 1);
+}
+
+{
+  // 换人数是另一码事：那本账本来就要重开，上一局赢家指的也不是那把椅子了
+  const { table, clock } = makeTable({ mode: 'ming' });
+  table.join(0, '');
+  table.join(1, '');
+  table.start(0);
+  finishDraft(table);
+  playToEnd(table, clock);
+  ok('换人数前账是空的', table.book.games === 0 && table.gameNo === 1);
+  table.join(2, '');
+  table.join(3, '');
+  ok('四个人改成两个人', table.changeSetup(0, { players: 2 }).ok && table.state.players === 2);
+  ok('换成两把椅子那本账跟着重开', table.book.games === 0 && table.gameNo === 1 && table.book.draws.every((d) => d === 0));
+  ok('新局里没有人还排着上一局的队', table.seatInfo().every((s) => !s.queued));
+}
+
+{
+  // 换人数时那把「人走了、凭令牌还得回来」的椅子：掉线计时得跟着椅子挪，不然是把永远收不回的椅子
+  const { table, clock } = makeTable({ mode: 'kou', players: 4 });
+  const r1 = table.join(1, '');
+  table.join(0, '');
+  const tok1 = r1.msg?.t === 'welcome' ? r1.msg.token : '';
+  table.leave(1);
+  ok(
+    '后面那两把椅子空着，四个人减到两个减得下来',
+    table.changeSetup(0, { players: 2 }).ok && table.seatInfo().length === 2,
+  );
+  ok('P2 那把椅子还记在他名下：令牌没丢、人也没连上', table.seatInfo()[1]!.taken && !table.seatInfo()[1]!.online);
+  clock.step(IDLE_MS + 1);
+  ok('满两分钟那一秒桌动了手（宿主该落一次盘）', table.tick());
+  ok('那把椅子已经还给这桌', !table.seatInfo()[1]!.taken && !table.seatInfo()[1]!.online);
+  ok('还给桌之后旧令牌不再挡人，凭它照样坐得回', table.join(1, tok1).ok);
+}
+
+// ───────────────────────── 一秒一次的表：动了手才要落盘 ─────────────────────────
+
+{
+  const { table, clock } = makeTable({ mode: 'kou' });
+  table.join(0, '');
+  table.join(1, '');
+  table.start(0);
+  ok('全桌都在想牌：这一秒一个字没改，别惊动硬盘', !table.tick());
+  finishDraft(table);
+  table.leave(0);
+  table.leave(1);
+  ok('两位刚下桌，还没到代打那三十秒：这一秒不动手', !table.tick());
+  clock.step(TAKEOVER_MS);
+  ok('到点那一下判了代打：那一秒动了手', table.tick() && table.seatInfo().every((s) => s.ai));
+  const lines = table.state.log.length;
+  ok('电脑替掉线那位落一手：这一秒同样算动了手', table.tick() && table.state.log.length > lines);
+  let moved = 0;
+  for (let i = 0; i < 600 && table.state.phase !== 'over'; i++) if (table.tick()) moved++;
+  ok(
+    '纯靠这一秒一次的表也能把一局走完',
+    table.state.phase === 'over' && table.state.won[0]! + table.state.won[1]! === 32,
+    `动手 ${moved} 秒，桌上收了 ${table.state.won[0]}+${table.state.won[1]} 枚`,
+  );
+  ok('一局打完桌自己退回候场厅', table.lobby().status === 'waiting');
 }
 
 // ───────────────────────── 打码快照 ─────────────────────────

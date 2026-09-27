@@ -29,7 +29,14 @@ const MIME: Record<string, string> = {
 };
 
 function fileFor(url: string): string | null {
-  const path = decodeURIComponent(url.split('?')[0] ?? '');
+  // 转义写歪的路径（`/%25zz`、`/%e0%a0%80`）decode 就地抛，原来这一抛正好出在 http 回调上——
+  // 整个房主进程跟着没了，全桌掉线。认不出这串路径就当没这个文件，回 404 了事
+  let path: string;
+  try {
+    path = decodeURIComponent(url.split('?')[0] ?? '');
+  } catch {
+    return null;
+  }
   const rel = path === '/' || path === '' ? 'index.html' : path.replace(/^\/+/, '');
   const full = normalize(join(DIST, rel));
   // 挡目录穿越：算出来的路径必须还在 dist 里头

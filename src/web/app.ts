@@ -15,7 +15,7 @@ import { viewFor } from '../core/view.ts';
 import { deckFor, hydrate, type SeatInfo, type Seats, type TableStatus, type ToClient } from '../net/wire.ts';
 import { ctrlLift, handCramped, labelBands, LABEL_W, layout, pieceSize, stackSpots, type Board, type TableView } from './board.ts';
 import { homePanel, initialScreen, isLoopback } from './home.ts';
-import { deviceNick, forget, Link, recall, remember } from './net.ts';
+import { deviceNick, forget, Link, recall, remember, shouldWake } from './net.ts';
 import { MOVE_MS, Pieces } from './pieces.ts';
 import { rules } from './rules.ts';
 import { Sound } from './sound.ts';
@@ -27,8 +27,10 @@ type StatePush = Extract<ToClient, { t: 'state' }>;
 const LEVEL_CN: Record<Level, string> = { easy: '随手出', greedy: '挑省的', hard: '算赢面' };
 /** 电脑想想再出：太即时看着不像人，太长磨叽 */
 const AI_MS = 620;
-/** 扣棋里一墩出完，全桌扣着停这么久再一起翻——现实里就是大家把牌摁一起掀的那口气 */
-const FLIP_HOLD_MS = 2000;
+/** 扣棋里一墩出完，全桌扣着停这么久再一起翻——现实里就是大家把牌摁住掀开的那一下，短到一拍就够，别让人干等 */
+const FLIP_HOLD_MS = 600;
+/** 翻开以后留来看清「这一墩谁最大」的那口气，比闷着那段长一点 */
+const FLIP_READ_MS = 800;
 /**
  * 摸签八拍的节奏表，数值只管这一处，要调节奏改这里就行（顺序见 drawShow 的注释）。
  * spread/tuck 是整列补间的落位时间；lift/cover 那张牌在原地放大、缩回，补间一样长。
@@ -590,6 +592,9 @@ export class App {
   /** 一份快照演完之前来到的下一份就攒着，别把拍子踩乱 */
   private take(m: StatePush): void {
     if (m.seq <= this.seqDone) return;
+    // 卡在「等我出牌」时那条循环不会来取队列：桌只要不再动牌，画面就冻在旧那一份上，
+    // 名字条里的「掉线」擦不掉，对面却已经打下去了。该解的在这儿解一把（口径见 shouldWake）。
+    if (this.ask && shouldWake(m)) this.ask(null);
     const pull = this.pull;
     if (pull) {
       this.pull = null;
@@ -1068,14 +1073,14 @@ export class App {
   private async settleShow(onTable: OnTable[], wonBefore: number[]): Promise<void> {
     const ids = onTable.flatMap((e) => e.ids);
     const winner = this.state.won.findIndex((w, i) => w !== wonBefore[i]);
-    // 扣棋：全员出完先闷两秒，再一起翻开
+    // 扣棋：全员出完闷一小拍，再一起翻开
     if (this.state.mode === 'kou') {
       await this.nap(FLIP_HOLD_MS);
       this.view.holdDown = new Set();
       this.render(true);
     }
-    // 刚翻开，多留一会儿让人看清这一墩谁最大
-    await this.nap(this.state.mode === 'kou' ? 1000 : 560);
+    // 刚翻开，留一眼看清这一墩谁最大
+    await this.nap(this.state.mode === 'kou' ? FLIP_READ_MS : 560);
     if (winner >= 0) {
       this.sound.cue('collect');
       this.view.piles[winner]!.push(...ids);

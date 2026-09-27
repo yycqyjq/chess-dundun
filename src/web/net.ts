@@ -1,4 +1,5 @@
-import type { ToClient, ToHost } from '../net/wire.ts';
+import type { Action } from '../core/game.ts';
+import type { LastMove, ToClient, ToHost } from '../net/wire.ts';
 
 /**
  * 联机这一头的连接：断线自动重连、座位凭令牌认回原来那把椅子。
@@ -85,6 +86,19 @@ export function deviceNick(): string {
     // 隐私模式写不进去：没代号，座位行退回「有人」那句，不耽误进桌
     return '';
   }
+}
+
+/**
+ * 客户端正卡在「等我出牌」那一下时，桌又推来一份快照——要不要把这一等解开，让循环追到最新那份。
+ * 卡着的那条循环不会来取队列，所以桌只要不再动牌，画面就一直停在旧那一份上：
+ * 对面重连回来了，这边的名字条还挂着「掉线」，那边却已经打下去了。
+ * 该解的两种：这一份没有要演的手（只是现状变了——谁进出桌、重连、改配置），
+ * 或者这一份已经不该我出（挂着的那一手不作数了）。
+ * 还该我出、而这份是别人刚落的一手就不解：扣棋里我出完之前不该先看一圈（见 app.ts 的 waitForTurn）。
+ * 只看这两个字段，所以签名收的是这一小截，调用方递整份快照也照样对得上。
+ */
+export function shouldWake(m: { last: LastMove | null; acts: Action[] }): boolean {
+  return m.last === null || m.acts.length === 0;
 }
 
 export class Link {
