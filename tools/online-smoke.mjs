@@ -287,6 +287,55 @@ ok(
   JSON.stringify(afterSwap.seats).slice(0, 220),
 );
 
+// 扫码／链接进来那一路：客户端只递 seat:-1，挑哪一把归桌定（两台手机各挑各的必撞在同一把）
+{
+  const d = new Client();
+  await d.open;
+  d.ask({ t: 'lobby' });
+  const l4 = await d.until(['seats']);
+  ok('座位表连「家」那把一起报出来：客户端不用猜房主位在哪把', l4.homeSeat === 0 && l4.hostSeat === 0, JSON.stringify([l4.hostSeat, l4.homeSeat]));
+  d.ask({ t: 'join', seat: -1, token: '', nick: 'D9FF' });
+  const auto = await d.until(['welcome']);
+  ok('递 -1 进门就落座：挑中第 3 把，房主位和家那把都不自动给', auto.seat === 2 && auto.status === 'waiting', JSON.stringify(auto));
+  d.ask({ t: 'join', seat: -1, token: '', nick: 'D9FF' });
+  await d.until(['welcome', 'reject']);
+  d.ask({ t: 'lobby' });
+  const twice = await d.until(['seats']);
+  ok(
+    '同一条连接再递一次 -1：原来那把还归他，既不挪位也不多占一把',
+    twice.seats[2].nick === 'D9FF' && twice.seats.filter((s) => s.nick === 'D9FF').length === 1,
+    JSON.stringify(twice.seats).slice(0, 220),
+  );
+
+  const e = new Client();
+  await e.open;
+  e.ask({ t: 'join', seat: -1, token: '', nick: 'E1AA' });
+  const second = await e.until(['welcome']);
+  ok('第二台设备递同一个 -1：桌给的是另一把，不撞车', second.seat === 3 && second.seat !== auto.seat, JSON.stringify(second));
+  const f = new Client();
+  await f.open;
+  f.ask({ t: 'join', seat: -1, token: '', nick: 'F2BB' });
+  const none = await f.until(['reject']);
+  ok('非房主位坐满了就回一句「没空椅子了」，不把人塞到房主位上', none.why.includes('没空椅子') && none.why.includes('房主位'), JSON.stringify(none));
+  f.ask({ t: 'lobby' });
+  const stillHost = await f.until(['seats']);
+  ok('那一句拒完房主位还指着开桌那位', stillHost.hostSeat === 0 && stillHost.seats[0].nick === NICK_A, JSON.stringify([stillHost.hostSeat, stillHost.seats[0].nick]));
+  // 让座再断开：把 2、3 两把彻底还回这桌，后面「中途坐下」那段还要用
+  // 查这一句得站在还坐着的人那儿看——让完座的那两条连接已经没椅子了，快照根本不再往它们发；
+  // 而且要「比这一句更新的那一份」：队里堆着 d／e 落座之前的旧快照，那几份同样写着两把都空着
+  const beforeStand = a.view().seq;
+  d.ask({ t: 'stand' });
+  e.ask({ t: 'stand' });
+  await a.until(
+    ['state'],
+    (m) => m.seq > beforeStand && m.seats[2]?.taken === false && m.seats[3]?.taken === false,
+  );
+  d.close();
+  e.close();
+  f.close();
+  await new Promise((r) => setTimeout(r, 200));
+}
+
 const beforeGo = a.view().seq;
 b.ask({ t: 'start' });
 const notHost = await b.until(['reject']);

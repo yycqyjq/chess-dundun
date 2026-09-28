@@ -19,7 +19,7 @@ export default {
     {
       rel: "src/net/wire.ts",
       note: "2 座位不查范围（负数、超出椅子数都递到桌前）",
-      from: "      if (!isInt(raw.seat) || raw.seat < 0 || raw.seat >= seats) return `没这个座位：这桌只 ${seats} 把椅子`;",
+      from: "      if (!isInt(raw.seat) || raw.seat < -1 || raw.seat >= seats) return `没这个座位：这桌只 ${seats} 把椅子`;",
       to: "      if (!isInt(raw.seat)) return '座位说不清';",
       expect: "座位超出这桌的椅子数坐不下",
     },

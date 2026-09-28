@@ -9,7 +9,9 @@ import type { Level } from '../ai/agent.ts';
 import type { Lobby, SeatInfo, TableStatus } from '../net/wire.ts';
 import {
   ANNOUNCE_PORT,
+  LIST_REFRESH_MS,
   OFFER_TTL,
+  SWEEP_MIN_MS,
   WHOAMI,
   absorb,
   announcePortOf,
@@ -60,6 +62,7 @@ function lobby(players: number, flags: Partial<SeatInfo>[] = [], over: Partial<L
   return {
     players,
     hostSeat: 0,
+    homeSeat: 0,
     gameNo: 1,
     mode: 'kou',
     level: 'hard' as Level,
@@ -211,6 +214,9 @@ console.log('\n这本账会老：谁报得勤算谁，听不见的抹掉');
   ok('同一台机器上端口不同的不是自己', isMine(mk({ ip: '192.168.1.7', port: 5199 }), mine.ips, mine.port) === false);
 
   ok('三秒内不必再来一轮', sweepDue(1000, 3999) === false && sweepDue(1000, 4000) === true);
+  // 列表页站着不动也五秒一轮：间隔宽过宿主那道闸，好几台设备同时站在这页上才不会一起刷这块网
+  ok('列表页那一轮不越过宿主那道闸：间隔只会更稀，不会更密', LIST_REFRESH_MS >= SWEEP_MIN_MS, `${LIST_REFRESH_MS} vs ${SWEEP_MIN_MS}`);
+  ok('列表页那一轮也不是按分钟算的（桌会老，太稀就看不见刚开的桌）', LIST_REFRESH_MS <= OFFER_TTL, `${LIST_REFRESH_MS} vs ${OFFER_TTL}`);
   const line = foundLine(mk({ players: 4, mode: 'ming', gameNo: 2, free: 1 }));
   ok('一句情况念得出：人数玩法局号空位', line === '4 人 · 明棋 · 等开局 · 第 2 局 · 还空 1 把', line);
   ok('坐满了说人话', foundLine(mk({ free: 0 })).includes('坐满了'));

@@ -81,7 +81,10 @@ export type LastMove = { seat: number; action: Action };
 /** 还没入座就能看见的那点事：几个位子、谁坐过、谁是房主、第几局、什么玩法、开没开局 */
 export interface Lobby {
   players: number;
+  /** 此刻代持房主位的那把：改配置和按开始都在他手上 */
   hostSeat: number;
+  /** 「家」那把房主位：主人一回来就交回他。客户端拿它认「开桌那位该坐哪把」 */
+  homeSeat: number;
   gameNo: number;
   mode: 'ming' | 'kou';
   level: Level;
@@ -97,6 +100,7 @@ export type Seats = Lobby & { lan: string[] };
 
 export type ToHost =
   | { t: 'lobby' }
+  /** `seat` 是 -1 就表示「给我挑一把空椅」，由桌当场定（自动入座用的就是这一路） */
   | { t: 'join'; seat: number; token: string; nick?: string }
   | { t: 'act'; action: Action }
   /** 房主在候场厅按的那颗开始：头一局和下一局走同一扇门 */
@@ -158,7 +162,8 @@ export function checkHost(raw: unknown, seats: number, rules: Pick<Rules, 'modes
     case 'ping':
       return typeof raw.at === 'number' && Number.isFinite(raw.at) ? { t: 'ping', at: raw.at } : 'ping 的那个数说不清';
     case 'join': {
-      if (!isInt(raw.seat) || raw.seat < 0 || raw.seat >= seats) return `没这个座位：这桌只 ${seats} 把椅子`;
+      // -1 是「随便给把空椅」：扫码进来的人不该先被问一遍坐哪把，挑哪一把归桌定（见 Table.freeSeat）
+      if (!isInt(raw.seat) || raw.seat < -1 || raw.seat >= seats) return `没这个座位：这桌只 ${seats} 把椅子`;
       if (typeof raw.token !== 'string') return '令牌得是一串字';
       if (raw.nick !== undefined && typeof raw.nick !== 'string') return '代号得是一串字';
       return { t: 'join', seat: raw.seat, token: raw.token, nick: raw.nick };

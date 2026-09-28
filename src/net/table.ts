@@ -205,6 +205,18 @@ export class Table {
   }
 
   /**
+   * 给「自动入座」挑一把椅子：头一把没人坐过的，房主位除外——代持的那把和「家」那把都除外。
+   * 房主位留给开桌那位（建房即房主走的是另一条路：他直接坐家那把），扫码进来的人不该
+   * 一屁股坐到开局那颗按钮上；只剩房主位空着时回 null，由界面退回让人自己按「坐下 · 当房主」。
+   * 归桌挑而不是客户端照座位表自己挑：两台手机扫同一个码，各挑各的一定撞在同一把椅子上。
+   */
+  freeSeat(): number | null {
+    const host = this.setup.hostSeat ?? 0;
+    const home = this.setup.homeSeat ?? host;
+    return this.slots.find((s) => s.seat !== host && s.seat !== home && !s.token)?.seat ?? null;
+  }
+
+  /**
    * 换椅子时把原来那把还回去：一个标签页连着坐四把，屏幕上就四行挂同一个代号。
    * 候场期那把彻底空出来（谁都能挑）；开打中只算掉线，令牌还留着，他坐得回去。
    */
@@ -463,6 +475,7 @@ export class Table {
     return {
       players: this.setup.players,
       hostSeat: this.setup.hostSeat ?? 0,
+      homeSeat: this.setup.homeSeat ?? this.setup.hostSeat ?? 0,
       gameNo: this.gameNo,
       mode: this.setup.mode,
       level: this.setup.level,

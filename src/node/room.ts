@@ -274,23 +274,31 @@ export function openRoom(argv: string[], port: number): Room {
         conn.send(JSON.stringify({ t: 'seats', ...table.lobby(), lan: inviteUrls() } satisfies ToClient));
         return;
       case 'join': {
+        // seat -1＝「给我挑一把空椅」：扫码进来的人进门就落座，挑哪一把归桌定。
+        // 这条连接已经站着了就不另挪椅子——一个标签页占两把，屏幕上就分不清谁是谁；
+        // 真递上来也只是拿原来那把重走一遍入座（令牌对不上就被 join 挡回，不会多出第二把）
+        const want: number | null = msg.seat >= 0 ? msg.seat : (seatOf.get(conn) ?? table.freeSeat());
+        if (want === null) {
+          conn.send(JSON.stringify({ t: 'reject', why: '这桌没空椅子了（房主位留给开桌那位，不自动给）' } satisfies ToClient));
+          return;
+        }
         // 先把椅子认给这条连接再落座：桌在 join 里就要广播一份快照，晚一步那份就发飞了
-        const prev = connOf.get(msg.seat);
+        const prev = connOf.get(want);
         const from = seatOf.get(conn);
-        seatOf.set(conn, msg.seat);
-        connOf.set(msg.seat, conn);
-        const r = table.join(msg.seat, msg.token, msg.nick, from);
+        seatOf.set(conn, want);
+        connOf.set(want, conn);
+        const r = table.join(want, msg.token, msg.nick, from);
         if (!r.ok || !r.msg) {
           // 换椅子没换成：原来那把还得是他的，别一句「坐不下」把人连原有的椅子一起摘了
           if (from !== undefined) seatOf.set(conn, from);
           else seatOf.delete(conn);
-          if (prev) connOf.set(msg.seat, prev);
-          else connOf.delete(msg.seat);
+          if (prev) connOf.set(want, prev);
+          else connOf.delete(want);
           conn.send(JSON.stringify({ t: 'reject', why: r.why ?? '坐不下' } satisfies ToClient));
           return;
         }
         // 换椅子：旧那把的连接认得回来了，不再替那把椅子说话
-        if (from !== undefined && from !== msg.seat && connOf.get(from) === conn) connOf.delete(from);
+        if (from !== undefined && from !== want && connOf.get(from) === conn) connOf.delete(from);
         // 同一个位子只许一个人连着：令牌对得上，就把旧那条连接踢掉
         // 同一条连接重新入座（改个代号、认回椅子）不算换人，别把自己踢下线
         if (prev && prev !== conn) prev.close('这把椅子换了人');

@@ -287,6 +287,53 @@ function pilesOf(state: GameState): number[][] {
   ok('开局把排队的都清了', table.seatInfo().every((s) => !s.queued));
 }
 
+// ───────────────────────── 自动入座挑的那把椅子 ─────────────────────────
+
+{
+  // 扫码／链接进来那句 seat:-1 归桌挑（客户端各挑各的，两台手机撞同一个码一定撞同一把）
+  const { table } = makeTable({ players: 4 });
+  ok('一张空桌：绕开房主位，挑头一把没人坐过的', table.freeSeat() === 1, `${table.freeSeat()}`);
+  table.join(1, '');
+  ok('头一把被占了就往后挪', table.freeSeat() === 2, `${table.freeSeat()}`);
+  table.join(2, '');
+  table.join(3, '');
+  ok('非房主位坐满了就不硬挤（回 null，界面退回让人自己挑）', table.freeSeat() === null, `${table.freeSeat()}`);
+  ok('让了座那把跟着回到可挑的清单里', table.stand(2).ok && table.freeSeat() === 2);
+
+  {
+    // 房主位留给开桌那位：它空着也不自动给，那是「坐下 · 当房主」那一次真有意义的选择
+    const two = makeTable({ players: 2 });
+    ok('两人群桌只剩房主位空着：不自动给', two.table.freeSeat() === 1);
+    two.table.join(1, '');
+    // 客人先坐下只算代持（settleHost 那条老规矩）：真正要钉的是「家」那把没被自动发出去
+    ok(
+      '客人先坐下只算代持，「家」那把还空着、也不再自动给',
+      two.table.lobby().hostSeat === 1 && !two.table.seatInfo()[0]!.taken && two.table.freeSeat() === null,
+    );
+    two.table.join(0, '');
+    ok('开桌那位一坐回家那把，房主位当场交回', two.table.lobby().hostSeat === 0);
+  }
+  {
+    // 掉线那把椅子还在原主人名下：自动入座不许把他人的位子发出去
+    const back = makeTable({ players: 4 });
+    const j = back.table.join(1, '');
+    const tk = j.msg?.t === 'welcome' ? j.msg.token : '';
+    back.table.leave(1);
+    ok('掉线那把还挂着「有主」', back.table.seatInfo()[1]!.taken && !back.table.seatInfo()[1]!.online);
+    ok('自动入座绕开掉线那把', back.table.freeSeat() === 2);
+    ok('凭令牌照旧坐得回原来那把（那条路不走自动入座）', back.table.join(1, tk).ok);
+  }
+  {
+    // 房主位不在第 1 把（命令行 --host-seat 指过、或候场厅里交接过）时也照样绕开
+    const shifted = makeTable({ players: 4, hostSeat: 2 });
+    ok('房主位挪到第 3 把：跳的还是那把', shifted.table.freeSeat() === 0, `${shifted.table.freeSeat()}`);
+    shifted.table.join(0, '');
+    shifted.table.join(1, '');
+    shifted.table.join(3, '');
+    ok('只剩房主位空着时不自动给', shifted.table.freeSeat() === null);
+  }
+}
+
 // ───────────────────────── 一句话过闸：不合形的进不了桌 ─────────────────────────
 
 {
@@ -310,6 +357,8 @@ function pilesOf(state: GameState): number[][] {
   ok('探活那句原样递（连它带的时间戳一起）', JSON.stringify(held({ t: 'ping', at: 1234 })) === '{"t":"ping","at":1234}');
   ok('带整数座位的入座认', held({ t: 'join', seat: 2, token: 'tk', nick: 'AB' })?.t === 'join');
   ok('没报代号也算一句完整的入座', held({ t: 'join', seat: 0, token: '' })?.t === 'join');
+  ok('seat 写成 -1 认得（「给我挑一把空椅」，扫码进来那一路）', held({ t: 'join', seat: -1, token: '' })?.t === 'join');
+  ok('那句 -1 不多带野字段，座位仍是一个数', JSON.stringify(held({ t: 'join', seat: -1, token: '', 顺手: '抹掉' })) === '{"t":"join","seat":-1,"token":""}');
   ok('改配置挑得到的组合认', held({ t: 'setup', players: 2, mode: 'kou', level: 'easy' })?.t === 'setup');
   ok('出牌那一手照原样的那几张认', JSON.stringify(held({ t: 'act', action: { kind: 'lead', pieceIds: [7, 3, 7] } })) === '{"t":"act","action":{"kind":"lead","pieceIds":[7,3,7]}}');
   ok('摸签认到摞就够（那张由桌来翻）', JSON.stringify(held({ t: 'act', action: { kind: 'draw', stackIdx: 3 } })) === '{"t":"act","action":{"kind":"draw","stackIdx":3}}');
@@ -326,7 +375,8 @@ function pilesOf(state: GameState): number[][] {
   ok('座位写成字符串就坐不下（椅子占上却收不到快照）', why({ t: 'join', seat: '1', token: '' }).length > 0);
   ok('座位是小数坐不下', why({ t: 'join', seat: 1.5, token: '' }).length > 0);
   ok('座位超出这桌的椅子数坐不下', why({ t: 'join', seat: 4, token: '' }).length > 0);
-  ok('座位是负数坐不下', why({ t: 'join', seat: -1, token: '' }).length > 0);
+  ok('座位是 -2 坐不下（负数只认 -1 那一句「挑一把空椅」）', why({ t: 'join', seat: -2, token: '' }).length > 0);
+  ok('座位是 -9 也坐不下', why({ t: 'join', seat: -9, token: '' }).length > 0);
   ok('令牌不是字坐不下', why({ t: 'join', seat: 1, token: 7 }).length > 0);
   ok('人数不在档位上改不动', why({ t: 'setup', players: 3 }).length > 0);
   ok('人数写成字符串改不动', why({ t: 'setup', players: '2' }).length > 0);

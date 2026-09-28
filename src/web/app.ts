@@ -13,15 +13,14 @@ import { nextDrawer, openMatch, recordGame, winners, type MatchBook } from '../c
 import { mulberry32 } from '../core/rng.ts';
 import { viewFor } from '../core/view.ts';
 import { deckFor, hydrate, type SeatInfo, type Seats, type TableStatus, type ToClient } from '../net/wire.ts';
-import { foundLine, peerNote, roomUrl, type FoundRoom } from '../net/discover.ts';
+import { LIST_REFRESH_MS, peerNote, type FoundRoom } from '../net/discover.ts';
 import { ctrlLift, handCramped, labelBands, LABEL_W, layout, pieceSize, stackSpots, type Board, type TableView } from './board.ts';
-import { homePanel, initialScreen, isLoopback } from './home.ts';
+import { autoSeat, homePanel, initialScreen, isLoopback, roomRow } from './home.ts';
 import { deviceNick, forget, Link, recall, remember, shouldWake } from './net.ts';
 import { MOVE_MS, Pieces } from './pieces.ts';
 import { rules } from './rules.ts';
 import { Sound } from './sound.ts';
 import {
-  anchor,
   buildShell,
   button,
   card,
@@ -168,6 +167,18 @@ export class App {
     /** 找桌那一句被拒了（老宿主不认这句 find）：把那颗按钮放回来，别让人对着灰按钮等 */
     unpend: () => void;
   } | null = null;
+  /**
+   * 同网桌列表那一层；null = 没站着。寻一句的答话落在这儿还是落在候场厅，就照这个认。
+   * timer 是那一轮一轮自己问出去的 find——这一层不在的时候必须停掉，别隔着两层朝这块网打包。
+   */
+  private list: { veil: HTMLElement; rows: HTMLElement; note: HTMLElement } | null = null;
+  private findTimer = 0;
+  /**
+   * 这一趟进候场厅是谁开的口：'create'＝在这台机器开一桌（该自动落到房主位），
+   * 'invite'＝拿着地址或扫码进来（该自动落到一把空椅，但不碰房主位）。
+   * 第一份座位表到手就用掉、跟着清空——替人挑椅子这件事只发生一次。
+   */
+  private autoSit: 'create' | 'invite' | null = null;
   /** 这桌此刻在候场还是正在打：按钮给不给、循环起不起，全照这个认 */
   private status: TableStatus = 'waiting';
   /**
@@ -184,7 +195,7 @@ export class App {
 
   constructor(private root: HTMLElement) {
     // 地址是别人给的那就是来入桌的，直接进候场厅；本机自己打开才先落在首页，由人自己挑玩法
-    if (initialScreen(location.hostname) === 'room') this.openRoom();
+    if (initialScreen(location.hostname) === 'room') this.openRoom('invite');
     else this.showHome();
     // 手机切到别的 app 再回来：路由器早把他那条线收了，浏览器却还以为连着。
     // 与其等下一份快照等不来，不如回来这一刻就重新敲一次门
@@ -204,13 +215,83 @@ export class App {
    */
   private showHome(): void {
     this.closeRoom();
+    this.stopList();
     for (const el of this.root.querySelectorAll('.sheet, .home')) el.remove();
     this.root.append(
       homePanel(
         () => this.pickTable(),
-        () => this.openRoom(),
+        () => this.showList(),
       ),
     );
+  }
+
+  // ---------- 同网桌列表 ----------
+
+  /**
+   * 点「同一张网」先落在这一页：同网有没有桌在等人一眼看得见，不用先在自己这台开一张。
+   * 浏览器发不了 UDP，寻一圈仍由本机那个宿主代跑（一句 find 递出去）；
+   * 它那儿有 SWEEP_MIN_MS 那道闸，所以这一页五秒一轮不会把这块网刷爆。
+   * 底栏那两颗归 foot 钉住：手机上列表长过一屏，「开一桌」跟着滚就等于要人先滚到底再摸黑点。
+   */
+  private showList(): void {
+    this.closeRoom();
+    if (this.list) {
+      this.findNow();
+      return;
+    }
+    for (const el of this.root.querySelectorAll('.sheet')) el.remove();
+    this.link ??= new Link({
+      onMsg: (m) => this.onPush(m),
+      onStatus: (text) => this.onNet(text),
+      onReady: () => this.onReady(),
+    });
+    const { veil, body, foot } = card(this.root, '同网的牌桌');
+    const rows = div('peer-list');
+    const note = div('note', '正在这块网上寻一圈……');
+    body.append(rows, note);
+    this.list = { veil, rows, note };
+    const out = div('sheet-row');
+    out.append(
+      button('在这台机器开一桌', () => this.openRoom('create'), 'btn primary'),
+      button(
+        '回首页',
+        () => {
+          this.stopList();
+          this.link?.close();
+          this.link = null;
+          this.showHome();
+        },
+        'btn mini',
+      ),
+    );
+    foot.append(out);
+    this.findNow();
+    this.findTimer = window.setInterval(() => this.findNow(), LIST_REFRESH_MS);
+  }
+
+  /** 寻一轮：线还没连上就当场说一句，别让人对着「正在寻」干等 */
+  private findNow(): void {
+    if (!this.list) return;
+    if (this.link?.send({ t: 'find' })) return;
+    this.list.note.textContent = '这条线还没连上：寻不了同网的桌，也可以照旧在这台机器开一桌';
+  }
+
+  /** 这一页收掉：那一轮一轮的 find 得跟着停，人都不在这儿了还朝这块网打包没道理 */
+  private stopList(): void {
+    if (!this.list) return;
+    window.clearInterval(this.findTimer);
+    this.findTimer = 0;
+    this.list.veil.remove();
+    this.list = null;
+  }
+
+  /** 寻回来的桌：一行一条，点那条地址就把浏览器递过去。列表页整块重画（这一层一秒不刷） */
+  private paintList(list: FoundRoom[], why: string): void {
+    const page = this.list;
+    if (!page) return;
+    page.rows.innerHTML = '';
+    for (const f of list) page.rows.append(roomRow(f));
+    page.note.textContent = peerNote(list, why);
   }
 
   // ---------- 开桌 ----------
@@ -273,8 +354,12 @@ export class App {
    * 座位表一秒问一遍（谁进谁出都得看得见），所以架子只搭一次、来一份填一份，
    * 别整张重刷——重刷会把人正点下去的那一下吞掉。
    * 开局以后这块不消失：没坐上人的设备站在这儿当旁观席，随时挑一把椅子等下一局。
+   * `auto` 说清这一趟是谁开的口，第一份座位表到手就照它替人挑一把椅子（口径见 home.ts 的 autoSeat）；
+   * 让座以后再回这儿传 null——人刚自己站起来，别立刻把他塞回一把椅子。
    */
-  private openRoom(): void {
+  private openRoom(auto: 'create' | 'invite' | null = null): void {
+    this.autoSit = auto;
+    this.stopList();
     if (this.room) {
       this.link?.askLobby();
       return;
@@ -373,12 +458,7 @@ export class App {
     function paintRooms(list: FoundRoom[], why: string): void {
       resetAsk();
       peerList.innerHTML = '';
-      for (const f of list) {
-        const url = roomUrl(f);
-        const row = div('peer-row');
-        row.append(div('peer-t', foundLine(f)), anchor(url, url, 'btn mini peer-link'));
-        peerList.append(row);
-      }
+      for (const f of list) peerList.append(roomRow(f));
       peerList.append(div('note', peerNote(list, why)));
     }
 
@@ -534,6 +614,17 @@ export class App {
       start.textContent = short > 0 ? `开始这一局（${short} 个位子由电脑补）` : '开始这一局';
       // 出去的路看后面有没有牌桌：候场期这块面板底下是空的，合上它就只剩白屏，那种时候只给「回首页」
       leave.textContent = this.shell ? '看牌桌' : '回首页';
+
+      // 进门这一趟替人挑一把椅子，只在头一份座位表上发生一次（口径见 home.ts 的 autoSeat）。
+      // 已经坐着就不再挑：断线重连那条路自己会凭令牌认回原来那把，插进来只会把人挪错位子
+      if (this.autoSit) {
+        const creating = this.autoSit === 'create';
+        this.autoSit = null;
+        if (!this.seated) {
+          const seat = autoSeat(l, recall(), creating);
+          if (seat !== null) this.takeSeat(seat);
+        }
+      }
     };
     this.room = { veil, note, fill, rooms: paintRooms, unpend: resetAsk };
     link.askLobby();
@@ -618,6 +709,8 @@ export class App {
     if (this.shell) this.paintMeta();
     // 候场厅摊着时那块就是唯一的落脚处：那会儿连台面都还没搭，toast 没地方放
     if (text && this.room) this.room.note.textContent = text;
+    // 站在列表页上同理：那句「和桌断了」得写在列表底下，不然人只看见一屏不动的桌
+    if (text && this.list) this.list.note.textContent = text;
     if (text && this.shell) toast(this.shell.toast, text, 2000);
   }
 
@@ -653,7 +746,8 @@ export class App {
         return;
       }
       case 'rooms':
-        // 合上候场厅了这一句就没地方画，丢掉就行：那颗按钮本来也只在里面按得到
+        // 答话落在人站着的那一层：列表页整块重画，候场厅里就画进那颗按钮底下那一块
+        this.paintList(m.rooms, m.why);
         this.room?.rooms(m.rooms, m.why);
         return;
       case 'reject': {
@@ -669,6 +763,9 @@ export class App {
           this.room.note.textContent = why;
           // 那句 find 被拒了（对着老宿主按的）：不放开这颗按钮，人就对着一颗灰的干等
           this.room.unpend();
+        } else if (this.list) {
+          // 站在列表页上寻的那一句被拒（对着老宿主按的）：话写在清单底下，别让它咽进沉默
+          this.list.note.textContent = why;
         } else if (this.shell) toast(this.shell.toast, why, 1600);
         // 桌不认这一手，牌面也就没变、不会再推新的快照过来：循环还卡在等下一份，把按钮重新挂上，别让人干等
         if (this.seated && this.pull) void this.waitForTurn();

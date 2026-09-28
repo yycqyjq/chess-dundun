@@ -1,15 +1,19 @@
 /**
  * 画面那层的守卫测试：ui.ts／pieces.ts／sound.ts 是全桌仅有的往 DOM 和浏览器存储上伸手的三处。
  * 没有浏览器（自动化那条路被拦着），所以这儿捏一套够它们用的假 DOM，
- * 钉住五件真会出事的事：别人自填的代号被当 HTML 解析、名字条的条数跟不上桌的人数、
+ * 钉住六件真会出事的事：别人自填的代号被当 HTML 解析、名字条的条数跟不上桌的人数、
  * 一桌子牌挪一拍逼一次重排（不是每张逼一次）、无痕模式的存储一碰就抛把整张桌白屏、
- * 寻到的那条桌是一个真 href 的 <a>（不拿 JS 拼跳转、也不往 HTML 里写字）。
+ * 寻到的那条桌是一个真 href 的 <a>（不拿 JS 拼跳转、也不往 HTML 里写字）、
+ * 进门那一刻落哪把椅子（建房即房主／扫码递 -1／断线认回原来那把）。
  *
  * 放 src/web 是有原因的：tsconfig.json 不带 DOM 库。
  * 全文件（连假元素自己）都不许用构造器参数属性——`--experimental-strip-types` 只抹类型，不改写赋值。
  */
 import { anchor, buildShell, button, card, paintChip, popup, rich, segment, toast, type Shell } from './ui.ts';
-import { appVersion, homePanel, initialScreen, isLoopback } from './home.ts';
+import { appVersion, autoSeat, homePanel, initialScreen, isLoopback, roomRow } from './home.ts';
+import { foundLine, type FoundRoom } from '../net/discover.ts';
+import type { SeatInfo } from '../net/wire.ts';
+import type { Saved } from './net.ts';
 import { buildPieceSet, buildRanks, type Piece } from '../core/pieces.ts';
 import { Pieces } from './pieces.ts';
 import { Sound } from './sound.ts';
@@ -459,6 +463,55 @@ function planOf(spotFor: (i: number) => Placed): Map<number, Placed> {
   ok('名头带着 btn：跟旁边那颗按钮一样是个能点的东西', el.className === 'btn mini peer-link', el.className);
   const plain = F(anchor(url, url));
   ok('不点名头也是颗按钮的样子（候场厅那条默认值）', plain.className === 'btn', plain.className);
+}
+
+// ---------- 列表页那一行桌：情况一句话，地址一条真 <a> ----------
+
+{
+  const f: FoundRoom = { ip: '192.168.1.41', port: 5200, players: 4, gameNo: 2, mode: 'kou', level: 'hard', status: 'waiting', free: 2 };
+  const row = F(roomRow(f));
+  const href = (n: FEl) => (n as unknown as Record<string, string>)['href'];
+  ok('一行两块：一句情况挨一条地址，地址本身就是那颗「去」', row.children.length === 2 && row.children[1]!.tag === 'a', row.children.map((c) => `${c.tag}.${c.className}`).join('+'));
+  ok('那句情况走的是 foundLine，列表页和候场厅念的是同一句', row.children[0]!.raw === foundLine(f), row.children[0]!.raw);
+  ok('地址由 ip＋port 现拼，一个字都没往 HTML 里写', href(row.children[1]!) === 'http://192.168.1.41:5200/' && row.countHtml() === 0, `${href(row.children[1]!)}｜${row.allHtml.join('｜')}`);
+  ok('名头带着 btn mini：跟旁边那颗按钮一样是个能点的东西', row.children[1]!.className === 'btn mini peer-link', row.children[1]!.className);
+  const full = F(roomRow({ ...f, free: 0, status: 'playing' }));
+  ok('坐满了、开打中，那一行照样只是把话写出来，不另加一颗灰按钮', full.children.length === 2 && /坐满了/.test(full.children[0]!.raw), full.children[0]!.raw);
+}
+
+// ---------- 进门那一刻落哪把椅子：建房即房主、扫码递 -1、断线认回原来那把 ----------
+
+{
+  const seat = (n: number, over: Partial<SeatInfo> = {}): SeatInfo => ({
+    seat: n,
+    name: `P${n + 1}`,
+    online: false,
+    taken: false,
+    ai: true,
+    human: false,
+    queued: false,
+    nick: '',
+    ...over,
+  });
+  const tableOf = (flags: Record<number, Partial<SeatInfo>>, homeSeat = 0) => ({
+    hostSeat: homeSeat,
+    homeSeat,
+    seats: [0, 1, 2, 3].map((n) => seat(n, flags[n])),
+  });
+  const sat: Partial<SeatInfo> = { taken: true, online: true, nick: 'K7' };
+  const gone: Partial<SeatInfo> = { taken: true, online: false, nick: 'K7' };
+  const saved = (n: number): Saved => ({ seat: n, token: `tk${n}` });
+
+  ok('扫码／链接进来：递 -1，挑哪把归桌定（两台手机扫同一个码不会各挑一把）', autoSeat(tableOf({}), null, false) === -1);
+  ok('开桌那位：直接坐「家」那把，这就是建房即房主', autoSeat(tableOf({}), null, true) === 0);
+  ok('家那把指到第 3 把就坐第 3 把：座位号由桌报，客户端不自己猜第 1 把', autoSeat(tableOf({}, 2), null, true) === 2);
+  ok('家那把被人坐过（哪怕掉了线）就不硬挤：摘人家椅子这种事不许自动发生', autoSeat(tableOf({ 0: gone }), null, true) === null);
+  ok('上次坐过的那把还空着主人：认回原来那把，哪怕是来开桌的', autoSeat(tableOf({}), saved(2), true) === 2);
+  ok('扫码回来也认回原来那把，不让桌另发一把新的', autoSeat(tableOf({ 2: gone }), saved(2), false) === 2);
+  ok('原来那把还连着（另个标签页坐着）就谁也不抢', autoSeat(tableOf({ 2: sat }), saved(2), true) === null);
+  ok('存的那个座位号不在这桌上（换了人数、或者一条脏数据）就当没存过', autoSeat(tableOf({}), saved(9), false) === -1);
+  ok('座位号是负的（老版本存歪的）同样当没存过', autoSeat(tableOf({}), saved(-1), true) === 0);
+  ok('扫码那条一律递 -1：桌上只剩房主位时由桌回那一句「没空椅子了」，客户端不自己判', autoSeat(tableOf({ 0: sat, 1: sat, 2: sat, 3: sat }), null, false) === -1);
 }
 
 console.log(failures ? `\n${failures} 条没过` : '\n全部通过');
