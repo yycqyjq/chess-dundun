@@ -2,7 +2,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { networkInterfaces } from 'node:os';
-import type { IncomingMessage } from 'node:http';
+import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Duplex } from 'node:stream';
 import { LEVELS } from '../ai/agent.ts';
 import type { Rules } from '../core/game.ts';
@@ -10,6 +10,8 @@ import { loadRules } from './load_rules.ts';
 import { Table, type TableSetup } from '../net/table.ts';
 import { checkHost, type ToClient, type ToHost } from '../net/wire.ts';
 import { WsServer, type Conn } from '../net/ws.ts';
+import { announcePortOf, encodeOffer, NO_DISCOVER, offerOf, slotOf } from '../net/discover.ts';
+import { openDiscovery, type Discovery, type Found } from './discover.ts';
 
 /**
  * 一张牌桌 + 一套 WebSocket 协议，不含任何「怎么把页面端出去」的事。
@@ -84,18 +86,26 @@ function nicScore(name: string): number {
 
 /** 同一台路由器上怎么找到这台房：把非回环的 IPv4 列出来，最可能是那张真网卡的排最前 */
 export function lanAddresses(): string[] {
-  const hits: { name: string; addr: string }[] = [];
+  return lanNets().map((n) => n.ip);
+}
+
+/**
+ * 同上，但连掩码一起给——寻呼要往「这块网段的广播地址」发包，光有 IP 算不出来。
+ * 掩码配得怪（零散位、/32）由 discover.ts 的 broadcastOf 拒掉：那一头就只剩全网广播和回环两路。
+ */
+export function lanNets(): { ip: string; mask: string }[] {
+  const hits: { name: string; ip: string; mask: string }[] = [];
   for (const [name, list] of Object.entries(networkInterfaces())) {
     if (NIC_SKIP.test(name)) continue;
     for (const net of list ?? []) {
       if (net.family !== 'IPv4' || net.internal) continue;
       // 169.254 是没配上 DHCP 时自己编的地址，出不了这块网卡
       if (net.address.startsWith('169.254.')) continue;
-      hits.push({ name, addr: net.address });
+      hits.push({ name, ip: net.address, mask: net.netmask });
     }
   }
   hits.sort((a, b) => nicScore(a.name) - nicScore(b.name) || a.name.localeCompare(b.name, 'en', { numeric: true }));
-  return hits.map((h) => h.addr);
+  return hits.map(({ ip, mask }) => ({ ip, mask }));
 }
 
 export interface Room {
@@ -105,10 +115,41 @@ export interface Room {
   savePath: string;
   /** 只吃 /ws 那条升级；收回 true 表示这条 socket 归它了，别的一条字节都不碰（Vite 的 HMR 也挂在同一个 httpServer 上） */
   handleUpgrade(req: IncomingMessage, stream: Duplex, head: Buffer): boolean;
+  /** 只吃 GET /whoami 那一句；同样回 true 表示这个请求我应了。两个宿主各自挂一次，省得两份实现走岔 */
+  handleHttp(req: IncomingMessage, res: ServerResponse): boolean;
+  /** 寻一圈同网别的桌（客户端候场厅那颗按钮）：没开寻呼就一句回话，不装模作样等那 700 毫秒 */
+  find(): Promise<Found>;
+  /** 寻呼守的那个 UDP 口，加上一句「开没开」：终端横幅念出来，才知道该去哪儿 curl 一下试试 */
+  discovery: { port: number; on: boolean };
   /** 能递给别的设备直接敲进浏览器的那串地址；终端横幅和候场厅里那个二维码都从这儿拿 */
   inviteUrls(): string[];
   persist(): void;
   close(): void;
+}
+
+/** 一句线上的字节该怎么办：认下来的一句话、该回的那句拒、或者请这条连接下桌。见 openRoom 里那句 onMessage */
+export type Verdict = { msg: ToHost } | { reject: string } | { close: string };
+
+/**
+ * 收字节到递话之间的那道门，单拎出来就为了它能被敲：
+ * 「一句 {"t":"act","action":{}} 凭什么叫停整个房主进程」这一类账，原来只有现场探针守得住。
+ * 认下来的那份是 checkHost 重建过的——线上原话里的野字段一句都带不下去。
+ * 抛错只有两种来路：JSON 本身不合法，和 checkHost 撞上了没见过的形状（那种形状是它的 bug，
+ * 当场把这条连接请下桌，别让一句说不清的字节把全桌带走）。
+ */
+export function gate(text: string, seats: number, rules: Pick<Rules, 'modes' | 'playerCounts'>): Verdict {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(text);
+  } catch {
+    return { close: '说的话看不懂' };
+  }
+  try {
+    const checked = checkHost(raw, seats, rules);
+    return typeof checked === 'string' ? { reject: checked } : { msg: checked };
+  } catch (e) {
+    return { close: `这句办不了（${String((e as Error).message)}）` };
+  }
 }
 
 export function openRoom(argv: string[], port: number): Room {
@@ -163,24 +204,52 @@ export function openRoom(argv: string[], port: number): Room {
   // 一开桌就落一次盘：还没人坐过椅子就断掉，重启也接得回这一桌的牌面
   write();
 
+  /**
+   * 答话的内容：UDP 那一句和 HTTP 那一句（GET /whoami）得是同一份，
+   * 不然对着终端 curl 一下以为寻呼是好的、广播出去的却是另一套。
+   */
+  function whoamiText(): string {
+    return encodeOffer(offerOf(table.lobby(), port));
+  }
+
+  /**
+   * 同网寻呼：一台机器一张桌守一槽（dev 5199 和 host 5200 各落一槽，同一台机器上两张桌也打得开）。
+   * --no-discover 是给自己留的后路：冒烟里同时起两张桌时谁都不该听见谁；
+   * 而这一口占不住（防火墙拦、被别的东西占了）也只当寻不到桌，牌照样打。
+   */
+  const disc: Discovery | null = hasFlag(argv, 'no-discover')
+    ? null
+    : openDiscovery({
+        httpPort: port,
+        slot: intFlag(argv, 'discover-slot', slotOf(port), 0, 7),
+        nets: lanNets(),
+        answer: whoamiText,
+        log: tell,
+      });
+
+  /** 客户端候场厅那颗「找同网的桌」走的门：寻呼关着就当场回一句，不让人白等那 700 毫秒 */
+  function find(): Promise<Found> {
+    if (disc) return disc.find();
+    return Promise.resolve({ rooms: [], why: NO_DISCOVER });
+  }
+
   const ws = new WsServer({
     onMessage(conn, text) {
-      // 这一整段兜住：一条连接说不来一句桌办不了的话，就该它自己下桌，凭什么叫全桌跟着掉线
+      // 认字节那一趟全在 gate 里（那儿有闸）；这儿只剩搬运，加一道兜底：
+      // handle 真办砸了也该它自己下桌，凭什么叫全桌跟着掉线
+      const v = gate(text, table.state.players, table.state.rules);
+      if ('close' in v) {
+        tell(`${v.close}（来自 ${conn.addr}），先请它下桌`);
+        conn.close(v.close);
+        return;
+      }
+      if ('reject' in v) {
+        tell(`拒了一句：${v.reject}（来自 ${conn.addr}）`);
+        conn.send(JSON.stringify({ t: 'reject', why: v.reject } satisfies ToClient));
+        return;
+      }
       try {
-        let raw: unknown;
-        try {
-          raw = JSON.parse(text);
-        } catch {
-          conn.close('说的话看不懂');
-          return;
-        }
-        const checked = checkHost(raw, table.state.players, table.state.rules);
-        if (typeof checked === 'string') {
-          tell(`拒了一句：${checked}（来自 ${conn.addr}）`);
-          conn.send(JSON.stringify({ t: 'reject', why: checked } satisfies ToClient));
-          return;
-        }
-        handle(conn, checked);
+        handle(conn, v.msg);
       } catch (e) {
         tell(`这句办砸了（${String((e as Error).message)}），先把 ${conn.addr} 请下桌`);
         conn.close('这句办不了');
@@ -275,6 +344,24 @@ export function openRoom(argv: string[], port: number): Room {
         persist();
         return;
       }
+      case 'reset': {
+        // 清账重开：形状过 checkHost，能不能清归桌查（只有房主位、只有没开打）
+        if (seat === undefined) {
+          conn.send(NO_SEAT);
+          return;
+        }
+        const r = table.resetBook(seat);
+        if (!r.ok) conn.send(JSON.stringify({ t: 'reject', why: r.why ?? '这会儿清不了' } satisfies ToClient));
+        persist();
+        return;
+      }
+      case 'find': {
+        // 找桌不看座位：还没坐下的人恰恰最需要知道别处有没有空桌。一轮最多一个在飞，挡在 discover 那边
+        void find().then((r) =>
+          conn.send(JSON.stringify({ t: 'rooms', rooms: r.rooms, why: r.why } satisfies ToClient)),
+        );
+        return;
+      }
       case 'ping':
         conn.send(JSON.stringify({ t: 'pong', at: msg.at } satisfies ToClient));
         return;
@@ -305,6 +392,23 @@ export function openRoom(argv: string[], port: number): Room {
       ws.handle(req, stream, head);
       return true;
     },
+    /**
+     * 就认 GET /whoami 那一条，别的一条字节不碰——页面、HMR、别的升级都照原路走。
+     * 这份答话不带任何牌面，只有候场厅本来就公开的那几句，所以不查 Origin：
+     * 它是给人 curl 着看的，不是给页面读的。
+     */
+    handleHttp(req, res) {
+      if ((req.method ?? 'GET').toUpperCase() !== 'GET') return false;
+      if ((req.url ?? '').split('?')[0] !== '/whoami') return false;
+      res.writeHead(200, {
+        'content-type': 'application/json; charset=utf8',
+        'cache-control': 'no-store',
+      });
+      res.end(whoamiText());
+      return true;
+    },
+    find,
+    discovery: { port: disc?.port ?? announcePortOf(port), on: disc !== null },
     inviteUrls,
     persist,
     close() {
@@ -315,6 +419,7 @@ export function openRoom(argv: string[], port: number): Room {
       }
       write();
       clearInterval(ticker);
+      disc?.close();
       ws.stop();
     },
   };

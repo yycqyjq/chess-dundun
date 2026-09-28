@@ -16,6 +16,10 @@ function tableRoom(): Plugin {
     name: 'chess-dundun-table',
     configureServer(server: ViteDevServer) {
       room = openRoom(process.argv.slice(2), Number(server.config.server.port));
+      // GET /whoami 排在 Vite 自己的中间件前面：这条路径 Vite 本来也没有，占不着谁
+      server.middlewares.use((req, res, next) => {
+        if (!room?.handleHttp(req, res)) next();
+      });
       server.httpServer?.on('upgrade', (req, socket, head) => {
         room?.handleUpgrade(req, socket, head); // 不是 /ws 的一条字节不碰，留给 Vite 自己的 HMR
       });
@@ -28,6 +32,12 @@ function tableRoom(): Plugin {
           urls.length
             ? `  局域网地址：${urls.join('  ')}`
             : '  没找到局域网地址：这台机器好像没连上路由器',
+        );
+        const d = room?.discovery;
+        console.log(
+          d?.on
+            ? `  同网寻呼守 UDP ${d.port}：候场厅按「找同网的桌」往这块网问一圈。`
+            : '  同网寻呼没开：这台机器上寻不到别的桌，只能手动敲地址。',
         );
         console.log(`  人到位后由房主在候场厅按「开始这一局」；没坐的位子那一局由电脑补。\n`);
       };

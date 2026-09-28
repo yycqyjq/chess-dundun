@@ -136,6 +136,15 @@ export function button(text: string, onClick?: () => void, cls = 'btn'): HTMLBut
   return el;
 }
 
+/** 一条真能点的地址（不是按钮）：长按能拷、鼠标悬上去看得见去哪儿，这正是要人自己挑桌时该有的样子 */
+export function anchor(text: string, href: string, cls = 'btn'): HTMLAnchorElement {
+  const el = document.createElement('a');
+  el.className = cls;
+  el.href = href;
+  el.textContent = text;
+  return el;
+}
+
 /**
  * 把一句话画成能扫的二维码。canvas 底图一格一像素，靠 CSS 整数倍放大配 pixelated，
  * 放大多少倍都还是方块，不会糊成一片灰。装不下（超 78 字节）回 null，让界面退回只显文字。

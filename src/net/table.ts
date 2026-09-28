@@ -356,6 +356,29 @@ export class Table {
   }
 
   /**
+   * 清账重开：跨局那本账整本换新、局号回 1，顺手摊开一副新牌面等开局。椅子、令牌、房主位一概不动
+   * ——「账怎么没了」的错觉多半出在人还以为自己坐着的那把椅子上，所以清的是账，不是座位。
+   * 刚打完那一局也一起扔（要的就是归零）：`booked` 跟着清，下一局才从空本子记起。
+   */
+  resetBook(bySeat: number): { ok: boolean; why?: string } {
+    if (bySeat !== (this.setup.hostSeat ?? 0)) return { ok: false, why: '只有房主能清这桌的账' };
+    if (this.status === 'playing') return { ok: false, why: '这一局正在打，打完再清' };
+    this.book = openMatch(this.setup.players);
+    this.gameNo = 1;
+    this.state = createGame({
+      ...this.setup,
+      seed: (this.rng() * 0x100000000) | 0,
+      // 不带 drawer：账都归零了，「上一局的赢家」指的已经不是任何一个人，起抽重新抽
+    });
+    this.booked = false;
+    this.maskFrom = -1;
+    this.last = null;
+    this.log('房主清了这桌的账：跨局那本归零，牌面重摊，下一副算第 1 局');
+    this.push();
+    return { ok: true };
+  }
+
+  /**
    * 打完那一局的收尾：记账 + 定下下一局谁起抽（回 null 表示这会儿没有要结的账）。
    * `booked` 兜着别记两遍：一局打完的那一刻就记（牌桌广播那份 over 快照时账已经在本子上），
    * 可那一份牌面被换掉的路有好几条（按开始、候场厅改玩法、改人数），每条都走这道门。

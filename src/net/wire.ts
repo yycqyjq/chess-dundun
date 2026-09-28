@@ -3,6 +3,7 @@ import type { MatchBook } from '../core/match.ts';
 import { LEVELS, type Level } from '../ai/agent.ts';
 import type { RankFile } from '../core/pieces.ts';
 import type { Color, Piece } from '../core/pieces.ts';
+import type { FoundRoom } from './discover.ts';
 
 /**
  * 线上传的牌：公开过的才带字。
@@ -104,6 +105,10 @@ export type ToHost =
   | { t: 'setup'; players?: number; mode?: 'ming' | 'kou'; level?: Level }
   /** 候场厅里把自己那把椅子还回去：坐错位、或者这桌要减人都得先走这一步 */
   | { t: 'stand' }
+  /** 房主在候场厅清了这桌的账：局号回 1、跨局那本整本换新，椅子一张不动 */
+  | { t: 'reset' }
+  /** 寻一圈同网别的桌：浏览器发不了 UDP，这一趟由本机那个宿主代跑（口径见 src/net/discover.ts） */
+  | { t: 'find' }
   | { t: 'ping'; at: number };
 
 /** 这几张清单照着引擎里的联合类型列：多写一个合法值都不许，`check` 盯得住漏、盯得住多 */
@@ -146,6 +151,10 @@ export function checkHost(raw: unknown, seats: number, rules: Pick<Rules, 'modes
       return { t: 'start' };
     case 'stand':
       return { t: 'stand' };
+    case 'find':
+      return { t: 'find' };
+    case 'reset':
+      return { t: 'reset' };
     case 'ping':
       return typeof raw.at === 'number' && Number.isFinite(raw.at) ? { t: 'ping', at: raw.at } : 'ping 的那个数说不清';
     case 'join': {
@@ -219,6 +228,8 @@ export type ToClient =
       last: LastMove | null;
     }
   | { t: 'reject'; why: string }
+  /** 寻一圈的答话：空清单也得回，why 就是那句为什么空（AP 隔离、寻呼口占不住、刚寻过一轮） */
+  | { t: 'rooms'; rooms: FoundRoom[]; why: string }
   | { t: 'pong'; at: number };
 
 /** 一张牌公开了没。口径跟引擎的 isFaceDown 一致，不另起一套 */

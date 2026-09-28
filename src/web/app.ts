@@ -13,13 +13,27 @@ import { nextDrawer, openMatch, recordGame, winners, type MatchBook } from '../c
 import { mulberry32 } from '../core/rng.ts';
 import { viewFor } from '../core/view.ts';
 import { deckFor, hydrate, type SeatInfo, type Seats, type TableStatus, type ToClient } from '../net/wire.ts';
+import { foundLine, peerNote, roomUrl, type FoundRoom } from '../net/discover.ts';
 import { ctrlLift, handCramped, labelBands, LABEL_W, layout, pieceSize, stackSpots, type Board, type TableView } from './board.ts';
 import { homePanel, initialScreen, isLoopback } from './home.ts';
 import { deviceNick, forget, Link, recall, remember, shouldWake } from './net.ts';
 import { MOVE_MS, Pieces } from './pieces.ts';
 import { rules } from './rules.ts';
 import { Sound } from './sound.ts';
-import { buildShell, button, card, div, paintChip, popup, qrCanvas, rich, segment, toast, type Shell } from './ui.ts';
+import {
+  anchor,
+  buildShell,
+  button,
+  card,
+  div,
+  paintChip,
+  popup,
+  qrCanvas,
+  rich,
+  segment,
+  toast,
+  type Shell,
+} from './ui.ts';
 
 /** 联机那头的桌推过来的每一份快照 */
 type StatePush = Extract<ToClient, { t: 'state' }>;
@@ -145,7 +159,15 @@ export class App {
   /** 结算卡摊着的话，close 就挂在这儿（开下一局、离桌都得收掉它） */
   private resultClose: (() => void) | null = null;
   /** 候场厅那块常驻面板；null = 没摊开。note 借给断线提示和 reject 那句话用 */
-  private room: { veil: HTMLElement; note: HTMLElement; fill: (l: Seats) => void } | null = null;
+  private room: {
+    veil: HTMLElement;
+    note: HTMLElement;
+    fill: (l: Seats) => void;
+    /** 寻回来的同网桌：宿主答一句才动这一块，不跟座位表那一秒一起闪 */
+    rooms: (rooms: FoundRoom[], why: string) => void;
+    /** 找桌那一句被拒了（老宿主不认这句 find）：把那颗按钮放回来，别让人对着灰按钮等 */
+    unpend: () => void;
+  } | null = null;
   /** 这桌此刻在候场还是正在打：按钮给不给、循环起不起，全照这个认 */
   private status: TableStatus = 'waiting';
   /**
@@ -271,8 +293,13 @@ export class App {
     const note = div('note');
     const cfgCol = div('cfg-col');
     const seatCol = div('seat-col');
+    // 同网别的桌：摆在邀请二维码下面，跟「这桌怎么进来」挨着，读起来是一段事
+    const peers = div('peers');
+    const peerList = div('peer-list');
+    const ask = button('找同网的桌', () => search(), 'btn mini');
+    peers.append(ask, peerList);
     cfgCol.append(cfg, note);
-    seatCol.append(rows, invite);
+    seatCol.append(rows, invite, peers);
     body.append(cfgCol, seatCol);
     const go = div('sheet-row');
     const out = div('sheet-row');
@@ -293,12 +320,67 @@ export class App {
     );
     // 断线重连那几轮退避最磨人：这一颗不等下一轮，当场把这条线拆了重接
     const retry = button('刷新', () => link.retry(), 'btn mini');
+    // 清账重开：这本账活在桌那边，重启也接得回来，页面上没有第二个入口——所以在候场厅补一颗。
+    // 摆在这一排而不是跟着开始那颗：它是「把打过的都扔了」，不该长得像主按钮
+    const clear = button(
+      '清账重开',
+      () =>
+        popup(
+          this.root,
+          '清账重开',
+          (body, close) => {
+            const p = div('note');
+            p.textContent =
+              `这桌已经打到第 ${gameNo} 局。清完账：局号回 1、跨局那本归零、牌面重摊，` +
+              '椅子一把不动，谁都还得再按一次开始。';
+            const row = div('sheet-row');
+            row.append(
+              button('确认清账', () => {
+                close();
+                link.send({ t: 'reset' });
+              }),
+              button('接着留着', () => close()),
+            );
+            body.append(p, row);
+          },
+          // 这是要把打过的都扔了：点空白处就关掉，误触一下代价太大
+          true,
+        ),
+      'btn mini',
+    );
     go.append(start);
-    out.append(leave, retry);
+    out.append(leave, retry, clear);
     foot.append(go, out);
     let seatsFor = -1;
     let cfgKey = '';
     let inviteKey: string | null = null;
+    // 那句「已经打到第几局」得照最新的账念，所以确认框里念的是最后一次快照里的那个号
+    let gameNo = 1;
+
+    /** 那颗「找同网的桌」按下去的样子：一句 find 递出去，回音由 paintRooms 收 */
+    function search(): void {
+      ask.disabled = true;
+      ask.textContent = '正在找…';
+      if (link.send({ t: 'find' })) return;
+      resetAsk();
+      note.textContent = '这条线还没连上，寻不了：按下面那颗「刷新」重连一下';
+    }
+    function resetAsk(): void {
+      ask.disabled = false;
+      ask.textContent = '找同网的桌';
+    }
+    /** 寻回来的桌：一行一句情况、一条地址一个链接。清空重画就行，这块不像座位行那样一秒一刷 */
+    function paintRooms(list: FoundRoom[], why: string): void {
+      resetAsk();
+      peerList.innerHTML = '';
+      for (const f of list) {
+        const url = roomUrl(f);
+        const row = div('peer-row');
+        row.append(div('peer-t', foundLine(f)), anchor(url, url, 'btn mini peer-link'));
+        peerList.append(row);
+      }
+      peerList.append(div('note', peerNote(list, why)));
+    }
 
     const fill = (l: Seats) => {
       this.status = l.status;
@@ -310,6 +392,7 @@ export class App {
       const sitting = l.seats.filter((s) => s.online && !s.queued).length;
       const short = l.players - sitting;
       head.textContent = waiting ? `候场厅 · 第 ${l.gameNo} 局还没开` : `牌桌正在打 · 第 ${l.gameNo} 局`;
+      gameNo = l.gameNo;
 
       // 配置：只有坐到了房主那一位、且还没开局才给改，其余人只读一行说明
       // hostSeat 也得算进键里：房主位一交接，那句「只有房主 P· 能改」就换了人，不重画会念错的
@@ -446,11 +529,13 @@ export class App {
             : `已坐下，等 ${seatName(l.hostSeat)} 开局`;
 
       start.hidden = !(waiting && isHost);
+      // 第 1 局还没开，这本账本来就是空的：这时候给一颗「清账重开」只是多一颗按了没用的
+      clear.hidden = !(waiting && isHost && l.gameNo > 1);
       start.textContent = short > 0 ? `开始这一局（${short} 个位子由电脑补）` : '开始这一局';
       // 出去的路看后面有没有牌桌：候场期这块面板底下是空的，合上它就只剩白屏，那种时候只给「回首页」
       leave.textContent = this.shell ? '看牌桌' : '回首页';
     };
-    this.room = { veil, note, fill };
+    this.room = { veil, note, fill, rooms: paintRooms, unpend: resetAsk };
     link.askLobby();
     // 谁进谁出得看得见：站在这儿就一秒问一遍
     this.poll = window.setInterval(() => link.askLobby(), 1000);
@@ -567,6 +652,10 @@ export class App {
         this.maybeStart();
         return;
       }
+      case 'rooms':
+        // 合上候场厅了这一句就没地方画，丢掉就行：那颗按钮本来也只在里面按得到
+        this.room?.rooms(m.rooms, m.why);
+        return;
       case 'reject': {
         const why = m.why;
         // 这一句是冲着椅子来的：断线那会儿位子被人坐了、或者这桌减了人。
@@ -576,8 +665,11 @@ export class App {
           this.standLocal(why);
           return;
         }
-        if (this.room) this.room.note.textContent = why;
-        else if (this.shell) toast(this.shell.toast, why, 1600);
+        if (this.room) {
+          this.room.note.textContent = why;
+          // 那句 find 被拒了（对着老宿主按的）：不放开这颗按钮，人就对着一颗灰的干等
+          this.room.unpend();
+        } else if (this.shell) toast(this.shell.toast, why, 1600);
         // 桌不认这一手，牌面也就没变、不会再推新的快照过来：循环还卡在等下一份，把按钮重新挂上，别让人干等
         if (this.seated && this.pull) void this.waitForTurn();
         return;

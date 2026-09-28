@@ -1,5 +1,6 @@
 /**
- * 联机层测试：桌（权威状态、令牌、代打、落盘）+ 线上一句话的形状闸门 + 打码快照 + 手写 WebSocket 服务端。
+ * 联机层测试：桌（权威状态、令牌、代打、落盘）+ 打码快照 + 手写 WebSocket 服务端。
+ * 线上一句字节怎么走那道门（gate）也在这一节测：三种下场——递到桌前、回句人话、只请这一条连接下桌。
  * 全部在 Node 里跑，不碰浏览器、不碰真网络，靠假时钟和假连接把整局打完。
  */
 import { createServer, type Server } from 'node:http';
@@ -7,7 +8,7 @@ import { connect as netConnect, type Socket } from 'node:net';
 import { pendingSeats, type Action, type GameState } from '../core/game.ts';
 import { openMatch } from '../core/match.ts';
 import { loadRules } from '../node/load_rules.ts';
-import { intFlag, setupFrom } from '../node/room.ts';
+import { gate, intFlag, setupFrom, type Verdict } from '../node/room.ts';
 import { Table, IDLE_MS, NICK_MAX, TAKEOVER_MS, type TableSetup } from '../net/table.ts';
 import {
   checkHost,
@@ -302,6 +303,10 @@ function pilesOf(state: GameState): number[][] {
   ok('候场厅那一句问座位表认', held({ t: 'lobby' })?.t === 'lobby');
   ok('按开始认', held({ t: 'start' })?.t === 'start');
   ok('让座认', held({ t: 'stand' })?.t === 'stand');
+  ok('寻同网桌那句认', held({ t: 'find' })?.t === 'find');
+  ok('寻桌那句不多带野字段', JSON.stringify(held({ t: 'find', 顺手: '抹掉' })) === '{"t":"find"}');
+  ok('清账重开那句认', held({ t: 'reset' })?.t === 'reset');
+  ok('清账那句不多带野字段', JSON.stringify(held({ t: 'reset', 顺手: '抹掉' })) === '{"t":"reset"}');
   ok('探活那句原样递（连它带的时间戳一起）', JSON.stringify(held({ t: 'ping', at: 1234 })) === '{"t":"ping","at":1234}');
   ok('带整数座位的入座认', held({ t: 'join', seat: 2, token: 'tk', nick: 'AB' })?.t === 'join');
   ok('没报代号也算一句完整的入座', held({ t: 'join', seat: 0, token: '' })?.t === 'join');
@@ -343,6 +348,63 @@ function pilesOf(state: GameState): number[][] {
   ok('null 不是话', why(null).length > 0);
   ok('一个字不是话', why('x').length > 0);
   ok('一个数不是话', why(42).length > 0);
+}
+
+// ───────────────────────── 线上来的字节过那道门：三种下场 ─────────────────────────
+
+{
+  // 上一节测的是闸本身，这一节测的是「收到字节 → 闸 → 该怎么办」这条缝：
+  // 原来这句判断写在 WebSocket 的回调里，一句看不懂的话能把整个房主进程带走（全桌掉线），
+  // 单拎成 gate 才有地方断言：抛错只关这一条线，认下来的那句才递到桌前。
+  const v = (text: string, seats = 4): Verdict => gate(text, seats, rules);
+  ok('合形的一句：原样递到桌前', (() => { const r = v('{"t":"start"}'); return 'msg' in r && r.msg.t === 'start'; })());
+  ok('问座位表那句递得到', (() => { const r = v('{"t":"lobby"}'); return 'msg' in r && r.msg.t === 'lobby'; })());
+  ok('寻同网桌那句递得到（不用先有椅子）', (() => { const r = v('{"t":"find"}'); return 'msg' in r && r.msg.t === 'find'; })());
+  ok('出牌那一手整个原样递（连牌 id 一起）', (() => {
+    const r = v('{"t":"act","action":{"kind":"lead","pieceIds":[7,3]}}');
+    return 'msg' in r && JSON.stringify(r.msg) === '{"t":"act","action":{"kind":"lead","pieceIds":[7,3]}}';
+  })());
+
+  const close = (text: string): string => {
+    const r = v(text);
+    return 'close' in r ? r.close : '';
+  };
+  const reject = (text: string): string => {
+    const r = v(text);
+    return 'reject' in r ? r.reject : '';
+  };
+
+  // 这三句都是能把房主打死的原话：JSON 本身就抛在 JSON.parse 里
+  ok('半截 JSON：关这一条线，不是全桌', close('{"t":"act","action":').includes('看不懂'));
+  ok('一个字节都没有：同样只关这一条线', close('').includes('看不懂'));
+  ok('不是 JSON 的一句闲话：也只关这一条线', close('把桌删了').includes('看不懂'));
+
+  ok('合 JSON 不合形：回一句人话，线留着', reject('{"t":"nope"}').length > 0);
+  ok('空对象回绝话', reject('{}').length > 0);
+  ok('数组也算合 JSON：走回绝那条，不拆线', reject('[1,2]').length > 0 && close('[1,2]') === '');
+  ok('座位超出这桌的椅子数：回绝话', reject('{"t":"join","seat":7,"token":""}').length > 0);
+  ok('人数不在档位上：回绝话', reject('{"t":"setup","players":3,"mode":"kou","level":"easy"}').length > 0);
+  ok('缺字段的野写法：回绝话而不是抛', reject('{"t":"act","action":{}}').length > 0);
+
+  // 撞进 catch 的那一路：闸里真抛了（rules 一被读就炸，替 checkHost 撞上没见过的形状那一类 bug）
+  // 也要只关这一条线，还带上为什么——不然终端上只剩「有人掉线了」
+  const bomb = {
+    get modes(): never {
+      throw new Error('撞上了没见过的形状');
+    },
+    get playerCounts(): never {
+      throw new Error('撞上了没见过的形状');
+    },
+  };
+  const exploded = (() => {
+    try {
+      return gate('{"t":"setup","players":2,"mode":"kou","level":"easy"}', 2, bomb);
+    } catch {
+      return null;
+    }
+  })();
+  ok('闸里抛出来的一句话：gate 自己咽下，只给一句 close', exploded !== null && 'close' in exploded);
+  ok('close 那句带上为什么（终端上看得见是哪句字节闹的）', exploded !== null && 'close' in exploded && exploded.close.includes('没见过的形状'));
 }
 
 // ───────────────────────── 打完那一局的账：谁来结、结几回 ─────────────────────────
@@ -434,6 +496,73 @@ function pilesOf(state: GameState): number[][] {
   ok('满两分钟那一秒桌动了手（宿主该落一次盘）', table.tick());
   ok('那把椅子已经还给这桌', !table.seatInfo()[1]!.taken && !table.seatInfo()[1]!.online);
   ok('还给桌之后旧令牌不再挡人，凭它照样坐得回', table.join(1, tok1).ok);
+}
+
+// ───────────────────────── 清账重开：账归零，椅子一把不动 ─────────────────────────
+
+{
+  // 这本账活在桌那边，重启也照 `table.json` 接得回来：页面上没有第二个入口，
+  // 「怎么这桌已经第 4 局了」就只能干瞪眼，所以候场厅得有一颗把账扔回 0 的
+  const { table, inbox, clock, logs } = makeTable({ mode: 'ming' });
+  const r1 = table.join(1, '');
+  table.join(0, '');
+  const tok1 = r1.msg?.t === 'welcome' ? r1.msg.token : '';
+  table.start(0);
+  finishDraft(table);
+  playToEnd(table, clock);
+  table.start(0);
+  finishDraft(table);
+  playToEnd(table, clock);
+  ok('清之前那两局确实压在账上', table.book.games === 2 && table.gameNo === 2, `${table.gameNo}｜${table.book.games}`);
+  ok('不是房主清不动，账照旧', !table.resetBook(1).ok && table.book.games === 2);
+  ok(
+    '房主清了：局号回 1，四条账目全归零',
+    table.resetBook(0).ok &&
+      table.gameNo === 1 &&
+      table.book.games === 0 &&
+      table.book.draws.every((d) => d === 0) &&
+      table.book.cards.every((c) => c === 0) &&
+      table.book.titles.every((t) => t === 0),
+    JSON.stringify(table.book),
+  );
+  ok('牌面重摊了：不再是打完那一份', table.state.phase !== 'over' && table.state.pieces.length === 32);
+  ok('候场厅里念得出来：这本是从零重新起的', logs.some((l) => l.includes('跨局那本归零')), logs.join('｜'));
+  ok('椅子一把没动：他那把还记在他名下', table.seatInfo()[1]!.taken && table.seatInfo()[1]!.online && tok1.length > 0);
+  ok(
+    '下去的快照跟着归零（客户端不许留着老账）',
+    inbox.last(1).book.games === 0 && inbox.last(1).gameNo === 1,
+    JSON.stringify([inbox.last(1).gameNo, inbox.last(1).book.games]),
+  );
+  const twin = Table.load(table.save(), () => {}, () => {}, clock.now);
+  ok('清完落盘、重启接回的还是清了的那本', twin.gameNo === 1 && twin.book.games === 0, JSON.stringify([twin.gameNo, twin.book.games]));
+  ok('凭旧令牌还坐得回来：清的是账，不是座位', table.join(1, tok1).ok);
+  // 归零不是把本子换成一张不会写字的白纸：清完接着打，这一局得照样落得进去
+  table.start(0);
+  finishDraft(table);
+  playToEnd(table, clock);
+  ok(
+    '清完接着打完这一局：账上一笔、局号还是第 1 局、32 枚不落别人头上',
+    table.book.games === 1 &&
+      table.gameNo === 1 &&
+      table.book.cards.reduce((a, c) => a + c, 0) === 32 &&
+      table.book.cards.length === 2,
+    JSON.stringify([table.gameNo, table.book.games, table.book.cards]),
+  );
+}
+
+{
+  // 开打之中不清：那一局的账还没落地，这会儿归零会让打完的人白打
+  const { table } = makeTable({ mode: 'kou' });
+  table.join(0, '');
+  table.join(1, '');
+  table.start(0);
+  finishDraft(table);
+  const r = table.resetBook(0);
+  ok(
+    '这一局正在打，清不动也不碰账',
+    !r.ok && table.gameNo === 1 && (r.why ?? '').includes('正在打'),
+    `${r.ok}｜${r.why ?? ''}`,
+  );
 }
 
 // ───────────────────────── 那本账只有一本：随快照下去，存档里跟着走 ─────────────────────────

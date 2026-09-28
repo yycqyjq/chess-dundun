@@ -1,13 +1,14 @@
 /**
  * 画面那层的守卫测试：ui.ts／pieces.ts／sound.ts 是全桌仅有的往 DOM 和浏览器存储上伸手的三处。
  * 没有浏览器（自动化那条路被拦着），所以这儿捏一套够它们用的假 DOM，
- * 钉住四件真会出事的事：别人自填的代号被当 HTML 解析、名字条的条数跟不上桌的人数、
- * 一桌子牌挪一拍逼一次重排（不是每张逼一次）、无痕模式的存储一碰就抛把整张桌白屏。
+ * 钉住五件真会出事的事：别人自填的代号被当 HTML 解析、名字条的条数跟不上桌的人数、
+ * 一桌子牌挪一拍逼一次重排（不是每张逼一次）、无痕模式的存储一碰就抛把整张桌白屏、
+ * 寻到的那条桌是一个真 href 的 <a>（不拿 JS 拼跳转、也不往 HTML 里写字）。
  *
  * 放 src/web 是有原因的：tsconfig.json 不带 DOM 库。
  * 全文件（连假元素自己）都不许用构造器参数属性——`--experimental-strip-types` 只抹类型，不改写赋值。
  */
-import { buildShell, button, card, paintChip, popup, rich, segment, toast, type Shell } from './ui.ts';
+import { anchor, buildShell, button, card, paintChip, popup, rich, segment, toast, type Shell } from './ui.ts';
 import { appVersion, homePanel, initialScreen, isLoopback } from './home.ts';
 import { buildPieceSet, buildRanks, type Piece } from '../core/pieces.ts';
 import { Pieces } from './pieces.ts';
@@ -444,6 +445,20 @@ function planOf(spotFor: (i: number) => Placed): Map<number, Placed> {
   const withVersion = F(homePanel(() => {}, () => {})).find('home-foot')!;
   ok('注上了就在脚上念 v0.1.0，那句联机提示还在', withVersion.find('v')!.raw === 'v0.1.0' && withVersion.children.length === 2, withVersion.children.map((c) => c.raw).join(','));
   delete G.__APP_VERSION__;
+}
+
+// ---------- 寻到的那张桌：一行情况加一条真能点的地址 ----------
+
+{
+  const url = 'http://192.168.1.41:5200/';
+  const el = F(anchor('2 人 · 扣棋', url, 'btn mini peer-link'));
+  const read = (k: string) => (el as unknown as Record<string, string>)[k];
+  ok('是一条 <a>：进桌就是让浏览器自己走一趟，不拿 JS 拼跳转', el.tag === 'a' && !(el.listeners.get('click') ?? []).length, `tag=${el.tag} 监听 ${el.listeners.get('click')?.length ?? 0} 个`);
+  ok('地址挂在 href 上，一个字都没往 HTML 里写', read('href') === url && el.countHtml() === 0, `${read('href')}｜${el.allHtml.join('｜')}`);
+  ok('屏幕上那行字点之前就看得见去哪儿', el.textContent === '2 人 · 扣棋' && read('href') !== el.textContent);
+  ok('名头带着 btn：跟旁边那颗按钮一样是个能点的东西', el.className === 'btn mini peer-link', el.className);
+  const plain = F(anchor(url, url));
+  ok('不点名头也是颗按钮的样子（候场厅那条默认值）', plain.className === 'btn', plain.className);
 }
 
 console.log(failures ? `\n${failures} 条没过` : '\n全部通过');

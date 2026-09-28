@@ -1,8 +1,9 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { readFileSync, existsSync, statSync } from 'node:fs';
-import { dirname, join, normalize, sep } from 'node:path';
+import { existsSync } from 'node:fs';
+import { dirname, join, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { hasFlag, intFlag, openRoom, type Room } from './room.ts';
+import { fileFor, notFound, sendFile } from './serve.ts';
 
 /**
  * 房主这一进程：同源把 dist/ 端出来，再在同一个端口上挂那张牌桌。
@@ -16,50 +17,14 @@ const DIST = normalize(join(ROOT, '..', '..', 'dist'));
 // 5199 让给 npm run dev，房主自己占 5200，两个端口能同时跑（但都写同一份存档，别同时开两桌）
 const DEFAULT_PORT = 5200;
 
-const MIME: Record<string, string> = {
-  '.html': 'text/html; charset=utf8',
-  '.js': 'text/javascript; charset=utf8',
-  '.css': 'text/css; charset=utf8',
-  '.json': 'application/json; charset=utf8',
-  '.svg': 'image/svg+xml',
-  '.png': 'image/png',
-  '.ico': 'image/x-icon',
-  '.txt': 'text/plain; charset=utf8',
-  '.woff2': 'font/woff2',
-};
-
-function fileFor(url: string): string | null {
-  // 转义写歪的路径（`/%25zz`、`/%e0%a0%80`）decode 就地抛，原来这一抛正好出在 http 回调上——
-  // 整个房主进程跟着没了，全桌掉线。认不出这串路径就当没这个文件，回 404 了事
-  let path: string;
-  try {
-    path = decodeURIComponent(url.split('?')[0] ?? '');
-  } catch {
-    return null;
-  }
-  const rel = path === '/' || path === '' ? 'index.html' : path.replace(/^\/+/, '');
-  const full = normalize(join(DIST, rel));
-  // 挡目录穿越：算出来的路径必须还在 dist 里头
-  if (full !== DIST && !full.startsWith(DIST + sep)) return null;
-  try {
-    return statSync(full).isFile() ? full : null;
-  } catch {
-    return null;
-  }
-}
-
 function serve(req: IncomingMessage, res: ServerResponse): void {
-  const file = fileFor(req.url ?? '/');
+  if (room.handleHttp(req, res)) return; // GET /whoami：同一条端口上问一声「这桌上有没有人」
+  const file = fileFor(req.url ?? '/', DIST);
   if (!file) {
-    res.writeHead(404, { 'content-type': 'text/plain; charset=utf8' });
-    res.end('没这个文件');
+    notFound(res);
     return;
   }
-  res.writeHead(200, {
-    'content-type': MIME[file.slice(file.lastIndexOf('.'))] ?? 'application/octet-stream',
-    'cache-control': 'no-store',
-  });
-  res.end(readFileSync(file));
+  sendFile(res, file);
 }
 
 const argv = process.argv.slice(2);
@@ -68,6 +33,8 @@ if (hasFlag(argv, 'help')) {
     'npm run host -- --players=2 --mode=kou --level=hard --port=5200 --seed=7 --save=table.json\n' +
       '  --fresh   丢掉上一次的牌桌，重开一桌\n' +
       '  --players/--mode/--level 只是这桌的默认值，进候场厅后房主随时能在页面上改\n' +
+      '  --no-discover   不参与同网寻呼（一台机器开两张桌时，其中一张加这个）\n' +
+      '  --discover-slot=0..7  寻呼换一槽守；默认按 http 端口落槽\n' +
       '  先 npm run build 把 dist/ 端出来，这进程只负责把它和 WebSocket 挂在同一个端口上\n' +
       '  只想改界面、顺手也要能联机：npm run dev 一条命令就够，那张桌就挂在 Vite 上',
   );
@@ -100,6 +67,11 @@ server.listen(port, '0.0.0.0', () => {
   } else {
     console.log('没找到局域网地址：这台机器好像没连上路由器');
   }
+  console.log(
+    room.discovery.on
+      ? `同网寻呼守 UDP ${room.discovery.port}（候场厅那颗「找同网的桌」就靠它）；想自己确认一下：curl ${urls[0] ?? `http://127.0.0.1:${port}/`}whoami`
+      : '同网寻呼没开（--no-discover）：别的设备只能照上面那条地址手动敲',
+  );
   console.log(
     `\n房主那位位子：P${(setup.hostSeat ?? 0) + 1}。人到位后在候场厅按「开始这一局」；` +
       `没坐的位子那一局由电脑补。\nCtrl-C 收杆，牌桌会存下来，下次接着打。\n`,
