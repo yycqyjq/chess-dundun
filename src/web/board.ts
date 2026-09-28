@@ -114,6 +114,21 @@ const FAN_DIP = 0.34;
  */
 const FAN_LEGIBLE = 0.7;
 
+/** 一块桌面矩形（左上角 + 宽高，像素）：摊开用它记「这一排还剩多长空地」和「哪块被牌摞占了」 */
+export interface SpreadBox {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/** 摊开后一张牌的落点：**未缩放方框**的左上角 + 该用的缩放（和 `Placed` 同一口径） */
+export interface SpreadSpot {
+  x: number;
+  y: number;
+  scale: number;
+}
+
 /** 摊开最多排几排：排数由 `handSpread` 按「哪一档把每张铺得最大」挑，这条只是上限 */
 const HS_ROWS = 3;
 
@@ -155,43 +170,139 @@ export function handCramped(n: number, board: Board): boolean {
 }
 
 /**
- * 手牌摊开后的格子：每张各占一格、互不遮挡，从底边名字条上方往上排。
- * 排数在 1..HS_ROWS 里挑「把每张铺得最大」那一档，横竖两头一起算：原来只看横向，
- * 于是窄屏 16 张三排铺不满那块地，最上面一排就直接爬到按钮条上（截图里就是它）。
- * 挑完还铺不进就整体缩——宁可牌小一圈，也不许盖住按钮条和别人的牌。
+ * 摊开手牌后的格子：每张各占一格、互不遮挡，从底边名字条上方往上排。
+ * **宽度优先**：一排放得下几张，按「这一排实际还剩多长空地」算——上面那几排根本不在角上收牌摞的
+ * 地盘里，就不该再为它们让出 `CORNER_KEEP` 那两个 cw（那口径是给扇形用的，扇形会往两边坠到角上）。
+ * 原来横向一律让位，于是手机竖屏 16 张被挤成三排小牌（每张大 0.70）；现在挑得到「两排、每张原样大」。
+ * 排数在 1..HS_ROWS 里挑「装得下又不必缩小的最少那档」；三排都按各自空地还装不下，才整体挤紧，
+ * 挤的时候各排照**自己那段空地**解间距（见 `tightFit`），每张仍各占一格，谁也不许盖住按钮条、名字条和别家的牌。
+ * `blocks` 是此刻摆在桌上的收牌摞视觉矩形（`layout` 里现成有），不传就当作没人挡路。
  * 返回的是**未缩放方框的左上角**（和 `layout` 的 Placed 同一口径）和该用的 `scale`。
  */
-export function handSpread(n: number, board: Board): { x: number; y: number; scale: number }[] {
+export function handSpread(n: number, board: Board, blocks: readonly SpreadBox[] = []): SpreadSpot[] {
+  if (n <= 0) return [];
   const full = pieceSize(board);
   const band = handBand(board);
-  const room = handRoom(full, board);
   const bandH = band.bottom - band.top;
   const stepFull = full * HS_GAP;
-  // 同一张牌在 r 排里能长多大：横着几列、竖着几排，谁紧听谁的；并列取排数少的那档
-  let rows = 1;
-  let step = 0;
+  for (let rows = 1; rows <= HS_ROWS; rows++) {
+    const step = Math.min(stepFull, bandH / rows);
+    const lanes = rowLanes(rows, step, full, band, board, blocks);
+    if (lanes.reduce((a, l) => a + laneCards(l.w, step, full), 0) >= n) return place(lanes, n, step, full);
+  }
+  // 三排都按各自空地装不下，才整体挤紧：每档排数各解一次「这个间距塞得下 n 张」，挑把每张铺得最大的那档
+  let bestStep = 0;
+  let lanes: SpreadBox[] = [];
   for (let r = 1; r <= HS_ROWS; r++) {
-    const each = Math.min(stepFull, room / Math.ceil(n / r), bandH / r);
-    if (each > step) {
-      rows = r;
-      step = each;
+    const tight = tightFit(r, n, full, band, board, blocks, stepFull);
+    if (tight.step > bestStep) {
+      bestStep = tight.step;
+      lanes = tight.lanes;
     }
   }
-  const cw = step / HS_GAP;
-  const scale = Math.min(1, cw / full);
-  const cols = Math.ceil(n / rows);
-  const out: { x: number; y: number; scale: number }[] = [];
-  for (let k = 0; k < n; k++) {
-    const row = Math.floor(k / cols);
-    const col = k % cols;
-    // 最后一排往往铺不满，按这一排实际几张居中，别整排靠左
-    const inRow = Math.min(cols, n - row * cols);
-    const spanW = (inRow - 1) * step;
-    out.push({
-      x: board.w / 2 - spanW / 2 + col * step - full / 2,
-      y: band.bottom - cw / 2 - row * step - full / 2,
-      scale,
-    });
+  return place(lanes, n, bestStep, full);
+}
+
+/**
+ * 挤紧一档：`r` 排要塞下 `n` 张，间距最大能到多少。
+ * 先按线性式解（各排空地总长 ÷ 每张要占的那一格），再按**整数**格数往回收一步——
+ * `laneCards` 会向下取整，某一排可能就因为这一点少塞一张。收到 1 像素还塞不下就收在 1 像素：
+ * 每张照样各占一格，只是小得没法看，那种桌面本来就装不下这副牌。
+ */
+function tightFit(
+  r: number,
+  n: number,
+  full: number,
+  band: { top: number; bottom: number },
+  board: Board,
+  blocks: readonly SpreadBox[],
+  stepFull: number,
+): { step: number; lanes: SpreadBox[] } {
+  let step = Math.min(stepFull, (band.bottom - band.top) / r);
+  let lanes = rowLanes(r, step, full, band, board, blocks);
+  for (let g = 0; g < 40 && lanes.reduce((a, l) => a + laneCards(l.w, step, full), 0) < n; g++) {
+    const room = lanes.reduce((a, l) => a + Math.max(0, l.w - full), 0);
+    // 按缺口解一次，解不动就逐像素退，保证这一轮一定在变小
+    const next = n > r ? Math.min(step - 1, room / (n - r)) : step - 1;
+    step = Math.max(1, next);
+    lanes = rowLanes(r, step, full, band, board, blocks);
+  }
+  return { step, lanes };
+}
+
+/** 一排（r 排里的第 i 排）从底往上排，占多高、剩下多长空地 */
+function rowLanes(
+  rows: number,
+  step: number,
+  full: number,
+  band: { top: number; bottom: number },
+  board: Board,
+  blocks: readonly SpreadBox[],
+): SpreadBox[] {
+  const out: SpreadBox[] = [];
+  for (let i = 0; i < rows; i++) {
+    const y = band.bottom - step / 2 - i * step - full / 2;
+    const lane = freeLane(board, { x: 0, y, w: board.w, h: full }, blocks);
+    // 空地窄到一张牌都放不下也得留一格，不然上面算排数时会以为这排是白送的
+    out.push(lane.w < full ? { x: board.w / 2 - full / 2, y: lane.y, w: full, h: lane.h } : lane);
+  }
+  return out;
+}
+
+/** 这一排里最长的一段没被牌摞占住的横条（裁在桌面内） */
+function freeLane(board: Board, row: SpreadBox, blocks: readonly SpreadBox[]): SpreadBox {
+  const hit = blocks
+    .filter((b) => b.y < row.y + row.h && row.y < b.y + b.h)
+    .map((b) => ({ x: Math.max(0, Math.min(board.w, b.x)), w: Math.max(0, Math.min(board.w, b.x + b.w) - Math.max(0, b.x)) }))
+    .sort((a, c) => a.x - c.x);
+  // 起点是「还没量到任何空地」＝0 宽，不是整桌宽：拿整桌宽当起点，后面每一段空隙都比不过它，
+  // 结果这一条永远返回整桌——牌摞白让位，摊开的牌照样压在摞上
+  let at = 0;
+  let best = { x: 0, w: 0 };
+  for (const b of hit) {
+    if (b.x - at > best.w) best = { x: at, w: b.x - at };
+    at = Math.max(at, b.x + b.w);
+  }
+  if (board.w - at > best.w) best = { x: at, w: board.w - at };
+  return { x: best.x, y: row.y, w: best.w, h: row.h };
+}
+
+/** 一段宽 `room` 的空地按 `step` 的心距塞得下几张牌 */
+function laneCards(room: number, step: number, full: number): number {
+  return room < full ? 0 : Math.floor((room - full) / step) + 1;
+}
+
+/** 从最底那排往上填，每排最多塞它自己那段空地；最上面那排兜住剩下的，保证每张都有一格 */
+function place(lanes: SpreadBox[], n: number, step: number, full: number): SpreadSpot[] {
+  const scale = Math.min(1, step / HS_GAP / full);
+  const counts: number[] = [];
+  let left = n;
+  for (let i = 0; i < lanes.length; i++) {
+    const c = i === lanes.length - 1 ? left : Math.min(left, laneCards(lanes[i]!.w, step, full));
+    counts.push(c);
+    left -= c;
+  }
+  const out: SpreadSpot[] = [];
+  for (let i = 0; i < lanes.length; i++) {
+    const lane = lanes[i]!;
+    const spanW = (counts[i]! - 1) * step;
+    const cx = lane.x + lane.w / 2;
+    for (let col = 0; col < counts[i]!; col++) out.push({ x: cx - spanW / 2 + col * step - full / 2, y: lane.y, scale });
+  }
+  return out;
+}
+
+/**
+ * 摆在桌上的收牌摞各占哪块视觉矩形：`Placed` 的 x/y 是**未缩放**方框的左上角，牌按 `scale` 绕中心缩，
+ * 所以真正占地的矩形要在四周各收进 `(cw - cw*scale)/2`。摊开让位按这块实的算，不按虚的方框。
+ * 只认摞（含刚收下、还在亮的那张）——桌面那一墩在桌心，够不着底边这条带。
+ */
+function pileBoxes(placed: Iterable<Placed>, cw: number): SpreadBox[] {
+  const out: SpreadBox[] = [];
+  for (const p of placed) {
+    if (p.cls !== 'pile' && p.cls !== 'won') continue;
+    const w = cw * p.scale;
+    out.push({ x: p.x + (cw - w) / 2, y: p.y + (cw - w) / 2, w, h: w });
   }
   return out;
 }
@@ -510,8 +621,10 @@ export function layout(state: GameState, view: TableView, board: Board): Map<num
       const lift = fanLift(board);
       const step = fanStep(hand.length, board);
       const fans = fan(hand, (id) => state.byId.get(id)!.tier);
-      // 摊开态：选完收回扇形，这中间它就是全桌最该看清的一块，z 给到最高，别被别家的坨压住
-      const spots = view.spread ? handSpread(fans.length, board) : null;
+      // 摊开态：选完收回扇形，这中间它就是全桌最该看清的一块，z 给到最高，别被别家的坨压住。
+      // 挡路的是此刻摆在桌上的收牌摞（含刚收下那张），按它们的**视觉框**给摊开的牌让位——
+      // 光让 `handSpread` 自己猜不出摞在哪，四家地盘长短各不一样。
+      const spots = view.spread ? handSpread(fans.length, board, pileBoxes(out.values(), cw)) : null;
       fans.forEach((f, k) => {
         const s = spots?.[k];
         put(f.id, {

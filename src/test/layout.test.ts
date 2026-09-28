@@ -5,7 +5,7 @@
  */
 import { apply, createGame, type GameState } from '../core/game.ts';
 import { loadRules } from '../node/load_rules.ts';
-import { bottomBand, ctrlLift, fanStep, handBand, handCramped, labelBand, labelBands, LABEL_X, layout, PILE_SIZE, pieceSize, stackSpots, type Board, type TableView } from '../web/board.ts';
+import { bottomBand, ctrlLift, fanStep, handBand, handCramped, handSpread, labelBand, labelBands, LABEL_X, layout, PILE_SIZE, pieceSize, stackSpots, type Board, type TableView } from '../web/board.ts';
 
 let failures = 0;
 function ok(name: string, condition: boolean, detail = ''): void {
@@ -477,6 +477,93 @@ for (const { name, board } of BOARDS) {
         `互压 ${overlap}｜出界 ${out}｜越界带 ${escape}｜压按钮条 ${onCtrl}｜压名字条 ${onLabel}｜压摞 ${onPile}｜spread 标记 ${scaled}/${ids.length}`,
       );
     }
+  }
+}
+
+console.log('\n摊开是宽度优先：先挑「排数少、每张原样大」那一档，再按各排实际空地让位');
+{
+  /** 摊开这一排给我看：几张、排几排、每张铺多大 */
+  const spreadOf = (state: GameState, view: TableView, board: Board, ids: number[]) => {
+    const cw = pieceSize(board);
+    const box = boxes(state, view, board);
+    const rs = ids.map((id) => box.get(id)!);
+    return {
+      rows: new Set(rs.map((r) => r.y.toFixed(1))).size,
+      // 每张的视觉宽 ÷ 原尺寸＝1 就是没缩小过
+      size: rs.reduce((m, r) => Math.min(m, r.w / cw), 1),
+    };
+  };
+  // ① 没人挡路时 8 张就该一排铺完：让位只让给**真的摆了摞**的那一段，不该为角上那两块空地盘先缩
+  for (const { name, board } of BOARDS) {
+    const { state, view } = midGame(4, 25, [8, 8, 8, 8], [0, 0, 0, 0]);
+    view.spread = true;
+    const { rows, size } = spreadOf(state, view, board, state.hands[0]!);
+    ok(`${name}｜8 张桌上没摞 一排铺完且每张原样大`, rows === 1 && size === 1, `排 ${rows}｜每张 ${size.toFixed(2)}`);
+  }
+  // ② 16 张是最挤的那一档（2 人局起手）：竖屏挑得到两排原样大，挤成三排小牌就是 bug
+  for (const { name, board } of BOARDS) {
+    const { state, view } = midGame(2, 26, [16, 16], [0, 0]);
+    view.spread = true;
+    const { rows, size } = spreadOf(state, view, board, state.hands[0]!);
+    ok(`${name}｜16 张桌上没摞 不超过两排、每张原样大`, rows <= 2 && size === 1, `排 ${rows}｜每张 ${size.toFixed(2)}`);
+  }
+  // ③ 有摞挡着也一样不许缩：让的是摞实际占的那一段，不是整桌一律让出 CORNER_KEEP
+  for (const { name, board } of BOARDS) {
+    for (const players of [2, 4] as const) {
+      for (const [hands, piles] of CASES[players]!.slice(1, 3)) {
+        const { state, view } = midGame(players, 27, hands, piles);
+        view.spread = true;
+        const ids = state.hands[0]!;
+        const { rows, size } = spreadOf(state, view, board, ids);
+        ok(`${name}｜${players} 人 手 ${ids.length} 摞 ${piles.join('/')} 摊开不缩牌`, size === 1, `排 ${rows}｜每张 ${size.toFixed(2)}`);
+      }
+    }
+  }
+}
+
+console.log('\n摊开挤紧那一档：空地被吃掉一大半时，每张仍各占一格、不许压到挡路的、不许出带');
+{
+  // 真桌面不会有这么大一块摞，但「挤紧」那一档只有这种极端才走得到——走不到的分支等于没闸，
+  // 所以这里造一面墙直接把它逼出来（墙占掉左边多宽，两种都得走一遍）
+  const board: Board = { w: 304, h: 430 };
+  const full = pieceSize(board);
+  const band = handBand(board);
+  for (const wallW of [150, 210]) {
+    const wall = { x: 0, y: band.top - 40, w: wallW, h: band.bottom - band.top + 80 };
+    const spots = handSpread(16, board, [wall]);
+    const rs = spots.map((s) => {
+      const w = full * s.scale;
+      return { x: s.x + (full - w) / 2, y: s.y + (full - w) / 2, w, h: w };
+    });
+    let overlap = 0;
+    for (let i = 0; i < rs.length; i++) for (let j = i + 1; j < rs.length; j++) if (hits(rs[i]!, rs[j]!)) overlap++;
+    const onWall = rs.filter((r) => hits(r, wall)).length;
+    const escape = rs.filter((r) => r.y < band.top - 0.5 || r.y + r.h > band.bottom + 0.5).length;
+    const out = rs.filter((r) => r.x < -1 || r.x + r.w > board.w + 1).length;
+    const slots = new Set(rs.map((r) => `${r.x.toFixed(1)}#${r.y.toFixed(1)}`)).size;
+    ok(
+      `极窄 304×430｜左边占掉 ${wallW} 摊开 16 张`,
+      rs.length === 16 && overlap === 0 && onWall === 0 && escape === 0 && out === 0 && slots === 16,
+      `张数 ${rs.length}｜互压 ${overlap}｜压墙 ${onWall}｜越带 ${escape}｜出界 ${out}｜各自一格 ${slots}/16`,
+    );
+  }
+  // 空地窄到连一张牌都塞不下的那种桌面（墙占到只剩 24 像素）：这时候**没有**不压墙的摆法，
+  // 只能保证一张都不少、一张都不重叠——少一张就是界面上少了个元素，比压住一角的摞严重得多
+  {
+    const wall = { x: 0, y: band.top - 40, w: 280, h: band.bottom - band.top + 80 };
+    const spots = handSpread(16, board, [wall]);
+    const rs = spots.map((s) => {
+      const w = full * s.scale;
+      return { x: s.x + (full - w) / 2, y: s.y + (full - w) / 2, w, h: w };
+    });
+    let overlap = 0;
+    for (let i = 0; i < rs.length; i++) for (let j = i + 1; j < rs.length; j++) if (hits(rs[i]!, rs[j]!)) overlap++;
+    const slots = new Set(rs.map((r) => `${r.x.toFixed(2)}#${r.y.toFixed(2)}`)).size;
+    ok(
+      '极窄 304×430｜只剩 24 像素空地 摊开 16 张一张不少',
+      rs.length === 16 && overlap === 0 && slots === 16,
+      `张数 ${rs.length}｜互压 ${overlap}｜各自一格 ${slots}/16`,
+    );
   }
 }
 
