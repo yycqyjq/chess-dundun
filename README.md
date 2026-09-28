@@ -70,6 +70,20 @@ npm run selfplay -- --players=4 --mode=ming --games=400   # 电脑对电脑出�
 
 上面这些规则一条一条都写在 [`rules.json`](rules.json) 里——职级、每级几张、一摞几张、明暗两栏怎么比、并列怎么判，改它就行，不用动代码。
 
+## 改动怎么验
+
+```bash
+npm run verify        # 类型检查 + 规则自检 + 八套测试，一条命令
+npm run smoke         # 端到端冒烟：host 和 dev 各起一桌，两条 WebSocket 当两台设备走完一整局
+npm run knives        # 负向验证：一处一处把闸拆掉，看那套测试红不红、红的是不是它该红的那句
+```
+
+后两条都只在系统临时目录里抄一份仓库再跑，绝不往仓库根的 `table.json` 上落一笔——那张桌一开桌就会写存档（`src/node/room.ts` 的 `openRoom`），拿仓库本体量等于拿你正在打的那一桌当试验品。
+
+- `npm run smoke:host -- --port=5345 --no-discover`：只量房主那条跑法（端的是 `dist/`，改过界面要先 `npm run build`）；`smoke:dev` 量挂在 Vite 上的那张桌。端口有人坐着、或者寻呼那个 UDP 槽被占着，工具会拒绝开量——那样的绿没意义。
+- `npm run knives -- spread --only=3`：只跑那把刀。刀谱在 `tools/knives/*.mjs`，每把刀都钉着一句专属断言文案（`expect`），只拆一处；改完源码补测试时，顺手在那儿加一条。
+- 画面到底长什么样（手机竖屏摊开、二维码扫开、真机上寻不寻得到别的桌）这里量不到，只有浏览器自动化那条路是拦着的——得你自己开 `npm run dev` 拿设备看。
+
 ## 许可证
 
 MIT，见 [LICENSE](LICENSE)。
