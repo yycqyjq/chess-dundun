@@ -63,7 +63,7 @@ export default {
       note: '清账这句不念出来（人不知道账动过）',
       from: "    this.log('房主清了这桌的账：跨局那本归零，牌面重摊，下一副算第 1 局');",
       to: "    this.log('房主按了一下');",
-      expect: '候场厅里念得出来',
+      expect: '候场厅里念得出来：这本是从零重新起的',
     },
     {
       rel: 'src/net/wire.ts',

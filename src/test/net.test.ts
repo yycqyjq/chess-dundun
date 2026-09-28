@@ -356,7 +356,16 @@ function pilesOf(state: GameState): number[][] {
   // 上一节测的是闸本身，这一节测的是「收到字节 → 闸 → 该怎么办」这条缝：
   // 原来这句判断写在 WebSocket 的回调里，一句看不懂的话能把整个房主进程带走（全桌掉线），
   // 单拎成 gate 才有地方断言：抛错只关这一条线，认下来的那句才递到桌前。
-  const v = (text: string, seats = 4): Verdict => gate(text, seats, rules);
+  // 闸要是自己抛（兜底被拆掉那种），这句得当场记一条 ✗：不然整套连红字都打不出来，
+  // 那把刀只量得到退出码，等于没闸。
+  const v = (text: string, seats = 4): Verdict => {
+    try {
+      return gate(text, seats, rules);
+    } catch (e) {
+      ok('看不懂的那句该由 gate 咽下，不是抛出来', false, String((e as Error).message));
+      return { close: '' };
+    }
+  };
   ok('合形的一句：原样递到桌前', (() => { const r = v('{"t":"start"}'); return 'msg' in r && r.msg.t === 'start'; })());
   ok('问座位表那句递得到', (() => { const r = v('{"t":"lobby"}'); return 'msg' in r && r.msg.t === 'lobby'; })());
   ok('寻同网桌那句递得到（不用先有椅子）', (() => { const r = v('{"t":"find"}'); return 'msg' in r && r.msg.t === 'find'; })());

@@ -340,12 +340,22 @@ console.log('\n端 dist 那一小段：这串 URL 该落到哪个文件');
     writeFileSync(join(home, 'secretx'), '屋外那张文件真在：闸拆了就该被翻出来');
     writeFileSync(join(dist, 'index.html'), '<html></html>');
     writeFileSync(join(dist, 'app.js'), '//');
+    // 歪转义那两句撞的就是 serve.ts 里那句 catch：闸要是自己抛，得当场记一条 ✗，
+    // 不然整套连红字都打不出来，这把刀只量得到退出码。
+    const nullFor = (url: string): boolean => {
+      try {
+        return fileFor(url, dist) === null;
+      } catch (e) {
+        ok('歪转义不该把 fileFor 抛穿', false, String((e as Error).message));
+        return false;
+      }
+    };
     ok('根路径就是 index.html', fileFor('/', dist) === join(dist, 'index.html'));
     ok('空路径也算它', fileFor('', dist) === join(dist, 'index.html'));
     ok('带查询串的认得（build 出来的资源都带 hash）', fileFor('/app.js?v=7', dist) === join(dist, 'app.js'));
     ok('斜杠堆几个都落回 dist 里', fileFor('///app.js', dist) === join(dist, 'app.js'));
-    ok('转义写歪的一句：回 null，不当场抛', fileFor('/%25zz', dist) === null);
-    ok('半截 UTF-8 也一样', fileFor('/%e0%a0', dist) === null);
+    ok('转义写歪的一句：回 null，不当场抛', nullFor('/%25zz'));
+    ok('半截 UTF-8 也一样', nullFor('/%e0%a0'));
     // 这三句是那道穿越闸的全部：屋外那张文件真读得动，闸一拆就回得出路径
     ok('../ 出得去就回 null', fileFor('/../secretx', dist) === null);
     ok('一路往上再绕回来也不给', fileFor('/assets/../../secretx', dist) === null);

@@ -24,17 +24,17 @@ export default {
     },
     {
       rel: 'src/web/board.ts',
-      note: 'freeLane 的空地起点回成整桌宽（让位是个摆设）',
+      note: 'freeLane 的空地起点回成整桌宽（让位是个摆设）｜和第 4 把共用那句红字',
       from: '  let best = { x: 0, w: 0 };',
       to: '  let best = { x: 0, w: board.w };',
-      expect: '压摞',
+      expect: '手机竖屏 390×844｜2 人 手 8/8 摊开 8 张',
     },
     {
       rel: 'src/web/board.ts',
-      note: '调用点不把摞喂给摊开（谁挡路它不知道）',
+      note: '调用点不把摞喂给摊开（谁挡路它不知道）｜和第 3 把共用那句红字',
       from: 'handSpread(fans.length, board, pileBoxes(out.values(), cw))',
       to: 'handSpread(fans.length, board)',
-      expect: '压摞',
+      expect: '手机竖屏 390×844｜2 人 手 8/8 摊开 8 张',
     },
     {
       rel: 'src/web/board.ts',
