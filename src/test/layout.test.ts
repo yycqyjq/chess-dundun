@@ -521,6 +521,21 @@ console.log('\n摊开是宽度优先：先挑「排数少、每张原样大」�
   }
 }
 
+console.log('\n摊开地盘自己那两条边：上界是按钮条底边那条缝（不许爬进条里、也不许多让一块地），下界是名字条上沿');
+for (const { name, board } of BOARDS) {
+  const band = handBand(board);
+  // 按钮条的底边自己再算一遍（和上面那组同一口径），别拿被测代码的 band 当尺子——那样它自己错就量不出
+  const barBottom = board.h - ctrlLift(board);
+  const climb = barBottom - band.top; // 正数＝上界爬进按钮条的地里
+  const waste = band.top - barBottom; // 让过头＝白留一条比缝还宽的空地，牌摊不开
+  const offBottom = band.bottom - (board.h - labelBand());
+  ok(
+    `${name}｜摊开地盘上界只让一条缝、下界正落在名字条上沿`,
+    climb <= 0.5 && waste <= 12 && Math.abs(offBottom) <= 0.5,
+    `爬进条里 ${climb.toFixed(1)}｜多让 ${waste.toFixed(1)}｜下界偏出 ${offBottom.toFixed(1)}`,
+  );
+}
+
 console.log('\n摊开挤紧那一档：空地被吃掉一大半时，每张仍各占一格、不许压到挡路的、不许出带');
 {
   // 真桌面不会有这么大一块摞，但「挤紧」那一档只有这种极端才走得到——走不到的分支等于没闸，

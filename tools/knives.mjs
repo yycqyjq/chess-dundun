@@ -12,7 +12,9 @@
  * 一张谱子里可以混着跑两套闸（某把刀自己写 `suite` 盖掉谱子级的），b8/b12/b13 原本就是这么写的。
  * `crash: true` 给那种「拆了闸整套当场抛、连 ✗ 都打不出来」的刀——这种红法只认退出码，别当成断言钉住了。
  * `belt: true` 反过来：拆的是**冗余保险**（旁边还有别的闸挡着），单拆一道本该谁也看不见，
- * 所以**绿才算合格**；它红了说明那层冗余其实正在挡事，报告里照实写成一条发现，既不冒充成绩也不算没见红。
+ * 所以**绿才算合格**；它红了说明那层冗余其实正在挡事——报告里单列一句「belt 红了 ✗」，不混进「几把刀全红」那句成绩，
+ * 但整架退出码算它没过（2026-09-29 在一份临时副本里实测过这条分支：把某把 belt 的刀口改成有真后果，
+ * 那一句照打、末尾另点一行、退出码 1；红了就搬回普通刀补 `expect`）。
  *
  * 三条老坑各防一手，都写死在这儿：
  * ① 每把刀前整个回档（`syncSrc`）：只补单个文件会被上一把刀的伤口连坐；
@@ -127,6 +129,7 @@ if (!files.length) {
 // 仓库干净不干净先记一笔：跑完一个字节都不该变（副本在临时目录里，动不到他家）
 const dirtyBefore = run('git', ['status', '--porcelain'], { cwd: REPO }).out;
 let problems = 0;
+let beltReds = 0;
 for (const f of files) {
   const spec = (await import(pathToFileURL(join(KNIVES_DIR, f)).href)).default;
   const { abort, rows } = await runSpec(spec, only);
@@ -138,7 +141,9 @@ for (const f of files) {
   console.log(`\n${spec.title}：每把刀只拆一处`);
   for (const r of rows) {
     console.log(report(spec, r, verbose));
-    // belt 那档不参与「没见红」的账：它绿才是对的，红了另算一条发现
+    // belt 那档不参与「没见红」的账：它绿才是对的
+    if (r.belt && !r.pass) beltReds++;
+    // 红了的那几把另算：它说明那层冗余其实正在挡事，得搬回普通刀补 expect——不是成绩，也不能悄悄过去
     if (!r.missing && !r.belt && !r.pass) problems++;
   }
   problems += rows.filter((r) => r.missing).length;
@@ -147,5 +152,6 @@ const dirtyAfter = run('git', ['status', '--porcelain'], { cwd: REPO }).out;
 const repoUntouched = dirtyBefore === dirtyAfter;
 console.log(`\n${repoUntouched ? '仓库没动 ✓' : '仓库被动过 ✗'}  git status --porcelain 前后${repoUntouched ? '一致' : '不一致'}${repoUntouched ? '' : `\n前：${dirtyBefore}\n后：${dirtyAfter}`}`);
 const total = files.length;
-console.log(problems ? `\n${total} 张刀谱里 ${problems} 处没见红\n` : `\n${total} 张刀谱的刀都钉在了它要防的那句上，仓库一个字没动\n`);
-process.exit(problems || !repoUntouched ? 1 : 0);
+if (beltReds) console.log(`\n${beltReds} 把 belt 红了：那几层冗余其实正在挡事——照报告那句搬回普通刀补上 expect，别留在 belt 那一档`);
+console.log(problems ? `\n${total} 张刀谱里 ${problems} 处没见红\n` : `\n${total} 张刀谱的刀都钉在了它要防的那句上${beltReds ? `（另有 ${beltReds} 把 belt 红了，见上）` : ''}，仓库一个字没动\n`);
+process.exit(problems || beltReds || !repoUntouched ? 1 : 0);

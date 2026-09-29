@@ -46,6 +46,14 @@ class Client {
     }
     throw new Error(`等 ${want.join('/')} 超时，收到的最后一句是 ${JSON.stringify(this.got[this.got.length - 1])?.slice(0, 160)}`);
   }
+  /** 和 until 一样，只是等不到回 null——留给「断言本身就是等一句回音」的那几处，别让整个冒烟被一次沉默带走 */
+  async tryUntil(want, extra = null, ms = 5000) {
+    try {
+      return await this.until(want, extra, ms);
+    } catch {
+      return null;
+    }
+  }
   /** 最新收到的那一份快照（不消耗） */
   view() {
     for (let i = this.got.length - 1; i >= 0; i--) if (this.got[i].t === 'state') return this.got[i];
@@ -414,14 +422,20 @@ ok('重连那份不带要演的手，seq 比断线前大', rs.last === null && r
   // 客户端按下那一下就算递出去了，等不到回音就一直挂着——桌必须当场回一句
   const x = new Client();
   await x.open;
-  x.ask({ t: 'act', action: { kind: 'draw', stackIdx: 0 } });
-  ok('没坐下递动作：桌当场回一句「还没坐下」', (await x.until(['reject'])).why.includes('还没坐下'));
-  x.ask({ t: 'setup', players: 4 });
-  ok('没坐下改配置：同样回一句', (await x.until(['reject'])).why.includes('还没坐下'));
-  x.ask({ t: 'stand' });
-  ok('没坐下让座：照样回一句', (await x.until(['reject'])).why.includes('还没坐下'));
-  x.ask({ t: 'lobby' });
-  ok('没坐下问座位表照样答得出来', (await x.until(['seats'])).players > 0);
+  const hears = async (label, ask, want, judge, ms = 5000) => {
+    x.ask(ask);
+    const m = await x.tryUntil(want, null, ms);
+    ok(label, m !== null && judge(m), m ? JSON.stringify(m).slice(0, 120) : `等 ${want.join('/')} 超时：桌把这一句咽成了沉默`);
+  };
+  await hears(
+    '没坐下递动作：桌当场回一句「还没坐下」',
+    { t: 'act', action: { kind: 'draw', stackIdx: 0 } },
+    ['reject'],
+    (m) => m.why.includes('还没坐下'),
+  );
+  await hears('没坐下改配置：同样回一句', { t: 'setup', players: 4 }, ['reject'], (m) => m.why.includes('还没坐下'));
+  await hears('没坐下让座：照样回一句', { t: 'stand' }, ['reject'], (m) => m.why.includes('还没坐下'));
+  await hears('没坐下问座位表照样答得出来', { t: 'lobby' }, ['seats'], (m) => m.players > 0, 2000);
   x.close();
 }
 
