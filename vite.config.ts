@@ -36,7 +36,7 @@ function tableRoom(): Plugin {
         const d = room?.discovery;
         console.log(
           d?.on
-            ? `  同网寻呼守 UDP ${d.port}：候场厅按「找同网的桌」往这块网问一圈。`
+            ? `  同网寻呼守 UDP ${d.port}：别的设备上同网桌列表那一页每五秒往这块网问一圈。`
             : '  同网寻呼没开：这台机器上寻不到别的桌，只能手动敲地址。',
         );
         console.log(`  人到位后由房主在候场厅按「开始这一局」；没坐的位子那一局由电脑补。\n`);

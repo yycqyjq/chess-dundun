@@ -192,5 +192,25 @@ console.log('\n首页：盖住屏幕的一层，两条入口竖着排，宽屏�
   ok('版本那一行不截断（white-space: normal，也没写 ellipsis）', val('.home-foot .v', 'white-space') === 'normal' && (val('.home-foot .v', 'text-overflow') ?? 'none') === 'none');
 }
 
+// ---------- 同网桌只有列表页那一处（批10） ----------
+
+console.log('\n同网桌只摆一处：候场厅里不留第二份');
+{
+  // 还是这一套路：app.ts 经 `rules.json?raw` 进不了 node 测试，那就测这份文件自己写了什么
+  const app = readFileSync(new URL('../web/app.ts', import.meta.url), 'utf8');
+  ok(
+    '椅子那一列只收座位表和邀请，不挂同网桌容器',
+    !/seatCol\.append\([^)]*peer/.test(app),
+    (app.match(/^\s*seatCol\.append\(.*$/m) ?? ['‹找不到那一行›'])[0],
+  );
+  // 按这颗的人要的是「换张桌看看」，出口就是列表页那一个；候场厅里再摆一份是两处入口同一件事
+  ok('整页没有那颗「找同网的桌」（同网桌的入口只剩列表页）', !app.includes('找同网的桌'));
+  ok('CSS 里也没留那条没人使的 .peers', !RULES.some((r) => r.sel.includes('.peers')), RULES.filter((r) => r.sel.includes('.peers')).map((r) => r.sel).join('｜'));
+  // 「只剩你一个」这一句得是数出来的活人，不是「我坐过椅子」；桌那头同一口径还有一道（见 net 那节的 disband）
+  ok('那颗「退出这桌」认的是「只剩一个活人」', /this\.exitTable\(this\.seated && alive <= 1\)/.test(app), '‹没找到那句›');
+  // 散桌递的是这一句，不是清账那句：递错了账归零、椅子却一把不动，人还坐在那张要散的桌上
+  ok('确认那颗递的是 disband 那句', /send\(\{ t: 'disband' \}\)/.test(app), '‹没找到那句›');
+}
+
 console.log(failures ? `\n${failures} 条没过` : '\n全部通过');
 process.exit(failures ? 1 : 0);

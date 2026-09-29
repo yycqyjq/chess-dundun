@@ -32,7 +32,9 @@ export interface Sock {
   on(ev: 'message', cb: (msg: Buffer, rinfo: { address: string; port: number }) => void): void;
   on(ev: 'error', cb: (e: Error) => void): void;
   bind(port: number, address: string, cb?: () => void): void;
-  send(msg: Buffer, port: number, address: string): void;
+  /** 广播那一档：Node 的 dgram 默认**关着**，不开着往广播地址发就是 EACCES */
+  setBroadcast(flag: boolean): void;
+  send(msg: Buffer, port: number, address: string, cb?: (err?: Error | null) => void): void;
   close(): void;
 }
 
@@ -71,6 +73,8 @@ export function openDiscovery(o: DiscOpts, sock?: Sock, wait: (ms: number) => Pr
   const port = announcePortOfSlot(o.slot ?? slotOf(o.httpPort));
   let lastAt = -Infinity;
   let why = '';
+  /** 广播发不出去那句真原因（EACCES 之类）：空清单时拿它顶掉那句「多半是 AP 隔离」 */
+  let blocked = '';
   let socket: Sock | null = null;
   let shut = false;
 
@@ -94,12 +98,25 @@ export function openDiscovery(o: DiscOpts, sock?: Sock, wait: (ms: number) => Pr
     for (const target of targetsFor(o.nets)) {
       for (const p of sweepPorts()) {
         try {
-          socket?.send(msg, p, target);
-        } catch {
+          socket?.send(msg, p, target, (err) => {
+            if (err && !blocked) blocked = err.message;
+          });
+        } catch (e) {
           // 这块网卡发不出去（没连上、或者系统不让）：剩下的口子照问，别为一块网卡把整轮废掉
+          if (!blocked) blocked = (e as Error).message;
         }
       }
     }
+  }
+
+  /**
+   * 空清单那句说明：有真原因（广播发不出去）就念真原因。
+   * 底下那句兜底是「多半是这块网不让设备之间互访」（`net/discover.ts` 的 `peerNote`），
+   * 自己发不出去却让人去查路由器，是拿假原因把人往沟里带。
+   */
+  function explain(rooms: FoundRoom[], reason: string): string {
+    if (rooms.length || reason || !blocked) return reason;
+    return `广播发不出去（${blocked}）：这块网卡发不了广播。照上面那条局域网地址手动敲，一样进得来`;
   }
 
   function attach(s: Sock): void {
@@ -112,14 +129,13 @@ export function openDiscovery(o: DiscOpts, sock?: Sock, wait: (ms: number) => Pr
       o.log(why);
       socket = null;
     });
+    // 绑上了才开广播：没 bind 就调 setBroadcast 是 EBADF（2026-09-29 量的）。
+    // 而 dgram 默认**不开**广播——不开的话 ask() 往 255.255.255.255 和定向广播发的那 16 个包当场 EACCES，
+    // 只剩回环那一路发得出去；回环绕回来的正是它自己，`isMine` 一抹，同网桌列表就永远是一张空清单。
+    s.bind(port, '0.0.0.0', () => s.setBroadcast(true));
   }
 
-  if (sock) attach(sock);
-  else {
-    const s = createSocket({ type: 'udp4', reuseAddr: true }) as Socket;
-    attach(s);
-    s.bind(port, '0.0.0.0');
-  }
+  attach(sock ?? (createSocket({ type: 'udp4', reuseAddr: true }) as Socket));
 
   return {
     port,
@@ -129,12 +145,20 @@ export function openDiscovery(o: DiscOpts, sock?: Sock, wait: (ms: number) => Pr
      */
     find() {
       const now = Date.now();
-      if (!socket) return Promise.resolve({ rooms: listFound(cache, now, mine), why });
-      if (!sweepDue(lastAt, now))
-        return Promise.resolve({ rooms: listFound(cache, now, mine), why: why || '刚寻过一轮，这是上一轮听见的' });
+      if (!socket) {
+        const rooms = listFound(cache, now, mine);
+        return Promise.resolve({ rooms, why: explain(rooms, why) });
+      }
+      if (!sweepDue(lastAt, now)) {
+        const rooms = listFound(cache, now, mine);
+        return Promise.resolve({ rooms, why: explain(rooms, why || '刚寻过一轮，这是上一轮听见的') });
+      }
       lastAt = now;
       ask();
-      return wait(SWEEP_MS).then(() => ({ rooms: listFound(cache, Date.now(), mine), why }));
+      return wait(SWEEP_MS).then(() => {
+        const rooms = listFound(cache, Date.now(), mine);
+        return { rooms, why: explain(rooms, why) };
+      });
     },
     close() {
       shut = true;

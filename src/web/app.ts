@@ -12,7 +12,7 @@ import { pieceLabel, type Piece } from '../core/pieces.ts';
 import { nextDrawer, openMatch, recordGame, winners, type MatchBook } from '../core/match.ts';
 import { mulberry32 } from '../core/rng.ts';
 import { viewFor } from '../core/view.ts';
-import { deckFor, hydrate, type SeatInfo, type Seats, type TableStatus, type ToClient } from '../net/wire.ts';
+import { aliveSeats, deckFor, hydrate, type SeatInfo, type Seats, type TableStatus, type ToClient } from '../net/wire.ts';
 import { LIST_REFRESH_MS, peerNote, type FoundRoom } from '../net/discover.ts';
 import { ctrlLift, handCramped, labelBands, LABEL_W, layout, pieceSize, stackSpots, type Board, type TableView } from './board.ts';
 import { autoSeat, homePanel, initialScreen, isLoopback, roomRow } from './home.ts';
@@ -162,13 +162,10 @@ export class App {
     veil: HTMLElement;
     note: HTMLElement;
     fill: (l: Seats) => void;
-    /** 寻回来的同网桌：宿主答一句才动这一块，不跟座位表那一秒一起闪 */
-    rooms: (rooms: FoundRoom[], why: string) => void;
-    /** 找桌那一句被拒了（老宿主不认这句 find）：把那颗按钮放回来，别让人对着灰按钮等 */
-    unpend: () => void;
   } | null = null;
   /**
-   * 同网桌列表那一层；null = 没站着。寻一句的答话落在这儿还是落在候场厅，就照这个认。
+   * 同网桌列表那一层；null = 没站着。同网别的桌只有这一处看得见——候场厅里不摆第二份：
+   * 人已经在这张桌上了，桌上还挂一条「去别的桌」是拿别人的桌晃自己。
    * timer 是那一轮一轮自己问出去的 find——这一层不在的时候必须停掉，别隔着两层朝这块网打包。
    */
   private list: { veil: HTMLElement; rows: HTMLElement; note: HTMLElement } | null = null;
@@ -378,13 +375,8 @@ export class App {
     const note = div('note');
     const cfgCol = div('cfg-col');
     const seatCol = div('seat-col');
-    // 同网别的桌：摆在邀请二维码下面，跟「这桌怎么进来」挨着，读起来是一段事
-    const peers = div('peers');
-    const peerList = div('peer-list');
-    const ask = button('找同网的桌', () => search(), 'btn mini');
-    peers.append(ask, peerList);
     cfgCol.append(cfg, note);
-    seatCol.append(rows, invite, peers);
+    seatCol.append(rows, invite);
     body.append(cfgCol, seatCol);
     const go = div('sheet-row');
     const out = div('sheet-row');
@@ -393,13 +385,10 @@ export class App {
     const leave = button(
       '',
       () => {
-        // 后面有牌桌就是「回去看一眼」，没有就是退回首页——差的正是这条连接
-        const toBoard = !!this.shell;
-        this.closeRoom();
-        if (toBoard) return;
-        this.link?.close();
-        this.link = null;
-        this.showHome();
+        // 后面有牌桌就是「回去看一眼」，合上面板就行；没有牌桌才是真退出这条连接
+        if (this.shell) return this.closeRoom();
+        // 只剩自己一个活人时先问一句再散桌（口径见 exitTable）；站着看桌的人不该有这一问
+        this.exitTable(this.seated && alive <= 1);
       },
       'btn mini',
     );
@@ -441,26 +430,8 @@ export class App {
     let inviteKey: string | null = null;
     // 那句「已经打到第几局」得照最新的账念，所以确认框里念的是最后一次快照里的那个号
     let gameNo = 1;
-
-    /** 那颗「找同网的桌」按下去的样子：一句 find 递出去，回音由 paintRooms 收 */
-    function search(): void {
-      ask.disabled = true;
-      ask.textContent = '正在找…';
-      if (link.send({ t: 'find' })) return;
-      resetAsk();
-      note.textContent = '这条线还没连上，寻不了：按下面那颗「刷新」重连一下';
-    }
-    function resetAsk(): void {
-      ask.disabled = false;
-      ask.textContent = '找同网的桌';
-    }
-    /** 寻回来的桌：一行一句情况、一条地址一个链接。清空重画就行，这块不像座位行那样一秒一刷 */
-    function paintRooms(list: FoundRoom[], why: string): void {
-      resetAsk();
-      peerList.innerHTML = '';
-      for (const f of list) peerList.append(roomRow(f));
-      peerList.append(div('note', peerNote(list, why)));
-    }
+    // 这桌此刻几个活人连着（一秒一份座位表带着走）：退出那颗要不要先问一句，就看这个数
+    let alive = 0;
 
     const fill = (l: Seats) => {
       this.status = l.status;
@@ -473,6 +444,7 @@ export class App {
       const short = l.players - sitting;
       head.textContent = waiting ? `候场厅 · 第 ${l.gameNo} 局还没开` : `牌桌正在打 · 第 ${l.gameNo} 局`;
       gameNo = l.gameNo;
+      alive = aliveSeats(l.seats);
 
       // 配置：只有坐到了房主那一位、且还没开局才给改，其余人只读一行说明
       // hostSeat 也得算进键里：房主位一交接，那句「只有房主 P· 能改」就换了人，不重画会念错的
@@ -612,8 +584,8 @@ export class App {
       // 第 1 局还没开，这本账本来就是空的：这时候给一颗「清账重开」只是多一颗按了没用的
       clear.hidden = !(waiting && isHost && l.gameNo > 1);
       start.textContent = short > 0 ? `开始这一局（${short} 个位子由电脑补）` : '开始这一局';
-      // 出去的路看后面有没有牌桌：候场期这块面板底下是空的，合上它就只剩白屏，那种时候只给「回首页」
-      leave.textContent = this.shell ? '看牌桌' : '回首页';
+      // 身后有牌桌就只是「把面板合上、回去看一眼」，没有牌桌才是真退出这条连接（口径见 exitTable）
+      leave.textContent = this.shell ? '看牌桌' : '退出这桌';
 
       // 进门这一趟替人挑一把椅子，只在头一份座位表上发生一次（口径见 home.ts 的 autoSeat）。
       // 已经坐着就不再挑：断线重连那条路自己会凭令牌认回原来那把，插进来只会把人挪错位子
@@ -626,7 +598,7 @@ export class App {
         }
       }
     };
-    this.room = { veil, note, fill, rooms: paintRooms, unpend: resetAsk };
+    this.room = { veil, note, fill };
     link.askLobby();
     // 谁进谁出得看得见：站在这儿就一秒问一遍
     this.poll = window.setInterval(() => link.askLobby(), 1000);
@@ -746,9 +718,8 @@ export class App {
         return;
       }
       case 'rooms':
-        // 答话落在人站着的那一层：列表页整块重画，候场厅里就画进那颗按钮底下那一块
+        // 答话只落在列表页那一层：候场厅里不摆同网桌，人已经在这张桌上，就别再拿别人的桌晃他
         this.paintList(m.rooms, m.why);
-        this.room?.rooms(m.rooms, m.why);
         return;
       case 'reject': {
         const why = m.why;
@@ -761,8 +732,6 @@ export class App {
         }
         if (this.room) {
           this.room.note.textContent = why;
-          // 那句 find 被拒了（对着老宿主按的）：不放开这颗按钮，人就对着一颗灰的干等
-          this.room.unpend();
         } else if (this.list) {
           // 站在列表页上寻的那一句被拒（对着老宿主按的）：话写在清单底下，别让它咽进沉默
           this.list.note.textContent = why;
@@ -970,8 +939,12 @@ export class App {
     );
   }
 
-  /** 离桌：连接断掉，椅子还留给这个令牌，从首页那颗「同一张网」回来凭它还坐这一位 */
-  private leaveTable(): void {
+  /**
+   * 离桌：连接断掉，椅子还留给这个令牌，回来凭它还坐这一位。
+   * 落点默认首页（牌桌右上角那张「离桌」走这条，那句提示就是这么念的）；
+   * 候场厅那颗「退出这桌」要直接落在同网桌列表——按这颗的人要的正是「换张桌看看」，别再让他绕一次首页。
+   */
+  private leaveTable(toList = false): void {
     this.resultClose?.();
     this.gen++; // 占着的那条循环散伙，sitGen 一老，候场厅里再坐下才起得来
     this.link?.close();
@@ -981,7 +954,39 @@ export class App {
     this.seats = null;
     this.liveActs = [];
     this.netNote = '';
-    this.showHome();
+    if (toList) this.showList();
+    else this.showHome();
+  }
+
+  /**
+   * 候场厅那颗「退出这桌」。桌上还有别的活人连着就悄悄退（椅子留给令牌，回来还坐这一位）；
+   * 只剩自己一个时才先问一句——这一退就把这桌散了：椅子连令牌一起收，存档也抹掉，重启宿主接不回来。
+   * 「只剩自己一个」由座位表数出来（`aliveSeats`，同一句判断在桌那头还有一道），页面上这句只是给人看的。
+   */
+  private exitTable(alone: boolean): void {
+    if (!alone) return this.leaveTable(true);
+    popup(
+      this.root,
+      '退出这桌',
+      (body, close) => {
+        const p = div('note');
+        p.textContent =
+          '这桌只剩你一个活人。退出去这桌就散了：椅子、令牌、局号和跨局那本账全清空，存档也抹掉——重启这台机器上的桌也接不回来。';
+        const row = div('sheet-row');
+        row.append(
+          button('确认散桌', () => {
+            close();
+            // 先把这一句递出去再拆线：同一只 socket 上帧是排队走的，桌那头先收到 disband、再收到关闭
+            this.link?.send({ t: 'disband' });
+            this.leaveTable(true);
+          }),
+          button('再坐会儿', () => close()),
+        );
+        body.append(p, row);
+      },
+      // 这是要把整桌收掉：点空白处就关掉，误触一下代价太大
+      true,
+    );
   }
 
   private async match(setup: Setup): Promise<void> {

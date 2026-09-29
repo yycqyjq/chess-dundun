@@ -64,7 +64,10 @@ export async function smokeOnce({ kind = 'host', port = null, dir = null, discov
 
     let code = 0;
     let out = '';
-    const smoke = spawn('node', [SMOKE, `--port=${http}`, ...(discover ? [] : ['--no-discover'])], { stdio: ['ignore', 'pipe', 'inherit'] });
+    // --dir 是副本根：散桌那一段要对着硬盘量「这份存档真没了」，量的一直是这一份，绝不是他自己那间仓库里的
+    const smoke = spawn('node', [SMOKE, `--port=${http}`, `--dir=${cwd}`, ...(discover ? [] : ['--no-discover'])], {
+      stdio: ['ignore', 'pipe', 'inherit'],
+    });
     smoke.stdout.on('data', (b) => (out += b));
     // 等 close 不等 exit：不等 stdout 排空，最后那几句断言会被截掉
     await new Promise((r) => smoke.on('close', (c) => ((code = c ?? 1), r())));

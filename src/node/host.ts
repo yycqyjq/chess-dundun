@@ -69,7 +69,7 @@ server.listen(port, '0.0.0.0', () => {
   }
   console.log(
     room.discovery.on
-      ? `同网寻呼守 UDP ${room.discovery.port}（候场厅那颗「找同网的桌」就靠它）；想自己确认一下：curl ${urls[0] ?? `http://127.0.0.1:${port}/`}whoami`
+      ? `同网寻呼守 UDP ${room.discovery.port}（别的设备上同网桌列表那一页就靠它）；想自己确认一下：curl ${urls[0] ?? `http://127.0.0.1:${port}/`}whoami`
       : '同网寻呼没开（--no-discover）：别的设备只能照上面那条地址手动敲',
   );
   console.log(

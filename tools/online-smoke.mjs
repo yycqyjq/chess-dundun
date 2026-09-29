@@ -4,11 +4,20 @@
  *
  * 起桌和收尾不在这儿，在 `tools/smoke.mjs`（那一层负责抄副本、挑空端口、把孙进程插干净）。
  *   node tools/online-smoke.mjs --port=5345
+ *   node tools/online-smoke.mjs --port=5345 --dir=/tmp/chess-dev-ab12cd   # 副本根，散桌那一段要对着它量硬盘
  *   node tools/online-smoke.mjs --port=5346 --no-discover   # 这桌的寻呼被关着，量的是那一句兜底回话
  */
 const argv = process.argv.slice(2);
 const PORT = Number((argv.find((a) => a.startsWith('--port=')) ?? '--port=5321').split('=')[1]);
 const BASE = `http://127.0.0.1:${PORT}/`;
+/**
+ * 副本根：散桌那一段要量「硬盘上那份存档真没了」。这儿只读不写，写的动作是桌自己（跑在同一个副本里）做的。
+ * 没传就当量不到，那条断言自己红——别拿「跳过」蒙成绿。
+ */
+const DIR = (argv.find((a) => a.startsWith('--dir=')) ?? '').slice('--dir='.length) || null;
+const { existsSync } = await import('node:fs');
+const { join } = await import('node:path');
+const SAVE_IN = DIR ? join(DIR, 'table.json') : null;
 let fails = 0;
 const ok = (name, cond, detail = '') => {
   if (cond) console.log(`  ✓ ${name}`);
@@ -593,6 +602,152 @@ if (DISC) {
   ok('清账之后桌照用得动（这句绝不能把房主进程带走）', seats.players > 0 && seats.seats.length === seats.players, JSON.stringify([seats.players, seats.seats.length]));
   host.close();
   guest.close();
+}
+
+// ───────────────────────── 散桌：人走了桌跟着没，硬盘上那一份也一起没 ─────────────────────────
+
+/**
+ * 照着桌递的合法着法把这一局走到头：坐着的两位自己递，电脑那两把由桌那一秒一次的表催。
+ * 走到头回 {over:true}；被拒或等不到回音就把原因带回来，让调用方自己记一条红——这儿抛错会带走整场冒烟。
+ */
+async function playToEnd(clients, maxMs = 120_000) {
+  const at = Date.now();
+  let moves = 0;
+  while (Date.now() - at < maxMs) {
+    if (clients[0].view().status !== 'playing') return { over: true, moves };
+    let pushed = false;
+    for (const c of clients) {
+      const st = c.view();
+      if (st.status !== 'playing' || st.acts.length === 0) continue;
+      const act = st.acts[0];
+      c.ask({ t: 'act', action: act });
+      const reply = await c.tryUntil(['state', 'reject'], (m) => m.t === 'reject' || m.seq > st.seq, 5000);
+      if (!reply) return { over: false, moves, why: `递了桌给的一手之后一个字都没回｜${JSON.stringify(act)}` };
+      if (reply.t === 'reject')
+        return { over: false, moves, why: `桌自己给的合法一手被拒：${reply.why}｜${JSON.stringify(act)}` };
+      moves++;
+      pushed = true;
+    }
+    // 这会儿轮到电脑那两把：它们归桌那一秒一次的表推，别空转
+    if (!pushed) await new Promise((r) => setTimeout(r, 200));
+  }
+  return { over: false, moves, why: `等了 ${maxMs / 1000} 秒、走了 ${moves} 手还没走到头` };
+}
+
+{
+  const stranger = new Client();
+  await stranger.open;
+  stranger.ask({ t: 'disband' });
+  const noSeat = await stranger.tryUntil(['reject'], null, 3000);
+  ok(
+    '还没坐下就按散桌：回一句人话，不是默默散成一张空桌',
+    noSeat !== null && noSeat.t === 'reject' && noSeat.why.includes('坐下'),
+    noSeat ? JSON.stringify(noSeat).slice(0, 120) : '等 reject 超时：桌把这一句咽成了沉默',
+  );
+  stranger.close();
+
+  // 前面那几段把两把椅子坐过又还了，这儿照旧凭令牌坐回来——散桌认的是「活人」这一数，挂着令牌不算
+  const host = new Client();
+  await host.open;
+  await host.sit(HOST, w0.token, 'H3');
+  const guest = new Client();
+  await guest.open;
+  await guest.sit(GUEST, token, 'G3');
+
+  guest.ask({ t: 'disband' });
+  const notHost = await guest.tryUntil(['reject'], null, 3000);
+  ok(
+    '不是房主散不动：房主那道闸排在「正在打」前面，两位各自红在自己要防的那句上',
+    notHost !== null && notHost.why.includes('房主'),
+    notHost ? JSON.stringify(notHost).slice(0, 120) : '等 reject 超时：桌把这一句咽成了沉默',
+  );
+  host.ask({ t: 'disband' });
+  const midGame = await host.tryUntil(['reject'], null, 3000);
+  ok(
+    '这一局正打着：房主也散不动，那句说的是「打完再散」',
+    midGame !== null && midGame.why.includes('正在打'),
+    midGame ? JSON.stringify(midGame).slice(0, 120) : '等 reject 超时：桌把这一句咽成了沉默',
+  );
+  host.ask({ t: 'lobby' });
+  const untouched = await host.tryUntil(['seats'], null, 3000);
+  ok(
+    '被挡下来那一下椅子一把没动：两位还各自坐着自己的位子',
+    untouched !== null && untouched.seats[HOST].taken === true && untouched.seats[GUEST].taken === true,
+    untouched ? JSON.stringify(untouched.seats).slice(0, 160) : '等 seats 超时',
+  );
+
+  const run = await playToEnd([host, guest]);
+  ok(
+    '两位把这一局 4 人的走到头（散桌得先退回候场厅才量得到）',
+    run.over,
+    run.over ? `${run.moves} 手` : run.why,
+  );
+
+  host.ask({ t: 'disband' });
+  const crowd = await host.tryUntil(['reject'], null, 3000);
+  ok(
+    '桌上还连着两个活人：房主也散不动，要散得等别人先走',
+    crowd !== null && crowd.why.includes('还有 1 个活人连着'),
+    crowd ? JSON.stringify(crowd).slice(0, 140) : '等 reject 超时：桌把这一句咽成了沉默',
+  );
+
+  // 那位走了：这一桌只剩一个活人，「只剩你一个」和「你是房主」到这一刻才合成同一件事
+  guest.close();
+  await new Promise((r) => setTimeout(r, 400));
+
+  // 量「没了」之前先证明它本来在：不证明的话，「没了」有可能是打从一开始就没写过
+  ok(
+    '散之前副本根上那份存档确实在（不然是假绿）',
+    SAVE_IN !== null && existsSync(SAVE_IN),
+    SAVE_IN ?? '没传 --dir，量不到硬盘',
+  );
+  // 散之前先故意排一次合批落盘：`setup` 递一个本来就是这个值的难度，桌什么都不改，但 room.ts 那句 persist
+  // 照排（300 毫秒之后写盘）。这两句中间不 await，才真赶在同一个窗口里——散桌要连这颗排队的延时一起掐掉，
+  // 掐不掉就是「这一秒看不见、半秒后又躺回一份接得回来的旧账」
+  host.ask({ t: 'setup', level: 'easy' });
+  host.ask({ t: 'disband' });
+  const cut = await host.tryUntil(['closed'], null, 4000);
+  ok(
+    '只剩一个活人的房主散得动：散完这条线是桌主动关的，不是我们自己掐的',
+    cut !== null && cut.t === 'closed',
+    cut ? JSON.stringify(cut) : '等不到桌关线：那句散桌被默默咽掉了，或者桌压根没认这句',
+  );
+  // 多等半秒再看硬盘：落盘是合批的，三秒前那一下改动要是没被掐掉，正好在这半秒里把空桌又写回来
+  await new Promise((r) => setTimeout(r, 500));
+  ok(
+    '散完硬盘上那份存档真没了（排队的合批也没把它写回来）',
+    SAVE_IN !== null && !existsSync(SAVE_IN) && /\/chess-/.test(DIR ?? ''),
+    SAVE_IN ? `量的根 ${SAVE_IN}` : '没传 --dir，量不到硬盘',
+  );
+
+  // 散的是桌，不是房主进程：那条地址照旧在，新来的人坐得下、开局按得动
+  const n1 = new Client();
+  await n1.open;
+  n1.ask({ t: 'join', seat: HOST, token: w0.token, nick: 'OLD' });
+  const stale = await n1.tryUntil(['welcome'], null, 3000);
+  ok(
+    '散掉那把的旧令牌回来只是个新人：坐得下，发的是一把新令牌',
+    stale !== null && stale.seat === HOST && stale.token !== w0.token,
+    stale ? JSON.stringify(stale).slice(0, 140) : '等 welcome 超时',
+  );
+  const clean = await n1.tryUntil(['state'], null, 3000);
+  ok(
+    '散完那一份是一张全新空桌：局号回 1、账清零、别的椅子一把没人坐过',
+    clean !== null &&
+      clean.status === 'waiting' &&
+      clean.gameNo === 1 &&
+      clean.book.games === 0 &&
+      clean.seats.slice(1).every((s) => s.taken === false),
+    clean ? JSON.stringify(clean).slice(0, 160) : '等 state 超时',
+  );
+  n1.ask({ t: 'start' });
+  const again = await n1.tryUntil(['state'], (m) => m.status === 'playing', 3000);
+  ok(
+    '散完那张空桌按得动开局（这句绝不能把房主进程一起带走）',
+    again !== null && again.gameNo === 1 && again.view.players === 4,
+    again ? JSON.stringify(again).slice(0, 140) : '等 playing 超时：散完的桌按不动开始',
+  );
+  n1.close();
 }
 
 await new Promise((r) => setTimeout(r, 200));

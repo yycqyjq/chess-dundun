@@ -13,6 +13,7 @@ import { nextDrawer, openMatch, recordGame, type MatchBook } from '../core/match
 import { mulberry32 } from '../core/rng.ts';
 import { viewFor } from '../core/view.ts';
 import {
+  aliveSeats,
   fullWire,
   hydrate,
   snapshotFor,
@@ -386,6 +387,35 @@ export class Table {
     this.maskFrom = -1;
     this.last = null;
     this.log('房主清了这桌的账：跨局那本归零，牌面重摊，下一副算第 1 局');
+    this.push();
+    return { ok: true };
+  }
+
+  /**
+   * 散桌：候场厅那位房主要走，而这桌只剩他一个活人连着——椅子就该跟着人一起收，别空挂一张桌在这块网上。
+   * 跟 `resetBook` 差在椅子上：那一条椅子一把不动，这一条连令牌一起收。
+   * 局号回 1、跨局那本换新、牌面重摊、每一位洗回没人坐过的样子；存档由宿主那头抹掉（在这儿抹不着硬盘）。
+   * 「只剩一个活人」和「只剩你一个」是同一件事：房主位跟着活人走，桌上有别的活人时轮不到他代持，
+   * 那道 guard 就把这句挡在 `aliveSeats` 上——不靠调用方自报「就我一个人」。
+   */
+  disband(bySeat: number): { ok: boolean; why?: string } {
+    if (bySeat !== (this.setup.hostSeat ?? 0)) return { ok: false, why: '只有房主能散这桌' };
+    if (this.status === 'playing') return { ok: false, why: '这一局正在打，打完再散' };
+    const alive = aliveSeats(this.slots);
+    if (alive > 1) return { ok: false, why: `这桌还有 ${alive - 1} 个活人连着：要散得等别人先走` };
+    this.slots = this.freshSlots(this.setup.players);
+    this.setup.hostSeat = this.setup.homeSeat ?? 0;
+    this.book = openMatch(this.setup.players);
+    this.gameNo = 1;
+    this.state = createGame({
+      ...this.setup,
+      seed: (this.rng() * 0x100000000) | 0,
+      // 不带 drawer：跟 resetBook 同一个理——账都归零了，「上一局的赢家」指的已经不是任何一个人
+    });
+    this.booked = false;
+    this.maskFrom = -1;
+    this.last = null;
+    this.log('这桌散了：局号回 1、账清零、椅子一把不剩（存档那头由宿主抹掉，重启接不回来）');
     this.push();
     return { ok: true };
   }

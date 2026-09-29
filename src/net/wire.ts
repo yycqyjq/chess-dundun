@@ -98,6 +98,16 @@ export interface Lobby {
  */
 export type Seats = Lobby & { lan: string[] };
 
+/**
+ * 这桌此刻还有几个活人连着。掉线的那把椅子不算（`leave` 把 `online` 抹了，令牌还留着），
+ * 电脑补的位也不算（压根没连着）——跟底栏那句「还差几个位子」不是一回事：
+ * 那一数是开局前还空几把椅子，这一数是现在真有人在敲这条线，所以 `queued` 那位得算进来
+ * （他人在，只是这一局由电脑代打）。候场厅那颗「退出这桌」要不要先问一句，就看这个数。
+ */
+export function aliveSeats(seats: Pick<SeatInfo, 'online'>[]): number {
+  return seats.filter((s) => s.online).length;
+}
+
 export type ToHost =
   | { t: 'lobby' }
   /** `seat` 是 -1 就表示「给我挑一把空椅」，由桌当场定（自动入座用的就是这一路） */
@@ -111,6 +121,11 @@ export type ToHost =
   | { t: 'stand' }
   /** 房主在候场厅清了这桌的账：局号回 1、跨局那本整本换新，椅子一张不动 */
   | { t: 'reset' }
+  /**
+   * 房主散掉自己这桌：这桌只剩他一个活人，退出就没必要把椅子空挂着。
+   * 跟 `reset` 差在椅子上——那一条椅子一把不动，这一条连令牌一起收，宿主那头把存档也抹掉。
+   */
+  | { t: 'disband' }
   /** 寻一圈同网别的桌：浏览器发不了 UDP，这一趟由本机那个宿主代跑（口径见 src/net/discover.ts） */
   | { t: 'find' }
   | { t: 'ping'; at: number };
@@ -159,6 +174,8 @@ export function checkHost(raw: unknown, seats: number, rules: Pick<Rules, 'modes
       return { t: 'find' };
     case 'reset':
       return { t: 'reset' };
+    case 'disband':
+      return { t: 'disband' };
     case 'ping':
       return typeof raw.at === 'number' && Number.isFinite(raw.at) ? { t: 'ping', at: raw.at } : 'ping 的那个数说不清';
     case 'join': {

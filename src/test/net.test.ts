@@ -11,6 +11,7 @@ import { loadRules } from '../node/load_rules.ts';
 import { gate, intFlag, setupFrom, type Verdict } from '../node/room.ts';
 import { Table, IDLE_MS, NICK_MAX, TAKEOVER_MS, type TableSetup } from '../net/table.ts';
 import {
+  aliveSeats,
   checkHost,
   fullWire,
   hydrate,
@@ -354,6 +355,8 @@ function pilesOf(state: GameState): number[][] {
   ok('寻桌那句不多带野字段', JSON.stringify(held({ t: 'find', 顺手: '抹掉' })) === '{"t":"find"}');
   ok('清账重开那句认', held({ t: 'reset' })?.t === 'reset');
   ok('清账那句不多带野字段', JSON.stringify(held({ t: 'reset', 顺手: '抹掉' })) === '{"t":"reset"}');
+  ok('散桌那句认', held({ t: 'disband' })?.t === 'disband');
+  ok('散桌那句不多带野字段', JSON.stringify(held({ t: 'disband', 顺手: '抹掉' })) === '{"t":"disband"}');
   ok('探活那句原样递（连它带的时间戳一起）', JSON.stringify(held({ t: 'ping', at: 1234 })) === '{"t":"ping","at":1234}');
   ok('带整数座位的入座认', held({ t: 'join', seat: 2, token: 'tk', nick: 'AB' })?.t === 'join');
   ok('没报代号也算一句完整的入座', held({ t: 'join', seat: 0, token: '' })?.t === 'join');
@@ -622,6 +625,110 @@ function pilesOf(state: GameState): number[][] {
     !r.ok && table.gameNo === 1 && (r.why ?? '').includes('正在打'),
     `${r.ok}｜${r.why ?? ''}`,
   );
+}
+
+// ───────────────────────── 散桌：只剩一个活人时，人走桌也跟着没 ─────────────────────────
+
+{
+  // 「这桌还有几个人」得有个准数：掉线那把椅子令牌还留着、电脑补的位压根没连着，两个都不算活人；
+  // 候场厅那颗「退出这桌」要不要先问一句、桌那头让不让散，都看这一数
+  ok('两个人连着就是两个：这时候谁都不该替全桌做主', aliveSeats([{ online: true }, { online: true }]) === 2);
+  ok('掉线那把不算活人（椅子还挂着令牌，可人不在这条线上）', aliveSeats([{ online: true }, { online: false }]) === 1);
+  ok('一把椅子都没人连着就是 0', aliveSeats([{ online: false }, { online: false }]) === 0);
+  ok('电脑补的位在这一数里压根不占一格（座位表没给 online 的那几把）', aliveSeats([{ online: true }]) === 1);
+}
+
+{
+  // 候场厅那颗「退出这桌」落在这张桌上的样子：只剩房主一个活人，退出就该连椅子一起收，
+  // 别在局域网里空挂一张没人坐、账还压着的桌——下一台设备寻到它，看见的是「这桌已经第 3 局」
+  const { table, clock, logs } = makeTable({ mode: 'ming' });
+  const r1 = table.join(1, '');
+  table.join(0, '');
+  const tok1 = r1.msg?.t === 'welcome' ? r1.msg.token : '';
+  table.start(0);
+  finishDraft(table);
+  playToEnd(table, clock);
+  table.start(0);
+  finishDraft(table);
+  playToEnd(table, clock);
+  ok(
+    '散之前：两局压在账上、两个活人连着',
+    table.book.games === 2 && aliveSeats(table.seatInfo()) === 2,
+    `${table.book.games}｜${aliveSeats(table.seatInfo())}`,
+  );
+  const crowd = table.disband(0);
+  ok(
+    '还连着别人：房主也散不动，要散得等别人先走',
+    !crowd.ok && (crowd.why ?? '').includes('还有 1 个活人连着') && table.book.games === 2,
+    `${crowd.ok}｜${crowd.why ?? ''}`,
+  );
+  ok('挡下来什么都没动：他那把椅子还记在他名下', table.seatInfo()[1]!.taken && table.seatInfo()[1]!.online);
+  table.leave(1);
+  ok('那位走了才轮到散：这桌只剩一个活人', aliveSeats(table.seatInfo()) === 1);
+  // 这一问排在人走之后：桌上还连着两个人时，非房主那句会被「还有别人」那道闸一起挡下，看不出是房主闸救的
+  ok('不是房主散不动，账照旧', !table.disband(1).ok && table.book.games === 2);
+  const gone = table.disband(0);
+  ok(
+    '房主散了：局号回 1，四条账目全归零',
+    gone.ok && table.gameNo === 1 && table.book.games === 0 && table.book.cards.every((c) => c === 0) && table.book.titles.every((t) => t === 0),
+    `${gone.ok}｜${JSON.stringify(table.book)}`,
+  );
+  ok('椅子一把不剩：令牌也跟着收（不像清账那样留着人）', table.seatInfo().every((s) => !s.taken && !s.online), JSON.stringify(table.seatInfo()));
+  ok('散了也重摊牌面：不再是打完那一份', table.state.phase !== 'over' && table.state.pieces.length === 32);
+  ok('候场厅里念得出来：这桌散了', logs.some((l) => l.includes('这桌散了')), logs.join('｜'));
+  const twin = Table.load(table.save(), () => {}, () => {}, clock.now);
+  ok(
+    '散完落盘、重启接回来的还是散了的那张桌',
+    twin.gameNo === 1 && twin.book.games === 0 && twin.seatInfo().every((s) => !s.taken),
+    JSON.stringify([twin.gameNo, twin.book.games]),
+  );
+  // 散完这张桌还得是一张能用的桌：归零不是把它换成一张不会开局的照片
+  table.start(0);
+  finishDraft(table);
+  playToEnd(table, clock);
+  ok(
+    '散完接着打：账上一笔、局号还是第 1 局、32 枚不落别人头上',
+    table.book.games === 1 &&
+      table.gameNo === 1 &&
+      table.book.cards.reduce((a, c) => a + c, 0) === 32 &&
+      table.book.cards.length === 2,
+    JSON.stringify([table.gameNo, table.book.games, table.book.cards]),
+  );
+  const back = table.join(1, tok1);
+  ok(
+    '旧令牌回来只是个新人：坐得下，发的却是另一把新令牌',
+    back.ok && back.msg?.t === 'welcome' && back.msg.token !== tok1 && back.msg.token.length > 0,
+    `${back.msg?.t === 'welcome' ? back.msg.token : '‹没发welcome›'}｜${tok1}`,
+  );
+}
+
+{
+  // 打了一半不散：那一局的账还没落地，这会儿收椅子等于让正在出牌的人白打，还让候场厅丢了牌面
+  const { table } = makeTable({ mode: 'kou' });
+  table.join(0, '');
+  table.join(1, '');
+  table.start(0);
+  finishDraft(table);
+  const r = table.disband(0);
+  ok(
+    '这一局正在打，散不动也不碰椅子',
+    !r.ok && (r.why ?? '').includes('正在打') && aliveSeats(table.seatInfo()) === 2 && table.status === 'playing',
+    `${r.ok}｜${r.why ?? ''}｜${table.status}`,
+  );
+  table.leave(1);
+  const solo = table.disband(0);
+  ok('就算只剩一个活人，那一局没打完照样不散', !solo.ok && aliveSeats(table.seatInfo()) === 1 && table.seatInfo()[1]!.taken);
+}
+
+{
+  // 散桌的是代持房主位那位（原房主掉了线，房主位跟着活人挪到他手上）：散了之后那颗开局得回「家」那把椅子，
+  // 不然这张桌在下一个人坐下之前，按开始的都是一个已经不在这桌上的人
+  const { table } = makeTable({ mode: 'kou' });
+  table.join(0, '');
+  table.leave(0);
+  table.join(1, '');
+  ok('房主位交到了代持那位手上：他这一个活人散得动', table.disband(1).ok);
+  ok('散完房主位回「家」那把：代持那位按不动开局，家那把按得动', !table.start(1).ok && table.start(0).ok);
 }
 
 // ───────────────────────── 那本账只有一本：随快照下去，存档里跟着走 ─────────────────────────

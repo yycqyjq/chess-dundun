@@ -235,6 +235,12 @@ console.log('\n搬字节那一头：口令答一句、答话归一本账、野�
   class Fake implements Sock {
     sends: { text: string; port: number; addr: string }[] = [];
     closed = 0;
+    /** 绑好之后有没有把广播打开（2026-09-29 那把 EACCES 就是缺这一步） */
+    broadcast: boolean | null = null;
+    /** bind 和 setBroadcast 的先后：反了就是 EBADF */
+    order: string[] = [];
+    /** 递一句「发不出去」：广播发不动时那句真原因也得有闸 */
+    fail: string | null = null;
     private msg: ((m: Buffer, r: { address: string; port: number }) => void) | null = null;
     private err: ((e: Error) => void) | null = null;
     on(ev: 'message', cb: (m: Buffer, r: { address: string; port: number }) => void): void;
@@ -246,9 +252,17 @@ console.log('\n搬字节那一头：口令答一句、答话归一本账、野�
       if (ev === 'message') this.msg = cb as (m: Buffer, r: { address: string; port: number }) => void;
       else this.err = cb as (e: Error) => void;
     }
-    bind(): void {}
-    send(msg: Buffer, port: number, address: string): void {
+    bind(_port: number, _address: string, cb?: () => void): void {
+      this.order.push('bind');
+      cb?.(); // 真 socket 是 'listening' 之后回调，假的一拍到位
+    }
+    setBroadcast(flag: boolean): void {
+      this.order.push('setBroadcast');
+      this.broadcast = flag;
+    }
+    send(msg: Buffer, port: number, address: string, cb?: (err?: Error | null) => void): void {
       this.sends.push({ text: msg.toString('utf8'), port, addr: address });
+      if (this.fail) cb?.(new Error(this.fail));
     }
     close(): void {
       this.closed++;
@@ -334,6 +348,26 @@ console.log('\n搬字节那一头：口令答一句、答话归一本账、野�
   const pre = f.sends.length;
   const after = await df.find();
   ok('关了以后再按：回一句空的，不再发包', f.sends.length === pre && after.rooms.length === 0, JSON.stringify(after));
+
+  // 2026-09-29：真机器上「找同网的桌」永远一张空清单，量出来是 dgram 默认不开广播——
+  // 那两个广播目标发出去就 EACCES，只剩回环绕回自己，`isMine` 一抹就没桌可列了。下面这两条钉的就是那一步。
+  const g = new Fake();
+  openDiscovery(opt(), g, nowait);
+  ok('绑好就把广播打开（不开的话广播那两路一个包都出不去）', g.broadcast === true, `setBroadcast ${String(g.broadcast)}`);
+  ok('开广播排在 bind 之后（bind 之前调是 EBADF）', g.order.join(',') === 'bind,setBroadcast', g.order.join(','));
+
+  const h = new Fake();
+  h.fail = 'send EACCES 192.168.1.255:41732';
+  const noGo = await openDiscovery(opt(), h, nowait).find();
+  ok(
+    '广播真发不出去：说一句真原因，别拿「这块网不让设备之间互访」顶',
+    noGo.rooms.length === 0 && noGo.why.includes('send EACCES') && !noGo.why.includes('互访'),
+    noGo.why,
+  );
+
+  const j = new Fake();
+  const clean = await openDiscovery(opt(), j, nowait).find();
+  ok('发得出去就不给这句假原因', clean.rooms.length === 0 && clean.why === '', JSON.stringify(clean));
 }
 
 console.log('\n端 dist 那一小段：这串 URL 该落到哪个文件');

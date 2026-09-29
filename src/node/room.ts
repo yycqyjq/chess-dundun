@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { networkInterfaces } from 'node:os';
@@ -201,6 +201,17 @@ export function openRoom(argv: string[], port: number): Room {
       write();
     }, 300);
   }
+  /**
+   * 散桌：这份存档不留硬盘。合批那颗延时也一起掐掉——不掐，三秒前那一下改变化还排在队里，
+   * 半秒后就把刚抹掉的桌子又写回去了；留着一份接得回来的旧账，「散了」就成了「这一秒看不见」。
+   */
+  function discard(): void {
+    if (due) {
+      clearTimeout(due);
+      due = null;
+    }
+    rmSync(savePath, { force: true });
+  }
   // 一开桌就落一次盘：还没人坐过椅子就断掉，重启也接得回这一桌的牌面
   write();
 
@@ -227,7 +238,7 @@ export function openRoom(argv: string[], port: number): Room {
         log: tell,
       });
 
-  /** 客户端候场厅那颗「找同网的桌」走的门：寻呼关着就当场回一句，不让人白等那 700 毫秒 */
+  /** 客户端列表页那句 find 走的门（浏览器发不了 UDP，这一趟由本机宿主代跑）：寻呼关着就当场回一句，不让人白等那 700 毫秒 */
   function find(): Promise<Found> {
     if (disc) return disc.find();
     return Promise.resolve({ rooms: [], why: NO_DISCOVER });
@@ -361,6 +372,24 @@ export function openRoom(argv: string[], port: number): Room {
         const r = table.resetBook(seat);
         if (!r.ok) conn.send(JSON.stringify({ t: 'reject', why: r.why ?? '这会儿清不了' } satisfies ToClient));
         persist();
+        return;
+      }
+      case 'disband': {
+        // 候场厅那颗「退出这桌」在只剩他一个活人时递上来：能不能散归桌查（只有房主、只有没开打、只有他一个活人）
+        if (seat === undefined) {
+          conn.send(NO_SEAT);
+          return;
+        }
+        const r = table.disband(seat);
+        if (!r.ok) {
+          conn.send(JSON.stringify({ t: 'reject', why: r.why ?? '散不了这桌' } satisfies ToClient));
+          return;
+        }
+        discard();
+        // 这把椅子的连接先解绑再关：不先解绑，onClose 会替那位再走一遍 leave ＋落盘，把空桌又写回硬盘
+        seatOf.delete(conn);
+        if (connOf.get(seat) === conn) connOf.delete(seat);
+        conn.close('这桌散了');
         return;
       }
       case 'find': {
