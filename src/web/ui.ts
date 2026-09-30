@@ -256,6 +256,21 @@ export function card(
   return { veil, head, body, foot, close: () => veil.remove() };
 }
 
+/**
+ * 整屏一页：还是 head／body／foot 那三块（body 自己滚、foot 钉住），但遮罩是不透明的、
+ * 也不给「点空白关掉」那条路。从首页点进去的两页和候场厅都是页面——
+ * 一屏永远只有一层，身后不隔着半透黑底露出另一层。
+ */
+export function page(
+  root: HTMLElement,
+  title: string,
+  cls = '',
+): { veil: HTMLElement; head: HTMLElement; body: HTMLElement; foot: HTMLElement; close: () => void } {
+  const c = card(root, title, cls);
+  c.veil.classList.add('as-page');
+  return c;
+}
+
 /** 一排互斥选项，点谁把谁标上 on。开桌那张卡用它选人设、玩法、难度 */
 export function segment<T>(
   caption: string,

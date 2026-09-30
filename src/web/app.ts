@@ -15,7 +15,7 @@ import { viewFor } from '../core/view.ts';
 import { aliveSeats, deckFor, hydrate, type SeatInfo, type Seats, type TableStatus, type ToClient } from '../net/wire.ts';
 import { LIST_REFRESH_MS, peerNote, type FoundRoom } from '../net/discover.ts';
 import { ctrlLift, handCramped, labelBands, LABEL_W, layout, pieceSize, stackSpots, type Board, type TableView } from './board.ts';
-import { autoSeat, homePanel, initialScreen, isLoopback, roomRow } from './home.ts';
+import { autoSeat, BACK, entryHead, homePanel, hostHanded, hostJump, initialScreen, isLoopback, roomRow } from './home.ts';
 import { deviceNick, forget, Link, recall, remember, shouldWake } from './net.ts';
 import { MOVE_MS, Pieces } from './pieces.ts';
 import { rules } from './rules.ts';
@@ -23,8 +23,8 @@ import { Sound } from './sound.ts';
 import {
   buildShell,
   button,
-  card,
   div,
+  page,
   paintChip,
   popup,
   qrCanvas,
@@ -225,9 +225,9 @@ export class App {
   // ---------- 同网桌列表 ----------
 
   /**
-   * 点「同一张网」先落在这一页：同网有没有桌在等人一眼看得见，不用先在自己这台开一张。
+   * 点首页那块「本地联机」落在这一屏：同网有没有桌在等人一眼看得见，不用先在自己这台开一张。
    * 浏览器发不了 UDP，寻一圈仍由本机那个宿主代跑（一句 find 递出去）；
-   * 它那儿有 SWEEP_MIN_MS 那道闸，所以这一页五秒一轮不会把这块网刷爆。
+   * 它那儿有 SWEEP_MIN_MS 那道闸，所以这一屏五秒一轮不会把这块网刷爆。
    * 底栏那两颗归 foot 钉住：手机上列表长过一屏，「开一桌」跟着滚就等于要人先滚到底再摸黑点。
    */
   private showList(): void {
@@ -242,7 +242,8 @@ export class App {
       onStatus: (text) => this.onNet(text),
       onReady: () => this.onReady(),
     });
-    const { veil, body, foot } = card(this.root, '同网的牌桌');
+    // 标题就是首页那块的名字：同一件事在两处换了写法，人就该怀疑这是两个地方
+    const { veil, body, foot } = page(this.root, entryHead('room'));
     const rows = div('peer-list');
     const note = div('note', '正在这块网上寻一圈……');
     body.append(rows, note);
@@ -251,7 +252,7 @@ export class App {
     out.append(
       button('在这台机器开一桌', () => this.openRoom('create'), 'btn primary'),
       button(
-        '回首页',
+        BACK,
         () => {
           this.stopList();
           this.link?.close();
@@ -293,55 +294,57 @@ export class App {
 
   // ---------- 开桌 ----------
 
-  /** 从首页那颗「自己玩」进来，身后就是首页：点空白退回那儿，不再是「不摆一桌就出不去的一张卡」 */
+  /**
+   * 首页那块「单机模式」点进来的一屏：三排选项加种子，开桌那颗钉在底栏。
+   * 身后就是首页，那颗「返回」摘掉这一页就回去——不是一张「不摆一桌就出不去」的卡。
+   */
   private pickTable(): void {
     this.closeRoom();
     for (const el of this.root.querySelectorAll('.sheet')) el.remove();
     const chosen: Setup = { ...this.setup, seed: rollSeed() };
-    popup(
-      this.root,
-      '摆一桌',
-      (body, close, foot) => {
-        body.append(
-          segment(
-            '坐几个人',
-            rules.playerCounts.map((n) => ({ text: `${n} 人 · 每人 ${this.state ? this.state.pieces.length / n : 32 / n} 枚`, value: n })),
-            chosen.players,
-            (v) => (chosen.players = v),
-          ),
-          segment(
-            '玩法',
-            rules.modes.map((m) => ({ text: m === 'ming' ? '明棋 · 出牌即亮' : '扣棋 · 一墩打完才翻', value: m })),
-            chosen.mode,
-            (v) => (chosen.mode = v),
-          ),
-          segment(
-            '电脑水平',
-            LEVELS.map((l) => ({ text: `${l === 'greedy' ? '默认 · ' : ''}${LEVEL_CN[l]}`, value: l })),
-            chosen.level,
-            (v) => (chosen.level = v),
-          ),
-        );
-        const row = div('sheet-row');
-        const seedNote = div('note', `种子 ${chosen.seed}`);
-        const roll = () => {
-          chosen.seed = rollSeed();
-          seedNote.textContent = `种子 ${chosen.seed}`;
-        };
-        row.append(
-          seedNote,
-          button('重掷', roll, 'btn mini'),
-          button('开桌', () => {
-            close();
-            this.setup = chosen;
-            void this.match(chosen);
-          }, 'btn primary'),
-        );
-        // 主按钮进 foot：手机上这三排选项加说明早超出一屏，开桌那颗跟着滚就等于要人先滚到底再摸黑点
-        foot.append(row);
-      },
-      false,
+    const { veil, body, foot } = page(this.root, entryHead('solo'));
+    body.append(
+      segment(
+        '坐几个人',
+        rules.playerCounts.map((n) => ({ text: `${n} 人 · 每人 ${this.state ? this.state.pieces.length / n : 32 / n} 枚`, value: n })),
+        chosen.players,
+        (v) => (chosen.players = v),
+      ),
+      segment(
+        '玩法',
+        rules.modes.map((m) => ({ text: m === 'ming' ? '明棋 · 出牌即亮' : '扣棋 · 一墩打完才翻', value: m })),
+        chosen.mode,
+        (v) => (chosen.mode = v),
+      ),
+      segment(
+        '电脑水平',
+        LEVELS.map((l) => ({ text: `${l === 'greedy' ? '默认 · ' : ''}${LEVEL_CN[l]}`, value: l })),
+        chosen.level,
+        (v) => (chosen.level = v),
+      ),
     );
+    const seedNote = div('note', `种子 ${chosen.seed}`);
+    const roll = () => {
+      chosen.seed = rollSeed();
+      seedNote.textContent = `种子 ${chosen.seed}`;
+    };
+    const dice = div('sheet-row');
+    dice.append(seedNote, button('重掷', roll, 'btn mini'));
+    const go = div('sheet-row');
+    go.append(
+      button(
+        '开桌',
+        () => {
+          veil.remove();
+          this.setup = chosen;
+          void this.match(chosen);
+        },
+        'btn primary',
+      ),
+      button(BACK, () => this.showHome(), 'btn mini'),
+    );
+    // 主按钮进 foot：这一屏三排选项加说明早超出一屏，开桌那颗跟着滚就等于要人先滚到底再摸黑点
+    foot.append(dice, go);
   }
 
   // ---------- 候场厅 ----------
@@ -368,15 +371,18 @@ export class App {
     }));
     // 标题和内容归 body 滚，那几颗按钮归 foot 钉住；两列（配置／椅子）是 CSS 的事，
     // 手机上就是 cfg-col → seat-col 的自然顺序，一路单列滚到底
-    const { veil, head, body, foot } = card(this.root, '正连着这桌……', 'room');
+    const { veil, head, body, foot } = page(this.root, '正连着这桌……', 'room');
     const cfg = div('room-cfg');
     const rows = div('lobby-seats');
     const invite = div('invite');
     const note = div('note');
     const cfgCol = div('cfg-col');
     const seatCol = div('seat-col');
+    // 房主位换了人才亮一句，几秒后自己收掉：常驻一行「开局那颗在谁手上」是噪音，那本来就写在椅子行里
+    const handed = div('note');
+    handed.hidden = true;
     cfgCol.append(cfg, note);
-    seatCol.append(rows, invite);
+    seatCol.append(rows, handed, invite);
     body.append(cfgCol, seatCol);
     const go = div('sheet-row');
     const out = div('sheet-row');
@@ -385,8 +391,8 @@ export class App {
     const leave = button(
       '',
       () => {
-        // 后面有牌桌就是「回去看一眼」，合上面板就行；没有牌桌才是真退出这条连接
-        if (this.shell) return this.closeRoom();
+        // 这一颗只做一件事：离开这一桌，回到「本地联机」那一屏。椅子留给令牌，回来凭它还坐这一位。
+        // 它不再兼任「看牌桌」——那一屏整屏盖着牌桌，掀开看见的其实是首页，那颗按钮撒了谎。
         // 只剩自己一个活人时先问一句再散桌（口径见 exitTable）；站着看桌的人不该有这一问
         this.exitTable(this.seated && alive <= 1);
       },
@@ -432,6 +438,9 @@ export class App {
     let gameNo = 1;
     // 这桌此刻几个活人连着（一秒一份座位表带着走）：退出那颗要不要先问一句，就看这个数
     let alive = 0;
+    // 上一份座位表里房主位在哪把：-1 是第一份；该不该开口由 hostJump 判（那条判断住在 home.ts，才有闸）
+    let lastHost = -1;
+    let handDue = 0;
 
     const fill = (l: Seats) => {
       this.status = l.status;
@@ -445,6 +454,15 @@ export class App {
       head.textContent = waiting ? `候场厅 · 第 ${l.gameNo} 局还没开` : `牌桌正在打 · 第 ${l.gameNo} 局`;
       gameNo = l.gameNo;
       alive = aliveSeats(l.seats);
+
+      // 房主位一跳就得说一声：这一层不演牌桌日志，不说就只有「房主位」那三个字在行之间跳
+      if (hostJump(lastHost, l.hostSeat)) {
+        handed.textContent = hostHanded(lastHost, l.hostSeat, l.seats);
+        handed.hidden = false;
+        window.clearTimeout(handDue);
+        handDue = window.setTimeout(() => (handed.hidden = true), 6000);
+      }
+      lastHost = l.hostSeat;
 
       // 配置：只有坐到了房主那一位、且还没开局才给改，其余人只读一行说明
       // hostSeat 也得算进键里：房主位一交接，那句「只有房主 P· 能改」就换了人，不重画会念错的
@@ -584,8 +602,8 @@ export class App {
       // 第 1 局还没开，这本账本来就是空的：这时候给一颗「清账重开」只是多一颗按了没用的
       clear.hidden = !(waiting && isHost && l.gameNo > 1);
       start.textContent = short > 0 ? `开始这一局（${short} 个位子由电脑补）` : '开始这一局';
-      // 身后有牌桌就只是「把面板合上、回去看一眼」，没有牌桌才是真退出这条连接（口径见 exitTable）
-      leave.textContent = this.shell ? '看牌桌' : '退出这桌';
+      // 每一屏那颗出口都念同一份「返回」（口径见 home.ts 的 BACK）：候场厅这一颗回的是本地联机那一屏
+      leave.textContent = BACK;
 
       // 进门这一趟替人挑一把椅子，只在头一份座位表上发生一次（口径见 home.ts 的 autoSeat）。
       // 已经坐着就不再挑：断线重连那条路自己会凭令牌认回原来那把，插进来只会把人挪错位子
@@ -604,7 +622,7 @@ export class App {
     this.poll = window.setInterval(() => link.askLobby(), 1000);
   }
 
-  /** 收掉候场厅：桌已开局那份接管画面，或者是坐着的人自己按「看牌桌」掀开又合上 */
+  /** 收掉候场厅那一屏：桌已开局那份接管画面，或者是人按了「返回」换到本地联机那一屏 */
   private closeRoom(): void {
     const room = this.room;
     if (!room) return;
@@ -942,7 +960,7 @@ export class App {
   /**
    * 离桌：连接断掉，椅子还留给这个令牌，回来凭它还坐这一位。
    * 落点默认首页（牌桌右上角那张「离桌」走这条，那句提示就是这么念的）；
-   * 候场厅那颗「退出这桌」要直接落在同网桌列表——按这颗的人要的正是「换张桌看看」，别再让他绕一次首页。
+   * 候场厅那颗「返回」要直接落在同网桌列表——按这颗的人要的正是「换张桌看看」，别再让他绕一次首页。
    */
   private leaveTable(toList = false): void {
     this.resultClose?.();
@@ -959,15 +977,16 @@ export class App {
   }
 
   /**
-   * 候场厅那颗「退出这桌」。桌上还有别的活人连着就悄悄退（椅子留给令牌，回来还坐这一位）；
+   * 候场厅那颗「返回」。桌上还有别的活人连着就悄悄退（椅子留给令牌，回来还坐这一位）；
    * 只剩自己一个时才先问一句——这一退就把这桌散了：椅子连令牌一起收，存档也抹掉，重启宿主接不回来。
    * 「只剩自己一个」由座位表数出来（`aliveSeats`，同一句判断在桌那头还有一道），页面上这句只是给人看的。
+   * 问一句用的还是那张弹窗卡：整屏页只给「一直待在那一层」的界面，一次性的是非题不在这儿。
    */
   private exitTable(alone: boolean): void {
     if (!alone) return this.leaveTable(true);
     popup(
       this.root,
-      '退出这桌',
+      '返回会散掉这桌',
       (body, close) => {
         const p = div('note');
         p.textContent =
@@ -1359,7 +1378,11 @@ export class App {
     toast(this.shell.toast, '复制不成，已摊开——长按/选中自己抄', 2000);
   }
 
-  /** 右上角那张：单机联机都退回首页。正在等的两件事都得散伙——一是人要点牌，二是循环在等下一份快照 */
+  /**
+   * 右上角那张：单机联机都退回首页。正在等的两件事都得散伙——一是人要点牌，二是循环在等下一份快照。
+   * 这一颗**故意**不念「返回」：三处「返回」散的是「换一层看」，这颗散的是「这一局我不打了」，
+   * 两件事共用一个词，人就分不清哪一颗会把这一局丢掉（「三处出口」那条断言也正是把它挡在 3 处之外）。
+   */
   private resign(): void {
     const online = this.link !== null;
     const go = () => {
@@ -1380,7 +1403,7 @@ export class App {
     popup(this.root, online ? '离桌' : '换桌', (body, close) => {
       const p = div('note');
       p.textContent = online
-        ? '这一局还没打完，离桌就不记账了。椅子给你留着，从首页再点「同一张网」还坐这一位。'
+        ? '这一局还没打完，离桌就不记账了。椅子给你留着，从首页再点「本地联机」还坐这一位。'
         : '这一局还没打完，换桌就不记账了。';
       const row = div('sheet-row');
       row.append(

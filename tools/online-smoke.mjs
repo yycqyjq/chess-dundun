@@ -182,7 +182,7 @@ ok(
   ((await b.until(['seats'])).hostSeat) === HOST,
 );
 
-// 房主位跟着活人走：家那把椅子空了才交给代持的，人一回来就收回
+// 房主位只往「没人拿着」那把上走：家那把空了才交给代持的，人一回来也不从他手上抢走
 await a.drop();
 ok(
   '房主断线这段时间：椅子还留在他名下，只是不在线',
@@ -202,27 +202,42 @@ b.ask({ t: 'lobby' });
 const held = await b.until(['seats'], (m) => m.hostSeat === GUEST);
 ok('房主没连着时，重新入座的那位接过房主位', held.seats[GUEST].nick === NICK_B, JSON.stringify(held.seats));
 await a.sit(HOST, w0.token, NICK_A);
-a.ask({ t: 'lobby' });
-const backed = await a.until(['seats'], (m) => m.hostSeat === HOST);
-ok('原房主一回到第 1 把，房主位就交回他', backed.seats[GUEST].online === true, JSON.stringify(backed.seats));
-
-a.ask({ t: 'act', action: { kind: 'draw', stackIdx: 0 } });
-ok('房主没按开始之前，递上来的动作先被候场这道闸门挡下', (await a.until(['reject'])).why === '这桌还在候场，等房主按开始');
-b.ask({ t: 'setup', mode: 'ming' });
-ok('不是房主改不了这桌的配置', (await b.until(['reject'])).why === '只有房主能改这桌的配置');
-b.ask({ t: 'start' });
-ok('不是房主那位按不动开始', (await b.until(['reject'])).why === '只有房主能开局');
-a.ask({ t: 'setup', level: 'easy' });
-a.ask({ t: 'lobby' });
-const chosen = await a.until(['seats']);
+b.ask({ t: 'lobby' });
+const stayed = await b.until(['seats'], (m) => m.seats[HOST].online === true);
 ok(
-  '收回房主位那位改得动补位电脑的难度，玩法没被顺手改掉',
+  '原房主坐回「家」那把：代持那位还连着，位就不从他手上抢走',
+  stayed.hostSeat === GUEST && stayed.seats[HOST].online === true,
+  JSON.stringify([stayed.hostSeat, stayed.seats[HOST]]),
+);
+a.ask({ t: 'setup', mode: 'ming' });
+ok('坐回家那把的那位这会儿不是房主：改不动配置', (await a.until(['reject'])).why === '只有房主能改这桌的配置');
+a.ask({ t: 'start' });
+ok('他也按不动开始', (await a.until(['reject'])).why === '只有房主能开局');
+b.ask({ t: 'setup', level: 'easy' });
+b.ask({ t: 'lobby' });
+const chosen = await b.until(['seats'], (m) => m.level === 'easy');
+ok(
+  '代持那位改得动补位电脑的难度，玩法没被顺手改掉',
   chosen.level === 'easy' && chosen.mode === 'kou' && chosen.players === 2,
   JSON.stringify(chosen).slice(0, 120),
 );
+// 还回去只剩一条路：代持那位自己让座。候场厅那句人话由 hostHanded 出，画面归真机，这儿量桌这一头
+b.ask({ t: 'stand' });
+a.ask({ t: 'lobby' });
+const backed = await a.until(['seats'], (m) => m.hostSeat === HOST);
+ok(
+  '代持那位让了座：房主位当场还回「家」那把，那把椅子也一起空了',
+  backed.seats[GUEST].taken === false && backed.seats.filter((s) => s.online).length === 1,
+  JSON.stringify(backed.seats),
+);
+b.ask({ t: 'join', seat: GUEST, token: '', nick: NICK_B });
+const w1 = await b.until(['welcome']);
+ok('让完座还坐得回来：那把椅子重新发一枚令牌', w1.seat === GUEST && w1.token !== tokenB);
+a.ask({ t: 'act', action: { kind: 'draw', stackIdx: 0 } });
+ok('房主没按开始之前，递上来的动作先被候场这道闸门挡下', (await a.until(['reject'])).why === '这桌还在候场，等房主按开始');
 a.ask({ t: 'start' });
 const go = await a.until(['state'], (m) => m.status === 'playing');
-ok('房主一按开始，两份快照都翻成 playing', go.status === 'playing' && go.view.phase === 'draft');
+ok('位回家之后，开局那颗归家那把按，两份快照都翻成 playing', go.status === 'playing' && go.view.phase === 'draft');
 ok('开局以后 P1 才拿得到合法着法', go.acts.length > 0 === (go.view.drawer === HOST));
 await b.until(['state'], (m) => m.status === 'playing');
 
@@ -403,7 +418,8 @@ ok('ping 收到 pong', (await a.until(['pong'])).at === 12345);
 const seqBefore = b.view().seq;
 b.close();
 await new Promise((r) => setTimeout(r, 400));
-const token = b.got.find((m) => m.t === 'welcome').token;
+// 手里那枚令牌是「最新那一份」：上面让过一回座，那把椅子重新发过一枚，拿第一份来坐会被挡在「这把椅子坐了人」
+const token = b.got.filter((m) => m.t === 'welcome').pop().token;
 const draft = a.view();
 const me = draft.acts[0];
 if (me) {

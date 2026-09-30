@@ -1,16 +1,18 @@
 /**
  * 画面那层的守卫测试：ui.ts／pieces.ts／sound.ts 是全桌仅有的往 DOM 和浏览器存储上伸手的三处。
  * 没有浏览器（自动化那条路被拦着），所以这儿捏一套够它们用的假 DOM，
- * 钉住六件真会出事的事：别人自填的代号被当 HTML 解析、名字条的条数跟不上桌的人数、
+ * 钉住八件真会出事的事：别人自填的代号被当 HTML 解析、名字条的条数跟不上桌的人数、
  * 一桌子牌挪一拍逼一次重排（不是每张逼一次）、无痕模式的存储一碰就抛把整张桌白屏、
  * 寻到的那条桌是一个真 href 的 <a>（不拿 JS 拼跳转、也不往 HTML 里写字）、
- * 进门那一刻落哪把椅子（建房即房主／扫码递 -1／断线认回原来那把）。
+ * 进门那一刻落哪把椅子（建房即房主／扫码递 -1／断线认回原来那把）、
+ * 整屏那一页不给「点空白关掉」（那条监听只归弹窗，且钉得住两头：页面点不掉、弹窗点得掉）、
+ * 房主位交接那一句既得说清位在哪把、也得挑对开口的时机（头一份跟没换人都得闭嘴）。
  *
  * 放 src/web 是有原因的：tsconfig.json 不带 DOM 库。
  * 全文件（连假元素自己）都不许用构造器参数属性——`--experimental-strip-types` 只抹类型，不改写赋值。
  */
-import { anchor, buildShell, button, card, paintChip, popup, rich, segment, toast, type Shell } from './ui.ts';
-import { appVersion, autoSeat, homePanel, initialScreen, isLoopback, roomRow } from './home.ts';
+import { anchor, buildShell, button, card, page, paintChip, popup, rich, segment, toast, type Shell } from './ui.ts';
+import { appVersion, autoSeat, BACK, entryHead, homePanel, hostHanded, hostJump, initialScreen, isLoopback, roomRow } from './home.ts';
 import { foundLine, type FoundRoom } from '../net/discover.ts';
 import type { SeatInfo } from '../net/wire.ts';
 import type { Saved } from './net.ts';
@@ -282,6 +284,13 @@ G.window = { setTimeout: () => 1 };
   ok('卡里的按钮按得动，按完那张卡就从根上摘了', closed === 1 && root.children.length === 0, `closed=${closed} 根上还有 ${root.children.length} 张`);
   ok('搭卡全程没写过 HTML', root.countHtml() === 0);
   ok('build 拿到的第三块就是那张底栏', given.length === 1 && given[0]!.names.has('sheet-foot'));
+  // 反面钉一句：假元素确实把「点的是遮罩本身」这件事递得上去——不在这儿，上面那句「整屏那一页点不掉」就成了空跑出来的绿
+  const lockless = new FEl('div');
+  popup(H(lockless), '这一局打完', (body) => body.append(button('收下')));
+  const lockVeil = lockless.children[0]!;
+  ok('弹窗卡（不锁）挂的是 .tap-close', [...lockVeil.names].includes('tap-close'), [...lockVeil.names].join('.'));
+  lockVeil.click();
+  ok('点一下空白那张弹窗卡就摘掉（不锁才算关得上，锁住的那种见 app 那几处 lock）', lockless.children.length === 0, `根上剩 ${lockless.children.length} 层`);
 }
 
 // ---------- 卡分三块：标题、会滚的内容、钉住的底栏 ----------
@@ -302,6 +311,32 @@ G.window = { setTimeout: () => 1 };
   ok('标题写着传进去那句', el.find('sheet-head')!.textContent === '候场厅');
   c.close();
   ok('close 摘掉的是整张遮罩', root.children.length === 0);
+}
+
+// ---------- 整屏那一页：三块照旧，多出来的只有遮罩上那一个 class ----------
+
+{
+  const root = new FEl('div');
+  const p = page(H(root), '本地联机');
+  const veil = root.children[0]!;
+  const el = veil.find('sheet-card')!;
+  ok('那一页还是卡那三块（标题／会滚的内容／钉住的底栏一块不缺）', !!el.find('sheet-head') && !!el.find('sheet-body') && !!el.find('sheet-foot'));
+  // CSS 挑的是 .sheet.as-page：标记必须落在遮罩上，落在卡上那几条选择器就全落空
+  ok('.as-page 挂在遮罩上，不挂在卡上', [...veil.names].includes('as-page') && [...veil.names].includes('sheet') && ![...el.names].includes('as-page'), `${[...veil.names].join('.')}｜卡：${[...el.names].join('.')}`);
+  ok('cls 照旧传给卡（候场厅那一屏靠 .room 挑两栏）', (() => {
+    const two = page(H(root), 'x', 'room');
+    const got = [...root.children[root.children.length - 1]!.children[0]!.names].includes('room');
+    two.close();
+    return got;
+  })());
+  // 「点空白关掉」是弹窗那层的规矩：整屏页身后还立着首页，宽屏上卡片两侧就是空白，
+  // 点那儿把这一屏摘掉等于凭空回了首页——所以页面这条路上根本不该挂那条监听
+  ok('整屏那一页不给「点空白关掉」：点遮罩它自己还挂着', (() => {
+    veil.click();
+    return root.children.length === 1 && ![...veil.names].includes('tap-close');
+  })(), `遮罩的类：${[...veil.names].join('.')}｜根上剩 ${root.children.length} 层`);
+  p.close();
+  ok('close 摘掉的是整屏那一层', root.children.length === 0);
 }
 
 // ---------- 挪牌：整桌逼一次重排，不是每张逼一次 ----------
@@ -426,7 +461,10 @@ function planOf(spotFor: (i: number) => Placed): Map<number, Placed> {
 
   const entries = panel.findAll('button');
   ok('两个入口各是一整块按钮，不是 div（键盘 Tab 走得到）', entries.length === 2 && entries.every((e) => e.tag === 'button' && e.type === 'button'));
-  ok('顺序是「自己玩」在前、「同一张网」在后', entries[0]!.textContent.includes('自己玩') && entries[1]!.textContent.includes('同一张网'));
+  ok('顺序是「单机模式」在前、「本地联机」在后', entries[0]!.textContent.includes('单机模式') && entries[1]!.textContent.includes('本地联机'), entries.map((e) => e.textContent).join('｜'));
+  // 点进去那一屏的标题从这儿拿（app.ts 调 entryHead）：一处改名两处跟着，不会漂成两个名字
+  ok('两块的字就是那两屏的标题，同一份来源', entryHead('solo') === '单机模式' && entryHead('room') === '本地联机');
+  ok('每一屏那颗出口都念同一个词（不再「回首页」「退出这桌」各叫各的）', BACK === '返回');
   ok(
     '每块里两个格：大字说做什么、小字说谁来补',
     entries.every((e) => {
@@ -512,6 +550,39 @@ function planOf(spotFor: (i: number) => Placed): Map<number, Placed> {
   ok('存的那个座位号不在这桌上（换了人数、或者一条脏数据）就当没存过', autoSeat(tableOf({}), saved(9), false) === -1);
   ok('座位号是负的（老版本存歪的）同样当没存过', autoSeat(tableOf({}), saved(-1), true) === 0);
   ok('扫码那条一律递 -1：桌上只剩房主位时由桌回那一句「没空椅子了」，客户端不自己判', autoSeat(tableOf({ 0: sat, 1: sat, 2: sat, 3: sat }), null, false) === -1);
+}
+
+{
+  // 房主位一交接，候场厅得说一句人话：不说的话就只有「房主位」那三个字在椅子行之间跳
+  const chair = (n: number, nick = '', taken = true, online = taken): SeatInfo => ({
+    seat: n,
+    name: `P${n + 1}`,
+    online,
+    taken,
+    ai: false,
+    human: taken,
+    queued: false,
+    nick,
+  });
+  const seats = [chair(0, 'K7'), chair(1, 'P4'), chair(2), chair(3)];
+  const jumped = hostHanded(1, 0, seats);
+  ok('交接口念得出交给谁、上一把在谁手上', jumped === '房主位刚交给 P1 · K7 手上，上一把在 P2 · P4 手上', jumped);
+  const took = hostHanded(0, 1, [chair(0, '', false), ...seats.slice(1)]);
+  ok('上一把那把空了就念「空出来了」，不编一个不在场的人', took === '房主位刚交给 P2 · P4 手上，上一把 P1 那把空出来了', took);
+  const nonick = hostHanded(0, 1, [chair(0, '', false), chair(1, ''), chair(2), chair(3)]);
+  ok('那把没报代号：只念座位号，不跟一个光秃秃的圆点', nonick === '房主位刚交给 P2 手上，上一把 P1 那把空出来了', nonick);
+  // 代持那位自己让座：位还回「家」那把，可那把的主人只是挂着令牌、人没连着。
+  // 这句要照着快照说——说成「交给 K7」就有人在等一个不会回来的人，说成「上一把还空着」就把刚让座说成一直是空的
+  const gaveUp = hostHanded(1, 0, [chair(0, 'K7', true, false), chair(1, '', false, false), chair(2), chair(3)]);
+  ok('位落在一把没连着的椅子上：那句得说明白「那位还没连着」', gaveUp === '房主位刚交给 P1 · K7 那把（那位还没连着），上一把 P2 那把空出来了', gaveUp);
+}
+
+{
+  // 那句什么时候开口。座位表是一秒一份，所以「该不该念」跟「念什么」一样得出事：
+  // 头一份就念＝人一进来凭空冒一句交接（那之前换过谁没人在看）；没换也念＝那句话每秒重讲一遍。
+  ok('头一份座位表不补念（上一份记的是 -1，页面刚打开）', hostJump(-1, 2) === false);
+  ok('房主位没动不念：不然挂六秒摘掉又重讲一遍', hostJump(2, 2) === false);
+  ok('真换了才念，往哪边跳都算（还回「家」那把也是一次交接）', hostJump(2, 0) === true && hostJump(0, 2) === true);
 }
 
 console.log(failures ? `\n${failures} 条没过` : '\n全部通过');

@@ -312,7 +312,11 @@ function pilesOf(state: GameState): number[][] {
       two.table.lobby().hostSeat === 1 && !two.table.seatInfo()[0]!.taken && two.table.freeSeat() === null,
     );
     two.table.join(0, '');
-    ok('开桌那位一坐回家那把，房主位当场交回', two.table.lobby().hostSeat === 0);
+    // 位只往「没人拿着」那把上走：代持那位还连着，坐回「家」那把也不把他踢下去
+    ok(
+      '开桌那位坐回「家」那把：客人还连着，位就不抢',
+      two.table.lobby().hostSeat === 1 && two.table.seatInfo()[0]!.taken,
+    );
   }
   {
     // 掉线那把椅子还在原主人名下：自动入座不许把他人的位子发出去
@@ -545,8 +549,9 @@ function pilesOf(state: GameState): number[][] {
 {
   // 换人数时那把「人走了、凭令牌还得回来」的椅子：掉线计时得跟着椅子挪，不然是把永远收不回的椅子
   const { table, clock } = makeTable({ mode: 'kou', players: 4 });
-  const r1 = table.join(1, '');
+  // 开桌那位先坐「家」那把，客人才坐下：房主位不从他手上跳走，下面那句才量的是掉线计时
   table.join(0, '');
+  const r1 = table.join(1, '');
   const tok1 = r1.msg?.t === 'welcome' ? r1.msg.token : '';
   table.leave(1);
   ok(
@@ -566,8 +571,9 @@ function pilesOf(state: GameState): number[][] {
   // 这本账活在桌那边，重启也照 `table.json` 接得回来：页面上没有第二个入口，
   // 「怎么这桌已经第 4 局了」就只能干瞪眼，所以候场厅得有一颗把账扔回 0 的
   const { table, inbox, clock, logs } = makeTable({ mode: 'ming' });
-  const r1 = table.join(1, '');
+  // 同一个顺序：开桌那位先坐家那把，这位客人坐下之后位不再跳
   table.join(0, '');
+  const r1 = table.join(1, '');
   const tok1 = r1.msg?.t === 'welcome' ? r1.msg.token : '';
   table.start(0);
   finishDraft(table);
@@ -631,7 +637,7 @@ function pilesOf(state: GameState): number[][] {
 
 {
   // 「这桌还有几个人」得有个准数：掉线那把椅子令牌还留着、电脑补的位压根没连着，两个都不算活人；
-  // 候场厅那颗「退出这桌」要不要先问一句、桌那头让不让散，都看这一数
+  // 候场厅那颗「返回」要不要先问一句、桌那头让不让散，都看这一数
   ok('两个人连着就是两个：这时候谁都不该替全桌做主', aliveSeats([{ online: true }, { online: true }]) === 2);
   ok('掉线那把不算活人（椅子还挂着令牌，可人不在这条线上）', aliveSeats([{ online: true }, { online: false }]) === 1);
   ok('一把椅子都没人连着就是 0', aliveSeats([{ online: false }, { online: false }]) === 0);
@@ -639,11 +645,12 @@ function pilesOf(state: GameState): number[][] {
 }
 
 {
-  // 候场厅那颗「退出这桌」落在这张桌上的样子：只剩房主一个活人，退出就该连椅子一起收，
+  // 候场厅那颗「返回」落在这张桌上的样子：只剩房主一个活人，退出就该连椅子一起收，
   // 别在局域网里空挂一张没人坐、账还压着的桌——下一台设备寻到它，看见的是「这桌已经第 3 局」
   const { table, clock, logs } = makeTable({ mode: 'ming' });
-  const r1 = table.join(1, '');
+  // 开桌那位先坐家那把：下面整段量的都是「房主一个活人时散不散得动」，不是位落在哪把
   table.join(0, '');
+  const r1 = table.join(1, '');
   const tok1 = r1.msg?.t === 'welcome' ? r1.msg.token : '';
   table.start(0);
   finishDraft(table);
@@ -1423,8 +1430,9 @@ function playToEnd(table: Table, clock: Clock): GameState {
 }
 
 {
-  // 房主位的「家」钉在第一把椅子上：代持那位再活跃，原房主一回来就得交回去
-  const { table } = makeTable({ players: 4, mode: 'ming' });
+  // 房主位只往「没人拿着」那把上走：代持那位还连着，谁坐回「家」那把都不把他踢下去。
+  // 还回去只剩一条路——代持那位自己让座（`stand` 那条），这一整块钉的就是这两句
+  const { table, logs } = makeTable({ players: 4, mode: 'ming' });
   const back0 = table.join(0, '');
   const token0 = back0.msg?.t === 'welcome' ? back0.msg.token : '';
   table.join(1, '');
@@ -1432,20 +1440,21 @@ function playToEnd(table: Table, clock: Clock): GameState {
   table.join(2, '');
   ok('原房主没回来时，代持那位说了算', table.lobby().hostSeat === 2 && table.changeSetup(2, { level: 'easy' }).ok);
   table.join(0, token0);
-  ok('原房主凭令牌一回来，房主位就交回他', table.lobby().hostSeat === 0);
-  ok('交回去之后代持那位改不动配置了', !table.changeSetup(2, { level: 'hard' }).ok);
-  ok('原房主自己改得动', table.changeSetup(0, { level: 'hard' }).ok);
+  ok('原房主凭令牌坐回「家」那把，也不从还连着的人手上抢位', table.lobby().hostSeat === 2);
+  ok('代持那位照样改得动配置', table.changeSetup(2, { level: 'hard' }).ok);
+  ok('坐回「家」那把的那位改不动：他这会儿不是房主', !table.changeSetup(0, { level: 'greedy' }).ok);
+  ok('他也按不动开始', !table.start(0).ok);
   table.leave(0);
   table.join(3, '');
-  ok('原房主又走了，房主位再交给坐下那位', table.lobby().hostSeat === 3);
-  table.leave(3);
+  ok('桌上还站着代持那位，后来坐下的人也接不走', table.lobby().hostSeat === 2);
+  ok('代持那位让座，房主位当场还回「家」那把', table.stand(2).ok && table.lobby().hostSeat === 0);
+  ok('还位这一句在终端上也念得出', logs.some((l) => l.includes('把房主位还回了')), logs.join('｜'));
   table.join(0, token0);
-  ok('他坐回第一把，房主位又归他', table.lobby().hostSeat === 0);
-  // 开打了就不折腾：那一局正打着，房主位得钉在按下开始的人那把椅子上
-  table.start(0);
-  table.leave(0);
-  table.join(1, '');
-  ok('开打中原房主那把空出来也不收回房主位', table.lobby().hostSeat === 0 && table.lobby().status === 'playing');
+  ok(
+    '坐回「家」那把的就是真房主：他还是让不成座',
+    !table.stand(0).ok && table.stand(0).why === '房主不能让座，这桌得有人开局',
+  );
+  ok('位回家之后，开局那颗归家那把按', table.start(0).ok && table.lobby().status === 'playing');
 }
 
 {
@@ -1480,12 +1489,12 @@ function playToEnd(table: Table, clock: Clock): GameState {
     '目标那把坐不下，原来那把就不该一起赔进去',
     !r.ok && table.seatInfo()[1]!.online === true && table.seatInfo()[1]!.nick === 'DJGF',
   );
-  // 旧那把真的回了候场厅：谁都能坐，而「家」那把一坐回人，房主位就又收回第 1 把
+  // 旧那把真的回了候场厅：谁都能坐。而「家」那把坐回人也不把房主位从这个标签页手上抢走
   const w0 = table.join(0, '', 'P4NT').msg;
   const token0 = w0?.t === 'welcome' ? w0.token : '';
   ok('旧那把谁都能坐', table.seatInfo()[0]!.nick === 'P4NT' && table.seatInfo()[0]!.online);
-  ok('家那把一坐回人，房主位收回第 1 把', table.lobby().hostSeat === 0);
-  table.start(0);
+  ok('家那把坐回了人，房主位还在那个标签页手上', table.lobby().hostSeat === 1);
+  table.start(1);
   table.join(3, '', 'P4NT', 0);
   ok(
     '开打中换椅子：旧那把只算掉线，令牌还留着',

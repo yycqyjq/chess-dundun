@@ -207,9 +207,69 @@ console.log('\n同网桌只摆一处：候场厅里不留第二份');
   ok('整页没有那颗「找同网的桌」（同网桌的入口只剩列表页）', !app.includes('找同网的桌'));
   ok('CSS 里也没留那条没人使的 .peers', !RULES.some((r) => r.sel.includes('.peers')), RULES.filter((r) => r.sel.includes('.peers')).map((r) => r.sel).join('｜'));
   // 「只剩你一个」这一句得是数出来的活人，不是「我坐过椅子」；桌那头同一口径还有一道（见 net 那节的 disband）
-  ok('那颗「退出这桌」认的是「只剩一个活人」', /this\.exitTable\(this\.seated && alive <= 1\)/.test(app), '‹没找到那句›');
+  ok('那颗「返回」认的是「只剩一个活人」', /this\.exitTable\(this\.seated && alive <= 1\)/.test(app), '‹没找到那句›');
   // 散桌递的是这一句，不是清账那句：递错了账归零、椅子却一把不动，人还坐在那张要散的桌上
   ok('确认那颗递的是 disband 那句', /send\(\{ t: 'disband' \}\)/.test(app), '‹没找到那句›');
+  // 「什么时候开口」那条判断住在 home.ts（hostJump，见 ui 那节）；这一句只钉调用点把顺序递对了：
+  // 递反了就再没有闸——prev 变成这一份，永远 >= 0，头一份快照照样凭空念一句交接
+  ok(
+    '交接那句递的是「上一份→这一份」',
+    /hostJump\(lastHost, l\.hostSeat\)/.test(app),
+    (app.match(/^\s*if \(hostJump.*$/m) ?? ['‹没走 hostJump：那句判断又手写回 app.ts 了›'])[0],
+  );
+}
+
+// ---------- 一屏一层：点入口换的是页面，不是盖在首页上的一张卡（批12） ----------
+
+console.log('\n整屏页：三处出口同一份名字，身后不隔着半透黑底露出另一层');
+{
+  const app = readFileSync(new URL('../web/app.ts', import.meta.url), 'utf8');
+  const home = readFileSync(new URL('../web/home.ts', import.meta.url), 'utf8');
+  // 候场厅那一屏整屏盖着牌桌，掀开看见的其实是首页——这颗既然撒过谎就整个摘掉，不留第二种名字
+  ok('那颗不再按「身后有没有牌桌」分两种名字', !/this\.shell \? '看牌桌'/.test(app) && /leave\.textContent = BACK;/.test(app));
+  // 同一件事在一条链上换了三个名字（回首页／退出这桌／看牌桌），人就不知道哪一颗会把他从这桌上摘下来
+  const sites = (app.match(/button\(\s*BACK,|textContent = BACK/g) ?? []).length;
+  ok('三处出口念的是同一份 BACK（单机那一屏／本地联机那一屏／候场厅）', sites === 3, `${sites} 处`);
+  // 标题从 home.ts 那份 ENTRY 拿：入口写的字和点进去那一屏顶上的字是同一份，改一处不会漂成两个名字
+  ok(
+    '两屏的标题就是首页那两块的字',
+    /page\(this\.root, entryHead\('solo'\)\)/.test(app) &&
+      /page\(this\.root, entryHead\('room'\)\)/.test(app) &&
+      /head: '单机模式'/.test(home) &&
+      /head: '本地联机'/.test(home),
+  );
+  ok('「摆一桌」那张弹窗卡没了（单机那一屏走整屏）', !/'摆一桌'/.test(app), '‹app.ts 里还写着那张卡›');
+  // 三屏全走 page()：裸 card() 是那层半透黑底＋居中卡，也就是「叠在首页上」本身。批12 摘掉的就是它，
+  // 所以这里钉的是「没人再拿它搭常驻的那一层」——一次性的是非题走 popup()，不在这条的范围里。
+  const pages = (app.match(/page\(this\.root/g) ?? []).length;
+  ok('牌桌外那一层的三屏全走 page()，一处也没退回裸 card()', pages === 3 && !/[^.\w]card\(/.test(app), `page ${pages} 处｜裸 card ${/[^.\w]card\(/.test(app) ? '有' : '没'}`);
+  // 整屏页的遮罩必须是不透明的：半透黑底是把「还有一层在身后」这件事说出来，而这一屏没有身后
+  const bg = val('.sheet.as-page', 'background') ?? '‹没写›';
+  ok('整屏页那层不透明（跟首页同一份渐变，不是 rgba）', bg.includes('radial-gradient') && !bg.includes('rgba'), bg);
+  ok('整屏页撑满一屏：那道 88dvh 的顶不再掐着它', val('.sheet.as-page .sheet-card', 'max-height') === 'none');
+  ok('整屏页跟着宽屏那一档放宽', /var\(--card-w-wide\)/.test(val('.sheet.as-page .sheet-card', 'width', WIDE) ?? ''), val('.sheet.as-page .sheet-card', 'width', WIDE) ?? '‹没写›');
+  // 反过来量才挡得住新东西：`.as-page` 只重写它自己写的那几条，基础层上没被重写的一律照旧生效。
+  // 于是「整屏那一屏继承了什么」得一条条数得出来——以后谁往 `.sheet`／`.sheet-card` 上添一条描边、模糊、投影，
+  // 这儿当场红：那一屏是页面，不是浮在首页上面的一张卡。
+  const decl = (sel: string): string[] => [...(at(sel, '')[0]?.decls.keys() ?? [])].sort();
+  const kept = (base: string, over: string): string[] => {
+    const o = new Set(decl(over));
+    return decl(base).filter((k) => !o.has(k));
+  };
+  const veilKept = kept('.sheet', '.sheet.as-page');
+  ok('遮罩那层照旧生效的只有「铺满一屏」那四件（没有半透底、没有内边距）', veilKept.join('｜') === 'display｜inset｜position｜z-index', veilKept.join('｜') ?? '‹没找到那条›');
+  const cardKept = kept('.sheet-card', '.sheet.as-page .sheet-card');
+  ok('卡那层照旧生效的只有排版三件（边框、圆角、底色、投影都压掉了）', cardKept.join('｜') === 'display｜flex-direction｜overflow', cardKept.join('｜') ?? '‹没找到那条›');
+  // 那一屏从此不透明白占满一屏，所以它跟另外两层谁压谁就不再是「看着顺便」：
+  // 提示条输给它＝那一句话一个字都看不见；复盘那一格赢过它＝掀不开这一屏还挡在按钮上。
+  // 首页夹在中间也是有事做的：它跟复盘那一格以前打平（都写 1900），靠 DOM 顺序才压住。
+  const zToast = Number(val('.toast', 'z-index'));
+  const zDrawer = Number(val('.drawer', 'z-index'));
+  const zHome = Number(val('.home', 'z-index'));
+  const zVeil = Number(val('.sheet', 'z-index'));
+  ok('卡／整屏页之上只剩提示条那层，首页压在复盘之上（.drawer＜.home＜.sheet＜.toast）',
+    zDrawer < zHome && zHome < zVeil && zVeil < zToast,
+    `.drawer ${zDrawer}／.home ${zHome}／.sheet ${zVeil}／.toast ${zToast}`);
 }
 
 console.log(failures ? `\n${failures} 条没过` : '\n全部通过');

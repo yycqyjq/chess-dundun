@@ -43,7 +43,7 @@ export interface TableSetup {
   seed: number;
   /** 开下一局由这一位按，默认房主自己坐 P1 */
   hostSeat?: number;
-  /** 这桌「家」房主位：那把椅子的主人一回来，开局那颗就交回他。缺省跟 hostSeat */
+  /** 这桌「家」房主位：建房即房主坐的那把，代持那位让座时位还回这儿。缺省跟 hostSeat */
   homeSeat?: number;
 }
 
@@ -177,27 +177,22 @@ export class Table {
     this.log(
       `${slot.name} ${fresh ? '坐下' : '回到'}了自己的位子${slot.queued ? '（这一局先由电脑打，下一局归他）' : ''}`,
     );
-    if (moved === 'back') this.log(`${slot.name} 回来了，房主位交回 ${seatName(this.setup.hostSeat ?? 0)}`);
-    else if (moved === 'take') this.log(`${slot.name} 接过了房主位：改配置和按开始都在他手上`);
+    if (moved === 'take') this.log(`${slot.name} 接过了房主位：改配置和按开始都在他手上`);
     return { ok: true, msg };
   }
 
   /**
-   * 房主位跟着活人走，但「家」钉在一把椅子上：
-   * 家房主位上坐着活人，开局那颗就归他——原房主凭令牌回来这一刻自动收回。
-   * 那把椅子空着、或者主人没连着，才交给刚坐下的活人代持；现任还连着就不抢。
+   * 房主位只往「没人拿着」那把上走：现任还连着就不抢，坐回「家」那把的那位也不例外。
+   * `homeSeat` 记的是椅子不是人，而候场存档一恢复所有令牌都洗过——「谁曾经坐过一次 P1」
+   * 不该成为把别人正当用的开局那颗踢走的理由，那一脚踢得连一句确认都没有。
+   * 要还回去只剩一条路：代持那位自己让座（见 `stand`）。
+   * 那把椅子空着、或者主人没连着，才交给刚坐下的活人代持。
    * 只有真人递得上 join，电脑补的位永远走不到这儿，所以房主位落不到 AI 头上。
    * 开打中一律不动：那一局正打着，房主位得钉在他那把椅子上。
    */
-  private settleHost(seat: number): 'take' | 'back' | null {
+  private settleHost(seat: number): 'take' | null {
     if (this.status !== 'waiting') return null;
-    const home = this.setup.homeSeat ?? 0;
     const host = this.setup.hostSeat ?? 0;
-    const owner = this.slots[home];
-    if (home !== host && owner?.token && owner.online) {
-      this.setup.hostSeat = home;
-      return 'back';
-    }
     if (host === seat) return null;
     const keeper = this.slots[host];
     if (keeper?.token && keeper.online) return null;
@@ -360,10 +355,19 @@ export class Table {
   stand(bySeat: number): { ok: boolean; why?: string } {
     const slot = this.slots[bySeat];
     if (!slot || !slot.token) return { ok: false, why: '你没坐在这桌的椅子上' };
-    if (bySeat === (this.setup.hostSeat ?? 0)) return { ok: false, why: '房主不能让座，这桌得有人开局' };
     if (this.status === 'playing') return { ok: false, why: '这一局正在打，先去牌桌按离桌' };
+    const host = this.setup.hostSeat ?? 0;
+    const home = this.setup.homeSeat ?? 0;
+    let handed = false;
+    if (bySeat === host) {
+      // 坐在「家」那把的是真房主，他还是让不成——这桌得有人开局。但代持那位（房主位空出来才交给他
+      // 的）得还得回去：`settleHost` 不再自动收回之后，「还回去」只剩这一条路。
+      if (host === home) return { ok: false, why: '房主不能让座，这桌得有人开局' };
+      this.setup.hostSeat = home;
+      handed = true;
+    }
     Object.assign(slot, this.freshSlots(bySeat + 1)[bySeat]!);
-    this.log(`${slot.name} 让了座`);
+    this.log(`${slot.name} 让了座${handed ? `，把房主位还回了 ${seatName(home)}` : ''}`);
     this.push();
     return { ok: true };
   }
@@ -496,8 +500,7 @@ export class Table {
     const next = this.slots.find((s) => s.token && s.online);
     if (!next) return;
     const moved = this.settleHost(next.seat);
-    if (moved === 'back') this.log(`${next.name} 那把空回来了，房主位交回 ${seatName(this.setup.hostSeat ?? 0)}`);
-    else if (moved === 'take') this.log(`${next.name} 接过了房主位：改配置和按开始都在他手上`);
+    if (moved === 'take') this.log(`${next.name} 接过了房主位：改配置和按开始都在他手上`);
   }
 
   /** 入座之前客户端能看见的那点事，一张牌面都不给 */

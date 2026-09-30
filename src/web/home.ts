@@ -1,4 +1,5 @@
 import { anchor, button, div } from './ui.ts';
+import { seatName } from '../core/game.ts';
 import { foundLine, roomUrl, type FoundRoom } from '../net/discover.ts';
 import type { Lobby } from '../net/wire.ts';
 import type { Saved } from './net.ts';
@@ -30,9 +31,21 @@ export function appVersion(): string {
 }
 
 const ENTRY = {
-  solo: { head: '自己玩', note: '2~4 个位子，没坐上人的由电脑补' },
-  room: { head: '同一张网', note: '先看同网有没有桌在等人；没有就在这台机器开一桌' },
+  solo: { head: '单机模式', note: '2~4 个位子，没坐上人的由电脑补' },
+  room: { head: '本地联机', note: '先看同网有没有桌在等人；没有就在这台机器开一桌' },
 };
+
+/**
+ * 每一屏左上那颗都念这一个词。三处出口（单机模式页／本地联机页／候场厅）共用一份，
+ * 别在这儿写「回首页」、在那儿写「退出这桌」——同一件事在一条链路上换了三个名字，
+ * 人就不知道哪一颗会把他从这桌上摘下来。
+ */
+export const BACK = '返回';
+
+/** 入口那块的字，也就是点进去之后那一屏的标题：一处改两处跟着，不会漂 */
+export function entryHead(k: 'solo' | 'room'): string {
+  return ENTRY[k].head;
+}
 
 /**
  * 一条同网寻到的桌：一句情况加一条真能点的地址。只有列表页画它（候场厅里不摆别的桌）。
@@ -65,6 +78,34 @@ export function autoSeat(lobby: Pick<Lobby, 'homeSeat' | 'seats'>, saved: Saved 
   if (mine) return mine.online ? null : saved!.seat;
   if (creating) return seats[lobby.homeSeat]?.taken ? null : lobby.homeSeat;
   return -1;
+}
+
+/**
+ * 这一份座位表到了，该不该开口念那句交接。两条都得挡住，因为座位表是一秒一份：
+ * 头一份不念（`prev` 是 -1，页面刚打开，那之前换过谁没人在看，补念等于凭空冒一句），
+ * 没换也不念（房主位好好待着，那句话就会每秒钟重讲一遍、挂六秒摘掉再重讲）。
+ */
+export function hostJump(prev: number, next: number): boolean {
+  return prev >= 0 && next !== prev;
+}
+
+/**
+ * 房主位换了人，候场厅得说一句人话。桌那头本来就 log 了，但这一层不演牌桌日志——
+ * 让人只看见「房主位」那三个字从一行跳到另一行，是这一版最招人误会的地方（他不知道是谁、为什么）。
+ *
+ * 这一句只报「现在在哪把、那把的主人连着没、上一把那把现在空不空」这三件快照里就写着的事，
+ * 不猜为什么：代持那位自己让座时，位是还回「家」那把，而那把的主人多半没连着——
+ * 写成「交给 阿明」就有人在等一个不会回来的人，写成「上一把还空着」就把刚让座说成一直是空的。
+ */
+export function hostHanded(from: number, to: number, seats: { taken: boolean; nick: string; online: boolean }[]): string {
+  const who = (seat: number): string => {
+    const s = seats[seat];
+    return s?.nick ? `${seatName(seat)} · ${s.nick}` : seatName(seat);
+  };
+  const now = seats[to]?.online ? `${who(to)} 手上` : `${who(to)} 那把（那位还没连着）`;
+  return seats[from]?.taken
+    ? `房主位刚交给 ${now}，上一把在 ${who(from)} 手上`
+    : `房主位刚交给 ${now}，上一把 ${who(from)} 那把空出来了`;
 }
 
 /**

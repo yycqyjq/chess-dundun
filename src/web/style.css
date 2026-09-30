@@ -416,11 +416,14 @@ body {
 /* ---------- 首页：进门那一层 ---------- */
 
 /* 盖住整块屏幕的一层，不是排在牌桌下面——单机收杆退回来时身后还立着那副牌面，
-   所以背景必须是不透明的（跟 body 那道渐变同一份配方，别让首页看着像另一个 app） */
+   所以背景必须是不透明的（跟 body 那道渐变同一份配方，别让首页看着像另一个 app）。
+   层号 1950＝复盘那一格（.drawer 1900）之上、卡／整屏页（.sheet 2000）之下：
+   以前跟 .drawer 都写 1900，谁压谁全靠 DOM 顺序（每次回首页重新 append 到末尾才没出事），
+   现在让层号自己定胜负，动 DOM 顺序的人不会顺手把首页压到复盘底下。 */
 .home {
   position: fixed;
   inset: 0;
-  z-index: 1900;
+  z-index: 1950;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -539,6 +542,24 @@ body {
 
 .sheet.tap-close .sheet-card {
   cursor: default;
+}
+
+/* 整屏一页（单机模式／本地联机／候场厅）：还是上面那三块，只是卡撑满一屏、底色不透明。
+   点完入口换的是页面，不是盖在首页上的一张卡——所以没有半透黑底，也没有「点空白关掉」那回事 */
+.sheet.as-page {
+  padding: 0;
+  place-items: stretch;
+  background: radial-gradient(120% 90% at 50% 0%, #35291f, var(--bg) 70%);
+}
+
+.sheet.as-page .sheet-card {
+  width: min(var(--card-w), 100%);
+  max-height: none;
+  padding: max(20px, env(safe-area-inset-top)) 20px calc(14px + var(--safe-b));
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
 }
 
 /* 配置卡：卡片自己不滚，滚的是中间那块内容——底栏是卡片的直接孩子，不跟着滚，
@@ -840,6 +861,11 @@ body {
 @media (min-width: 820px) {
   .sheet-card {
     width: min(var(--card-w-wide), 92vw);
+  }
+
+  /* 整屏页跟着放宽：窄屏那一份卡宽在大屏上会瘦成一条 */
+  .sheet.as-page .sheet-card {
+    width: min(var(--card-w-wide), 100%);
   }
 
   /* 首页：两条入口并排（手机上就是上下两条，各占一份卡宽） */

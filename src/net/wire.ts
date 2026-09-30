@@ -83,7 +83,7 @@ export interface Lobby {
   players: number;
   /** 此刻代持房主位的那把：改配置和按开始都在他手上 */
   hostSeat: number;
-  /** 「家」那把房主位：主人一回来就交回他。客户端拿它认「开桌那位该坐哪把」 */
+  /** 「家」那把房主位：客户端拿它认「开桌那位该坐哪把」，代持那位让座时位还回这儿 */
   homeSeat: number;
   gameNo: number;
   mode: 'ming' | 'kou';
@@ -102,7 +102,7 @@ export type Seats = Lobby & { lan: string[] };
  * 这桌此刻还有几个活人连着。掉线的那把椅子不算（`leave` 把 `online` 抹了，令牌还留着），
  * 电脑补的位也不算（压根没连着）——跟底栏那句「还差几个位子」不是一回事：
  * 那一数是开局前还空几把椅子，这一数是现在真有人在敲这条线，所以 `queued` 那位得算进来
- * （他人在，只是这一局由电脑代打）。候场厅那颗「退出这桌」要不要先问一句，就看这个数。
+ * （他人在，只是这一局由电脑代打）。候场厅那颗「返回」要不要先问一句，就看这个数。
  */
 export function aliveSeats(seats: Pick<SeatInfo, 'online'>[]): number {
   return seats.filter((s) => s.online).length;
