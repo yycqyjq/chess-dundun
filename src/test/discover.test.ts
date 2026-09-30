@@ -1,5 +1,5 @@
 /**
- * 同网找桌的测试：一份自我介绍、一块网段的广播地址、一本会老的账，再加寻呼那一头搬字节的那几手。
+ * 同网找桌的测试：一份自我介绍、一块网段的广播地址、一本会老的账、这块网卡该不该报出去，再加寻呼那一头搬字节的那几手。
  * 全在 Node 里跑：网络的口子拿假 socket 堵住，硬盘上只往 /tmp 里临时建一间假 dist。
  */
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -35,6 +35,7 @@ import {
   type RoomCache,
 } from '../net/discover.ts';
 import { openDiscovery, type Sock } from '../node/discover.ts';
+import { lanNets } from '../node/room.ts';
 import { fileFor, mimeOf } from '../node/serve.ts';
 
 let failures = 0;
@@ -410,6 +411,80 @@ console.log('\n端 dist 那一小段：这串 URL 该落到哪个文件');
   } finally {
     rmSync(home, { recursive: true, force: true });
   }
+}
+
+console.log('\n这块网卡该不该报出去：筛选四条 + 谁排最前，全在一张假网卡表上判');
+{
+  type Nics = Parameters<typeof lanNets>[0];
+  type Net = NonNullable<NonNullable<Nics>[string]>[number];
+  /** 一块网卡上的一条地址：internal 那一路是回环，得单独摆 */
+  const v4 = (ip: string, mask: string, internal = false): Net => ({
+    family: 'IPv4',
+    address: ip,
+    netmask: mask,
+    cidr: `${ip}/${mask}`,
+    scopeid: undefined,
+    mac: 'a1:b2:c3:d4:e5:f6',
+    internal,
+  });
+  const v6 = (ip: string): Net => ({ family: 'IPv6', address: ip, netmask: 'ffff::', cidr: null, scopeid: 0, mac: 'a1:b2:c3:d4:e5:f6', internal: false });
+
+  const ips = (nics: Record<string, Net[] | undefined>): string[] => lanNets(nics).map((n) => n.ip);
+
+  ok(
+    '回环那张（internal）不报：别人照着敲只能敲到自己',
+    ips({ lo0: [v4('127.0.0.1', '255.0.0.0', true)] }).length === 0,
+  );
+  ok(
+    '169.254 那张不报：那是没配上 DHCP 时自己编的，出不了这块网卡',
+    ips({ en0: [v4('169.254.12.34', '255.255.0.0')] }).length === 0,
+  );
+  ok('v6 那条不报：寻呼那两头吃的是点分四段', ips({ en0: [v6('fe80::1%en0')] }).length === 0);
+  ok(
+    '翻来覆去要摘的那串名字都不报：VPN／网桥／容器上的地址到不了别的设备',
+    ips({
+      utun4: [v4('10.8.0.6', '255.255.255.0')],
+      awdl0: [v4('169.254.9.9', '255.255.0.0')],
+      bridge0: [v4('192.168.99.1', '255.255.255.0')],
+      docker0: [v4('172.17.0.1', '255.255.0.0')],
+      'br-9f2c': [v4('172.18.0.1', '255.255.0.0')],
+      vmnet1: [v4('192.168.100.1', '255.255.255.0')],
+      en0: [v4('192.168.1.7', '255.255.255.0')],
+    }).join(',') === '192.168.1.7',
+  );
+  ok('一块网卡压根没列（undefined）不抛，也别塞进结果', (() => { try { return ips({ en0: undefined, en1: [v4('10.0.0.5', '255.0.0.0')] }).join(',') === '10.0.0.5'; } catch { return false; } })());
+  ok(
+    '一张干净的路由器网卡：IP 和掩码一起给，掩码得是那块网卡上抄来的，寻呼算广播地址吃的就是这两样',
+    JSON.stringify(lanNets({ en0: [v4('192.168.1.7', '255.255.0.0')] })) === '[{"ip":"192.168.1.7","mask":"255.255.0.0"}]',
+  );
+  ok(
+    '一块网卡上两条地址都报，谁先谁后按这块网卡自己的顺序',
+    ips({ en0: [v4('192.168.1.7', '255.255.255.0'), v4('192.168.1.8', '255.255.255.0')] }).join(',') === '192.168.1.7,192.168.1.8',
+  );
+  ok(
+    '二维码就该画那张：wlan 与 en0 并列最前，并列时按名字排',
+    ips({ wlan0: [v4('10.0.0.9', '255.255.255.0')], en0: [v4('192.168.1.7', '255.255.255.0')] }).join(',') === '192.168.1.7,10.0.0.9',
+  );
+  ok(
+    '连着路由器的那张多半是 wlan：wlan1 排在内置口 en5 之前',
+    ips({ en5: [v4('6.6.6.6', '255.0.0.0')], wlan1: [v4('5.5.5.5', '255.0.0.0')] }).join(',') === '5.5.5.5,6.6.6.6',
+  );
+  ok(
+    '往后排的是序号大的那张内置口：en1 在 en2 前，eth0 垫底',
+    ips({ eth0: [v4('4.4.4.4', '255.0.0.0')], en2: [v4('3.3.3.3', '255.0.0.0')], en1: [v4('2.2.2.2', '255.0.0.0')], en0: [v4('1.1.1.1', '255.0.0.0')] }).join(',') === '1.1.1.1,2.2.2.2,3.3.3.3,4.4.4.4',
+  );
+  ok(
+    '序号写到两位也别按字典序排：en2 在 en10 前',
+    ips({ en10: [v4('8.8.8.8', '255.0.0.0')], en2: [v4('7.7.7.7', '255.0.0.0')] }).join(',') === '7.7.7.7,8.8.8.8',
+  );
+  ok(
+    '认不出的名字一律排到最后（不摘掉，只是不占头一份）',
+    ips({ ath0: [v4('9.9.9.9', '255.0.0.0')], en1: [v4('8.8.8.8', '255.0.0.0')] }).join(',') === '8.8.8.8,9.9.9.9',
+  );
+  ok(
+    '空着不递就是问本机：回的那几项每条都是点分四段带掩码，一条筛过的都不许漏',
+    lanNets().every((n) => /^\d+\.\d+\.\d+\.\d+$/.test(n.ip) && /^\d+\.\d+\.\d+\.\d+$/.test(n.mask) && !n.ip.startsWith('169.254.')),
+  );
 }
 
 console.log(failures === 0 ? '\n全部通过' : `\n${failures} 条没过`);

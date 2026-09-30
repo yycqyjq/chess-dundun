@@ -92,10 +92,13 @@ export function lanAddresses(): string[] {
 /**
  * 同上，但连掩码一起给——寻呼要往「这块网段的广播地址」发包，光有 IP 算不出来。
  * 掩码配得怪（零散位、/32）由 discover.ts 的 broadcastOf 拒掉：那一头就只剩全网广播和回环两路。
+ *
+ * `nics` 空着就是问本机；测试那头递一张假的进来。不然这四条筛选（回环／169.254／IPv6／VPN 那串名字）
+ * 加打分排序就只能长在真机上——而它们筛错了的样子跟「这块网不让设备互访」一模一样，看不出区别。
  */
-export function lanNets(): { ip: string; mask: string }[] {
+export function lanNets(nics: ReturnType<typeof networkInterfaces> = networkInterfaces()): { ip: string; mask: string }[] {
   const hits: { name: string; ip: string; mask: string }[] = [];
-  for (const [name, list] of Object.entries(networkInterfaces())) {
+  for (const [name, list] of Object.entries(nics)) {
     if (NIC_SKIP.test(name)) continue;
     for (const net of list ?? []) {
       if (net.family !== 'IPv4' || net.internal) continue;
@@ -375,7 +378,7 @@ export function openRoom(argv: string[], port: number): Room {
         return;
       }
       case 'disband': {
-        // 候场厅那颗「退出这桌」在只剩他一个活人时递上来：能不能散归桌查（只有房主、只有没开打、只有他一个活人）
+        // 候场厅那颗「返回」在只剩他一个活人时递上来：能不能散归桌查（只有房主、只有没开打、只有他一个活人）
         if (seat === undefined) {
           conn.send(NO_SEAT);
           return;
