@@ -1,5 +1,5 @@
 /**
- * 同网找桌的测试：一份自我介绍、一块网段的广播地址、一本会老的账、这块网卡该不该报出去，再加寻呼那一头搬字节的那几手。
+ * 同网找桌的测试：一份自我介绍、一块网段的广播地址、一本会老的账、这块网卡该不该报出去、dist 那头怎么端，再加寻呼那一头搬字节的那几手。
  * 全在 Node 里跑：网络的口子拿假 socket 堵住，硬盘上只往 /tmp 里临时建一间假 dist。
  */
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -36,7 +36,7 @@ import {
 } from '../net/discover.ts';
 import { openDiscovery, type Sock } from '../node/discover.ts';
 import { lanNets } from '../node/room.ts';
-import { fileFor, mimeOf } from '../node/serve.ts';
+import { fileFor, mimeOf, notFound, sendFile } from '../node/serve.ts';
 
 let failures = 0;
 function ok(name: string, condition: boolean, detail = ''): void {
@@ -371,7 +371,7 @@ console.log('\n搬字节那一头：口令答一句、答话归一本账、野�
   ok('发得出去就不给这句假原因', clean.rooms.length === 0 && clean.why === '', JSON.stringify(clean));
 }
 
-console.log('\n端 dist 那一小段：这串 URL 该落到哪个文件');
+console.log('\n端 dist 那一小段：这串 URL 该落到哪个文件、落到之后怎么端出去');
 {
   /** 假 dist 摆在一间屋子里：屋子还有一张 dist 外的文件，「出不出得去」那句才量得准 */
   const home = mkdtempSync(join(tmpdir(), 'cd-serve-'));
@@ -408,6 +408,69 @@ console.log('\n端 dist 那一小段：这串 URL 该落到哪个文件');
     ok('后缀认得 css', mimeOf('/a/b/c.css').startsWith('text/css'));
     ok('后缀认得 woff2', mimeOf('/f.woff2') === 'font/woff2');
     ok('没后缀不瞎猜', mimeOf('/a/b/noext') === 'application/octet-stream');
+    // 端出去那一半：状态码、类型、还有「读不出来那一路不许把宿主抛穿」
+    type Res = Parameters<typeof sendFile>[0];
+    const record = (fn: (res: Res) => void) => {
+      const hit = { code: 0, headers: {} as Record<string, string>, body: '', ends: 0, threw: '' };
+      const res = {
+        writeHead(code: number, headers: Record<string, string>) {
+          hit.code = code;
+          Object.assign(hit.headers, headers);
+          return res;
+        },
+        end(body?: unknown) {
+          hit.ends += 1;
+          hit.body = Buffer.isBuffer(body) ? body.toString('utf8') : String(body ?? '');
+          return res;
+        },
+      } as unknown as Res;
+      try {
+        fn(res);
+      } catch (e) {
+        hit.threw = String((e as Error).message ?? e);
+      }
+      return hit;
+    };
+    const ok200 = record((res) => sendFile(res, join(dist, 'index.html')));
+    ok(
+      '读得出来的文件：200、正文是文件自己那几字节、end 只调一次',
+      ok200.threw === '' && ok200.code === 200 && ok200.body === '<html></html>' && ok200.ends === 1,
+      JSON.stringify(ok200),
+    );
+    ok('类型跟着后缀走（.html 别端成下载）', ok200.headers['content-type'] === 'text/html; charset=utf8', JSON.stringify(ok200.headers));
+    ok(
+      '每份都带 no-store：build 一换 index.html，浏览器拿旧的就把新页面挡在外面',
+      ok200.headers['cache-control'] === 'no-store',
+      JSON.stringify(ok200.headers),
+    );
+    const bin = join(dist, 'raw.bin');
+    writeFileSync(bin, 'bin-body');
+    const okBin = record((res) => sendFile(res, bin));
+    ok(
+      '后缀认不出的文件照样端得出去，类型给 octet-stream：宁可下载，也别拿 text/plain 把别的类型糊过去',
+      okBin.code === 200 && okBin.body === 'bin-body' && okBin.headers['content-type'] === 'application/octet-stream',
+      JSON.stringify(okBin),
+    );
+    const gone = record((res) => sendFile(res, join(dist, 'gone.js')));
+    ok(
+      '文件这会儿读不出来那一路不许把宿主抛穿（这一抛是整个房主进程没了、全桌掉线）',
+      gone.threw === '',
+      JSON.stringify(gone),
+    );
+    ok(
+      '读不出来的文件回 500、正文那句念得出人话：那是「这会儿读不出来」，不是「没这个文件」',
+      gone.code === 500 && gone.headers['content-type'] === 'text/plain; charset=utf8' && gone.body === '这个文件这会儿读不出来',
+      JSON.stringify(gone),
+    );
+    ok('500 那句写完就收：end 只调一次，不许接着往下再端一遍 200', gone.ends === 1, JSON.stringify(gone));
+    const dir = record((res) => sendFile(res, dist));
+    ok('拿目录当文件端出去也不许抛（EISDIR 也算读不出来）', dir.threw === '' && dir.code === 500, JSON.stringify(dir));
+    const nf = record(notFound);
+    ok(
+      '认不出那串 URL：404＋一句「没这个文件」，一句就完事',
+      nf.code === 404 && nf.body === '没这个文件' && nf.headers['content-type'] === 'text/plain; charset=utf8' && nf.ends === 1,
+      JSON.stringify(nf),
+    );
   } finally {
     rmSync(home, { recursive: true, force: true });
   }
