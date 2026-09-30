@@ -11,12 +11,12 @@ import {
   type GameState,
 } from '../core/game.ts';
 import { loadRules } from '../node/load_rules.ts';
-import { buildPieceSet } from '../core/pieces.ts';
+import { buildPieceSet, pieceLabel } from '../core/pieces.ts';
 import { viewFor } from '../core/view.ts';
 import { choose, type Level } from '../ai/agent.ts';
 import { beats, comparePower, powerOf, resolveTrick } from '../core/trick.ts';
 import { mulberry32 } from '../core/rng.ts';
-import { pickByIndices, sizesOf, tooLong } from '../cli/menu.ts';
+import { indexedHand, pickByIndices, sizesOf, tooLong } from '../cli/menu.ts';
 
 let failures = 0;
 function ok(name: string, condition: boolean, detail = ''): void {
@@ -148,7 +148,8 @@ ok(
   bigOwed.every((a) => a.kind === 'discard' && sizeOf(a) === 5) && bigOwed.length === 4368,
   `${bigOwed.length} 条：${[...new Set(bigOwed.map((a) => a.kind))].join(',')}`,
 );
-ok('长菜单收口：4368 条组合不数行号，改成按下标报牌，只告诉他出几张', tooLong(bigOwed) && sizesOf(bigOwed).join() === '5');
+ok('长菜单收口：4368 条组合不数行号，改成按下标报牌', tooLong(bigOwed), `${bigOwed.length} 条 / tooLong=${tooLong(bigOwed)}`);
+ok('折成报下标时得告诉人这一轮出几张：那一轮只有 5 这一档', sizesOf(bigOwed).join() === '5', sizesOf(bigOwed).join());
 const first = bigOwed[0]!;
 const firstIdx = (first as { pieceIds: number[] }).pieceIds
   .map((id) => bigKou.hands[1]!.indexOf(id) + 1)
@@ -174,6 +175,58 @@ ok(
   '两张一组里只有那对卒合法：车+卒 报上来照样 null',
   mixedActs.length === 1 && pickByIndices(mixed, 1, mixedActs, '1 2') === null && pickByIndices(mixed, 1, mixedActs, '2 3') === mixedActs[0],
   mixedActs.map((a) => (a as { pieceIds: number[] }).pieceIds.join(',')).join(' | '),
+);
+
+// 同一套「按下标报牌」的显示那一半：列出来的号，跟报回去吃到的必须是同一张牌
+// 四张挑四个不同名次的：同名次的牌列出来长一个样，号错位也看不出差别
+const solo4 = [id('红车'), id('黑炮'), id('兵'), id('卒')];
+const oneLead = toPlay(createGame({ rules: base, players: 2, mode: 'ming', seed: 71 }), [[id('红炮'), id('黑马')], solo4], 1);
+const leadActs = legalActions(oneLead, 1);
+const shown = indexedHand(oneLead, 1).split('  ');
+const rest = (t: string) => t.slice(t.indexOf('.') + 1);
+const soloOf = (a: Action) => (a as { pieceIds: number[] }).pieceIds;
+ok(
+  '这一轮是首出：手里那四张各有一条单出，正好拿来逐号回查',
+  solo4.every((p) => leadActs.some((a) => a.kind === 'lead' && soloOf(a).length === 1 && soloOf(a)[0] === p)),
+  `${leadActs.length} 条：${ids(leadActs)}`,
+);
+ok(
+  '列出来的张数跟手里一样，号从 1 连着排到 n',
+  shown.length === oneLead.hands[1]!.length && shown.every((t, i) => Number(t.slice(0, t.indexOf('.'))) === i + 1),
+  indexedHand(oneLead, 1),
+);
+ok(
+  '逐号报回去，引擎认的那张正是这一行列的那张',
+  shown.length === 4 &&
+    shown.every((t, i) => {
+      // 人照屏上那行写的号敲，敲的就是这一行：号码取屏上那个，不取循环里的 i
+      const a = pickByIndices(oneLead, 1, leadActs, t.slice(0, t.indexOf('.')));
+      return !!a && soloOf(a)[0] === solo4[i] && map.get(soloOf(a)[0]!)!.label === rest(t);
+    }),
+  indexedHand(oneLead, 1),
+);
+ok(
+  '列的是这一位手里的牌，不是隔壁那位的',
+  indexedHand(oneLead, 0) !== indexedHand(oneLead, 1) &&
+    indexedHand(oneLead, 0)
+      .split('  ')
+      .every((t, i) => rest(t) === map.get(oneLead.hands[0]![i]!)!.label),
+  indexedHand(oneLead, 0),
+);
+ok(
+  '号跟号之间那分隔，报回来那头切得开：两头用的是同一套切法',
+  indexedHand(oneLead, 1).split(/[\s,，、]+/).length === oneLead.hands[1]!.length,
+  indexedHand(oneLead, 1),
+);
+ok(
+  '牌名里不许夹空白、逗号、顿号：一夹就串号',
+  pieces.every((p) => !/[\s,，、]/.test(pieceLabel(p))),
+  pieces.filter((p) => /[\s,，、]/.test(pieceLabel(p))).map((p) => p.label).join(','),
+);
+ok(
+  '长菜单那头第 16 号（手里最后一张）报得回去，不算超范围',
+  indexedHand(bigKou, 1).split('  ').length === 16 && pickByIndices(bigKou, 1, bigOwed, '16 15 14 13 12') !== null,
+  `${indexedHand(bigKou, 1).split('  ').length} 号 / 报 16：${pickByIndices(bigKou, 1, bigOwed, '16 15 14 13 12') === null ? 'null' : '认'}`,
 );
 
 const tied = createGame({ rules: base, players: 4, mode: 'kou', seed: 3 });
