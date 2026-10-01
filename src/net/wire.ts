@@ -1,4 +1,4 @@
-import { parseRules, type Action, type AllocWay, type GameState, type Rules } from '../core/game.ts';
+import { countsText, parseRules, type Action, type AllocWay, type GameState, type Rules } from '../core/game.ts';
 import type { MatchBook } from '../core/match.ts';
 import { LEVELS, type Level } from '../ai/agent.ts';
 import type { RankFile } from '../core/pieces.ts';
@@ -189,7 +189,7 @@ export function checkHost(raw: unknown, seats: number, rules: Pick<Rules, 'modes
       const out: { players?: number; mode?: 'ming' | 'kou'; level?: Level } = {};
       if (raw.players !== undefined) {
         if (!isInt(raw.players) || !rules.playerCounts.includes(raw.players)) {
-          return `这桌只能 ${rules.playerCounts.join(' 或 ')} 人`;
+          return `这桌只能 ${countsText(rules.playerCounts)} 人`;
         }
         out.players = raw.players;
       }

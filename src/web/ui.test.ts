@@ -12,8 +12,9 @@
  * 全文件（连假元素自己）都不许用构造器参数属性——`--experimental-strip-types` 只抹类型，不改写赋值。
  */
 import { anchor, buildShell, button, card, page, paintChip, popup, rich, segment, toast, type Shell } from './ui.ts';
-import { appVersion, autoSeat, BACK, entryHead, homePanel, hostHanded, hostJump, initialScreen, isLoopback, roomRow } from './home.ts';
-import { foundLine, type FoundRoom } from '../net/discover.ts';
+import { appVersion, autoSeat, BACK, entryHead, homePanel, hostHanded, hostJump, initialScreen, isLoopback, roomRow, seatOption, wantsJoin } from './home.ts';
+import type { Rules } from '../core/game.ts';
+import { foundLine, JOIN_QUERY, type FoundRoom } from '../net/discover.ts';
 import type { SeatInfo } from '../net/wire.ts';
 import type { Saved } from './net.ts';
 import { buildPieceSet, buildRanks, type Piece } from '../core/pieces.ts';
@@ -174,7 +175,7 @@ G.window = { setTimeout: () => 1 };
 
 {
   const root = new FEl('div');
-  const shell = buildShell(H(root), 2, 4, () => {}, () => {}, () => {});
+  const shell = buildShell(H(root), 2, 4, 10, () => {}, () => {}, () => {});
   const v = seen(shell);
   ok(
     '台面建足四把名字条，只亮这桌两人在的那两条',
@@ -187,7 +188,8 @@ G.window = { setTimeout: () => 1 };
     [...Object.values(v.chipEls[0]!)].map((el) => [...el.names][0]).join(',') === 'ord,who,tag,count,won',
     [...Object.values(v.chipEls[0]!)].map((el) => [...el.names].join('+')).join(','),
   );
-  ok('八摞标签照旧八块', v.pileZones.length === 8);
+  // 摞标签按最宽那一档建够：3 人档 30 枚 ÷ 一摞 3 张＝10 摞，比 2、4 人那 8 摞多两格
+  ok('十摞标签建够十块', v.pileZones.length === 10);
   ok(
     '五格都挂在自己那条名字条下面',
     v.chipEls.every((p) => Object.values(p).every((el) => el.parent === v.chips[v.chipEls.indexOf(p)])),
@@ -202,7 +204,7 @@ G.window = { setTimeout: () => 1 };
 // ---------- 座位标记写进对的格子 ----------
 
 {
-  const v = seen(buildShell(H(new FEl('div')), 4, 4, () => {}, () => {}, () => {}));
+  const v = seen(buildShell(H(new FEl('div')), 4, 4, 10, () => {}, () => {}, () => {}));
   const chip = v.chips[2]!;
   const parts = v.chipEls[2]!;
   const paint = (who: string, tag: string, count: number, won: number, ord: number | null): void =>
@@ -442,13 +444,16 @@ function planOf(spotFor: (i: number) => Placed): Map<number, Placed> {
 // ---------- 首页：进门落在哪一页、那两个入口点了往哪儿走 ----------
 
 {
-  const homeHosts = ['localhost', '127.0.0.1', '127.8.9.9', '::1', '[::1]'];
-  const roomHosts = ['192.168.1.7', '10.0.0.3', '172.16.0.9', 'chess.lan', 'example.com'];
-  const badHome = homeHosts.filter((h) => initialScreen(h) !== 'home');
-  const badRoom = roomHosts.filter((h) => initialScreen(h) !== 'room');
-  ok('本机那几个地址都停在首页', badHome.length === 0, badHome.join(','));
-  ok('别处的地址一律直落候场厅：拿着链接进来的人不再被问一遍', badRoom.length === 0, badRoom.join(','));
-  ok('首页不写进邀请那把尺子是同一个口径', isLoopback('127.0.0.1') && !isLoopback('192.168.1.7'));
+  const bare = ['', '?', '?players=2', '?join2=1', '?joining=1'];
+  const invited = ['?join=1', '?join', '?join=', '?join=yes', '?join=1&x=2', '?x=2&join=1', '?JOIN=x&join=1'];
+  const badHome = bare.filter((s) => initialScreen(s) !== 'home');
+  const badRoom = invited.filter((s) => initialScreen(s) !== 'room');
+  // 落哪一屏看的是地址上那句意图，不再是「这台机器是不是本机」：
+  // 光凭 host 的话，手输一条局域网地址的人（多半就是想自己挑）被强行按进候场厅，而本机开着邀请页的人反倒被问一遍
+  ok('裸地址一律先落首页：手输的那条没开口说「我是来入桌的」', badHome.length === 0, badHome.join(','));
+  ok('带着 join 的那几条直落候场厅：拿着邀请链接、扫码进来的人不再被问一遍', badRoom.length === 0, badRoom.join(','));
+  ok('join 写成 0／false／no 才算没开口，大小写都算（只写个 ?join 反倒是要入桌）', !wantsJoin('?join=0') && !wantsJoin('?join=false') && !wantsJoin('?join=NO') && !wantsJoin('?join=No'), ['?join=0', '?join=false', '?join=NO', '?join=No'].filter(wantsJoin).join(','));
+  ok('首页不写进邀请那把尺子还在用（回环那条 origin 不能给别人扫）', isLoopback('127.0.0.1') && !isLoopback('192.168.1.7'));
 
   let solo = 0;
   let net = 0;
@@ -457,7 +462,32 @@ function planOf(spotFor: (i: number) => Placed): Map<number, Placed> {
   ok('首页是一整块 .home，里头四块依序排', names.includes('home'), names.join('+'));
   const kids = panel.children.map((c) => [...c.names][0]);
   ok('抬头／要点／入口／脚，四块一块不多一块不少', kids.join(',') === 'home-title,home-brief,home-entries,home-foot', kids.join(','));
-  ok('抬头是名字、要点是那三个数', panel.children[0]!.raw === '棋墩墩' && /32 枚.*黑 < 红/.test(panel.children[1]!.raw), panel.children[1]!.raw);
+  ok(
+    '抬头是名字，要点不报固定枚数（2、4 人 32 枚、3 人 30 枚，写死一个数就必错一档）',
+    panel.children[0]!.raw === '棋墩墩' && panel.children[1]!.raw === '7 个职级 · 黑 < 红' && !/\d+ 枚/.test(panel.children[1]!.raw),
+    panel.children[1]!.raw,
+  );
+
+  // 候场厅／开桌那一屏的座位选项：枚数得按**这一档落定之后**的牌堆算。
+  // 假表把两档的数拉开（默认 12 枚、3 人那档 6 枚）：真表上是 32 与 30，形状一样——
+  // 少了 rulesFor 这一步，3 人那一行就念成 12 ÷ 3 = 4 枚，而桌上一人只有 10 枚。
+  const seatTable: Rules = {
+    name: '假表',
+    ranks: buildRanks([{ name: '兵卒', redLabel: '兵', blackLabel: '卒', count: [6, 6] }]),
+    playerCounts: [2, 3],
+    modes: ['ming', 'kou'],
+    tieBreak: 'leader',
+    nextLeader: 'trick-winner',
+    mingqi: { mustBeatIfAble: true, groupCompare: 'sameSize', discardCost: 'same' },
+    kouqi: { mustBeatIfAble: false, groupCompare: 'sameSize', discardCost: 'same' },
+    draft: { stackSize: 2, ways: ['layered'] },
+    variants: [{ players: 3, ranks: { 兵卒: [3, 3] } }],
+  };
+  ok(
+    '座位那行念的是这一档自己的枚数：2 人 12÷2、3 人 6÷3',
+    seatOption(seatTable, 2) === '2 人 · 每人 6 枚' && seatOption(seatTable, 3) === '3 人 · 每人 2 枚',
+    `${seatOption(seatTable, 2)}｜${seatOption(seatTable, 3)}`,
+  );
 
   const entries = panel.findAll('button');
   ok('两个入口各是一整块按钮，不是 div（键盘 Tab 走得到）', entries.length === 2 && entries.every((e) => e.tag === 'button' && e.type === 'button'));
@@ -483,9 +513,11 @@ function planOf(spotFor: (i: number) => Placed): Map<number, Placed> {
 
   const foot = panel.find('home-foot')!;
   ok('没注上版本时宁可少那一行，也不念一个 undefined', !foot.find('v') && appVersion() === '', foot.children.map((c) => c.raw).join(','));
-  G.__APP_VERSION__ = '0.1.0';
+  // 这一格注的是**编出来的**版本号，不是 package.json 那一个（真数由 vite 的 define 带进来）：
+  // 写成正经的 0.1.0 会让人以为测试把界面钉死在当前版本上，改天升版本还以为要跟着改这里。
+  G.__APP_VERSION__ = '9.9.9';
   const withVersion = F(homePanel(() => {}, () => {})).find('home-foot')!;
-  ok('注上了就在脚上念 v0.1.0，那句联机提示还在', withVersion.find('v')!.raw === 'v0.1.0' && withVersion.children.length === 2, withVersion.children.map((c) => c.raw).join(','));
+  ok('注上了就在脚上念 v9.9.9，那句联机提示还在', withVersion.find('v')!.raw === 'v9.9.9' && withVersion.children.length === 2, withVersion.children.map((c) => c.raw).join(','));
   delete G.__APP_VERSION__;
 }
 
@@ -511,7 +543,10 @@ function planOf(spotFor: (i: number) => Placed): Map<number, Placed> {
   const href = (n: FEl) => (n as unknown as Record<string, string>)['href'];
   ok('一行两块：一句情况挨一条地址，地址本身就是那颗「去」', row.children.length === 2 && row.children[1]!.tag === 'a', row.children.map((c) => `${c.tag}.${c.className}`).join('+'));
   ok('那句情况走的是 foundLine，列表页和候场厅念的是同一句', row.children[0]!.raw === foundLine(f), row.children[0]!.raw);
-  ok('地址由 ip＋port 现拼，一个字都没往 HTML 里写', href(row.children[1]!) === 'http://192.168.1.41:5200/' && row.countHtml() === 0, `${href(row.children[1]!)}｜${row.allHtml.join('｜')}`);
+  ok('地址现拼得出来，且带着入桌那个标记', href(row.children[1]!) === `http://192.168.1.41:5200/${JOIN_QUERY}` && row.countHtml() === 0, `${href(row.children[1]!)}｜${row.allHtml.join('｜')}`);
+  // 列表里点一条就是「去入桌」，那条地址必须自己带着这句意图：不带的话，浏览器落到首页，人还得再点一次「本地联机」。
+  // 这儿不写死那串标记，量的是「拼地址那一头」跟「认地址那一头」用的是同一句话——谁改了拼法，两头当场对不上
+  ok('那条地址带着入桌那个标记：点它进去落的就是候场厅', initialScreen(new URL(href(row.children[1]!)).search) === 'room' && href(row.children[1]!).endsWith(JOIN_QUERY), href(row.children[1]!));
   ok('名头带着 btn mini：跟旁边那颗按钮一样是个能点的东西', row.children[1]!.className === 'btn mini peer-link', row.children[1]!.className);
   const full = F(roomRow({ ...f, free: 0, status: 'playing' }));
   ok('坐满了、开打中，那一行照样只是把话写出来，不另加一颗灰按钮', full.children.length === 2 && /坐满了/.test(full.children[0]!.raw), full.children[0]!.raw);

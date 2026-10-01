@@ -1,6 +1,7 @@
 import { choose, type Level } from '../ai/agent.ts';
 import {
   apply,
+  countsText,
   createGame,
   legalActions,
   pendingSeats,
@@ -104,6 +105,14 @@ export class Table {
     this.book = openMatch(setup.players);
     this.rng = this.rewindRng(0);
     this.slots = this.freshSlots(setup.players);
+  }
+
+  /**
+   * 这桌能坐几人、有哪几种玩法：认的是开桌那份配置表，不是 `state.rules`。
+   * 后者已经按当前人数落定过，那份只说「这一档」——拿它当档位清单，改人数就先被自己拒了。
+   */
+  get config(): Pick<Rules, 'modes' | 'playerCounts'> {
+    return this.setup.rules;
   }
 
   /**
@@ -289,7 +298,7 @@ export class Table {
     if (this.status === 'playing') return { ok: false, why: '这一局已经开打了，要改先去候场厅' };
     const players = patch.players ?? this.setup.players;
     if (!this.setup.rules.playerCounts.includes(players))
-      return { ok: false, why: `这桌只能 ${this.setup.rules.playerCounts.join(' 或 ')} 人` };
+      return { ok: false, why: `这桌只能 ${countsText(this.setup.rules.playerCounts)} 人` };
     const mode = patch.mode ?? this.setup.mode;
     const level = patch.level ?? this.setup.level;
     const same = players === this.setup.players && mode === this.setup.mode && level === this.setup.level;

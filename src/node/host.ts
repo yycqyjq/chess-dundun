@@ -14,7 +14,8 @@ import { fileFor, notFound, sendFile } from './serve.ts';
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 const DIST = normalize(join(ROOT, '..', '..', 'dist'));
-// 5199 让给 npm run dev，房主自己占 5200，两个端口能同时跑（但都写同一份存档，别同时开两桌）
+// 5199 让给 npm run dev，房主自己占 5200，两个端口能同时跑——但两份存档不能：
+// 起桌前先在存档旁边占一条，抢同一份存档的那张当场开不起来（闸在 room.ts::claimSave）
 const DEFAULT_PORT = 5200;
 
 function serve(req: IncomingMessage, res: ServerResponse): void {
@@ -33,6 +34,7 @@ if (hasFlag(argv, 'help')) {
     'npm run host -- --players=2 --mode=kou --level=hard --port=5200 --seed=7 --save=table.json\n' +
       '  --fresh   丢掉上一次的牌桌，重开一桌\n' +
       '  --players/--mode/--level 只是这桌的默认值，进候场厅后房主随时能在页面上改\n' +
+      '  --save=另一份文件  一台机器上要同时开两张桌就得各用各的存档：抢同一份存档的那张会被当场拒掉\n' +
       '  --no-discover   不参与同网寻呼（一台机器开两张桌时，其中一张加这个）\n' +
       '  --discover-slot=0..7  寻呼换一槽守；默认按 http 端口落槽\n' +
       '  先 npm run build 把 dist/ 端出来，这进程只负责把它和 WebSocket 挂在同一个端口上\n' +
@@ -61,6 +63,8 @@ server.listen(port, '0.0.0.0', () => {
   console.log('\n这台机器上打开：');
   console.log(`  http://127.0.0.1:${port}/`);
   const urls = room.inviteUrls();
+  // 问 /whoami 得拿没带 query 的那一条：邀请地址现在尾巴上是 ?join=1，直接拼上去就成了 ?join=1whoami
+  const curlBase = (urls[0] ?? `http://127.0.0.1:${port}/`).split('?')[0];
   if (urls.length) {
     console.log('同一张网里别的设备打开（地址敲进浏览器就行，不用装任何东西；进去就是候场厅）：');
     for (const url of urls) console.log(`  ${url}`);
@@ -69,7 +73,7 @@ server.listen(port, '0.0.0.0', () => {
   }
   console.log(
     room.discovery.on
-      ? `同网寻呼守 UDP ${room.discovery.port}（别的设备上同网桌列表那一页就靠它）；想自己确认一下：curl ${urls[0] ?? `http://127.0.0.1:${port}/`}whoami`
+      ? `同网寻呼守 UDP ${room.discovery.port}（别的设备上同网桌列表那一页就靠它）；想自己确认一下：curl ${curlBase}whoami`
       : '同网寻呼没开（--no-discover）：别的设备只能照上面那条地址手动敲',
   );
   console.log(

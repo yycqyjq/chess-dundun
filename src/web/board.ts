@@ -1,4 +1,5 @@
-import { isFaceDown, type GameState } from '../core/game.ts';
+import { isFaceDown, rulesFor, type GameState, type Rules } from '../core/game.ts';
+import { buildPieceSet } from '../core/pieces.ts';
 
 /** 一张棋子在这一帧的样子：左上角坐标、旋转、缩放、扣不扣、堆叠次序、补间延迟、附加类 */
 export interface Placed {
@@ -12,10 +13,14 @@ export interface Placed {
   cls: string;
 }
 
-/** 桌面像素尺寸：可落牌的那块矩形，底部按钮条不在里面 */
+/** 桌面像素尺寸：可落牌的那块矩形，底部按钮条不在里面。
+ *  `stacks`/`layers` 是这一档摆摞的形（2、4 人 8 摞 × 4 张，3 人 10 摞 × 3 张）：一张牌多大是从
+ *  「那一排横着塞得下几张」反推出来的，所以它得跟桌面一起传——整桌只有一套牌径，发完牌也不能变。 */
 export interface Board {
   w: number;
   h: number;
+  stacks: number;
+  layers: number;
 }
 
 /** 表现层自己攒的状态：引擎不记「哪张牌进了谁的摞」，也不管选中态和动画阶段 */
@@ -37,7 +42,7 @@ export interface TableView {
   peek: Set<number>;
   /** 鼠标正指着第几摞（摸签阶段把那摞摊开给人看清），null 表示没指 */
   hover: number | null;
-  /** 摸签「选中」那一拍：点中这张抬起描边，其余七摞降透明。只做位移以外的强调 */
+  /** 摸签「选中」那一拍：点中这张抬起描边，没点中的那些摞降透明。只做位移以外的强调 */
   pick: number | null;
   /** 摸签「抽出」那一拍：这张签牌就在自己那一格里放大翻面，null 表示已经送回扣下 */
   lift: number | null;
@@ -45,12 +50,11 @@ export interface TableView {
   spread: boolean;
 }
 
-const STACKS = 8;
-
 /** 一摞几张：收来的牌按这个数码，四张一墩看得清 */
 export const PILE_SIZE = 4;
 
-/** 摸签时鼠标压着的那摞彻底摊开，四张互不遮挡、每张都能单独点——间距按牌面直径算，`stackSpots` 跟着它 */
+/** 摸签时鼠标压着的那摞彻底摊开，摞里每张互不遮挡、每张都能单独点——间距按牌面直径算，`stackSpots` 跟着它。
+ *  几格看这一摞实际几张（`Board.layers`），不是写死四张 */
 const SPREAD = 1.04;
 
 /**
@@ -95,10 +99,14 @@ function pileBox(cw: number): { a: number; i: number } {
  * 收 32 张（一家独吞＝八组）也不许叠罗汉：组数一多就重新分格数、把每张小牌整体缩一点，
  * 让它们仍在同一个方框里排成整齐的网格。四组以内用原尺寸，看不出缩过。
  * 沿边固定 `PILE_ROW` 组：横向让量 `CORNER_KEEP` 就够两组，多塞一列反而要把牌缩得更狠。
+ * `alongRoom` 是**沿边那个方向**实际还剩多长（竖边那两家要排到自己那坨手牌的上沿为止）：
+ * 牌径跟着档位涨（3 人档一摞三层，同样高的桌面牌更大），那条边可能不够排，
+ * 这时候也按同一档缩——缩是往自己那个角落缩的，只会更松，不会挤到别人。
  */
-function pileUnit(groups: number, cw: number): number {
+function pileUnit(groups: number, cw: number, alongRoom = Infinity): number {
   const rows = Math.max(1, Math.ceil(groups / PILE_ROW));
-  return Math.min(cw * PILE_SCALE, pileBox(cw).i / (GROUP_STEP_I * (rows - 1) + GROUP_I));
+  const span = (Math.min(PILE_ROW, Math.max(1, groups)) - 1) * GROUP_STEP_A + 0.16 * (PILE_SIZE - 1) + 1;
+  return Math.min(cw * PILE_SCALE, pileBox(cw).i / (GROUP_STEP_I * (rows - 1) + GROUP_I), alongRoom / span);
 }
 
 /** 手牌扇形左右各让出这么多个 cw：四角那块地盘归收牌摞，扇形不许压进去 */
@@ -382,19 +390,38 @@ export function labelBands(players: number, board: Board, mine: number): LabelBa
   const left = LABEL_X;
   const right = board.w - LABEL_W - LABEL_X;
   if (players === 2) return [band(0, right, bottom, 'right'), band(1, left, top, 'left')];
-  return [
+  const seats = [
     band(0, right, bottom, 'right'),
     band(1, left, topBand(board) + LABEL_GAP, 'left'),
     band(2, left, top, 'left'),
     band(3, right, top, 'right'),
   ];
+  // 3 人局就是这套地盘少一家：坐左手边和对面那两条照旧，右手边那条（rel 3）空着没人坐
+  return players === 3 ? seats.slice(0, 3) : seats;
 }
 
-/** 摆摞阶段的几何：8 摞在哪、多大，摆牌的和那一排的领地用同一套常数 */
+/** 这一档摆几摞、一摞几张：枚数和摞大小都在落过定的 `state.rules` 里，发完牌也不会变。
+ *  牌径是从「那一排放得下几张」反推的，整桌只有一套，所以摆摞之外也得带着这个形——别让哪儿自己写死 8。 */
+export function draftShape(state: GameState): { stacks: number; layers: number } {
+  const layers = state.rules.draft.stackSize;
+  return { stacks: Math.ceil(state.pieces.length / layers), layers };
+}
+
+/** 壳子搭一次就得够最坏那一排：2、4 人 8 摞，3 人 10 摞。改人数不重搭壳子，多出来的标签先藏起来 */
+export function maxStacks(rules: Rules): number {
+  return Math.max(
+    ...rules.playerCounts.map((n) => {
+      const r = rulesFor(rules, n);
+      return Math.ceil(buildPieceSet(r.ranks).length / r.draft.stackSize);
+    }),
+  );
+}
+
+/** 摆摞阶段的几何：这一排几摞、间距多大，摆牌的和那一排的领地用同一套常数（摞数照 `Board.stacks`） */
 function draftGeom(board: Board) {
   const cw = pieceSize(board);
   const gap = cw * 1.16;
-  return { cw, gap, x0: board.w / 2 - (gap * (STACKS - 1)) / 2, y0: board.h * 0.42 };
+  return { cw, gap, x0: board.w / 2 - (gap * (board.stacks - 1)) / 2, y0: board.h * 0.42 };
 }
 
 /** 抽出来展示这张放大这么多：整桌就它一张在讲点数，得比摞里的牌明显大一圈 */
@@ -404,17 +431,19 @@ const LIFT_SCALE = 1.3;
  *  点击目标不是它——摊开之后摞里每一张各是一个目标，点哪张抽哪张。 */
 export function stackSpots(board: Board): { x: number; y: number; w: number; h: number }[] {
   const { cw, gap, x0, y0 } = draftGeom(board);
-  return Array.from({ length: STACKS }, (_, i) => ({
+  // 一列摊开是 layers-1 个间隔：4 张三格、3 张两格，写死 3 就给 3 人局多留一格空
+  const col = cw * SPREAD * (board.layers - 1);
+  return Array.from({ length: board.stacks }, (_, i) => ({
     x: x0 + i * gap - cw * 0.56,
-    y: y0 - cw * (SPREAD * 3 + 0.16),
+    y: y0 - col - cw * 0.16,
     w: cw * 1.12,
-    h: cw * (SPREAD * 3 + 1.32),
+    h: col + cw * 1.32,
   }));
 }
 
-/** 棋子直径：8 摞横排要塞得下，短边还得留出手牌和出牌区 */
+/** 棋子直径：摆摞那一排横着要塞得下（几摞由规则表给），短边还得留出手牌和出牌区 */
 export function pieceSize(board: Board): number {
-  return Math.max(20, Math.min(board.w / (STACKS * 1.16), board.h * 0.4 / 4, 56));
+  return Math.max(20, Math.min(board.w / (board.stacks * 1.16), (board.h * 0.4) / board.layers, 56));
 }
 
 interface Point {
@@ -526,16 +555,18 @@ export function layout(state: GameState, view: TableView, board: Board): Map<num
   if (state.phase === 'draft' && state.draft) {
     const draft = state.draft;
     const { gap, x0, y0 } = draftGeom(board);
-    // 「选中/抽出」这两拍要把别家那七摞压到后面去，正在演的那一摞不参与
+    // 「选中/抽出」这两拍要把没点中的那些摞压到后面去，正在演的那一摞不参与
     const focus = view.pick !== null || view.lift !== null;
     draft.stacks.forEach((stack, i) => {
       const hot = view.hover === i;
+      // 一列的中间那格：4 张是 1.5、3 张是 1，倾斜和偏移都围着它算
+      const midSlot = (stack.length - 1) / 2;
       stack.forEach((id, depth) => {
         // 摞口朝下数：数组末尾那张是摞口（不指定时引擎抽的就是它），所以它落在最下面那格、紧挨那一排，
         // 摊开和抽牌都是「从摞口揭走一张」的视角，而不是从整列最高点飞下来
         const slot = stack.length - 1 - depth;
         const spread = hot ? SPREAD : 0.11;
-        const x = x0 + i * gap - cw / 2 - (hot ? 0 : (slot - 1.5) * cw * 0.04);
+        const x = x0 + i * gap - cw / 2 - (hot ? 0 : (slot - midSlot) * cw * 0.04);
         const y = y0 - slot * cw * spread - (hot ? cw * 0.16 : 0);
         const cls = [
           draft.stage === 'draw' ? 'stack' : '',
@@ -560,7 +591,7 @@ export function layout(state: GameState, view: TableView, board: Board): Map<num
           y,
           z: i * 10 + depth,
           down: !faceUp(id, false),
-          rot: hot ? 0 : (slot - 1.5) * 1.4,
+          rot: hot ? 0 : (slot - midSlot) * 1.4,
           cls,
         });
       });
@@ -574,7 +605,10 @@ export function layout(state: GameState, view: TableView, board: Board): Map<num
   for (let seat = 0; seat < state.players; seat++) {
     const g = pileGeom(rel(seat), state.players, board, cw);
     const ids = view.piles[seat] ?? [];
-    const u = pileUnit(Math.ceil(ids.length / PILE_SIZE), cw);
+    // 挂在左右两条竖边那两家：沿边那一长条排到自己那坨手牌的上沿为止（手牌贴边、摞也从贴角那头起排，
+    // 桌矮的时候两条会搭界）。横边那两家的沿边方向是横的，够长，不量这条。
+    const up = g.alongX ? Infinity : seatAnchor(rel(seat), state.players, board, cw).y - (cw * 0.6) / 2 - g.y;
+    const u = pileUnit(Math.ceil(ids.length / PILE_SIZE), cw, up);
     ids.forEach((id, k) => {
       const group = Math.floor(k / PILE_SIZE);
       const depth = k % PILE_SIZE;

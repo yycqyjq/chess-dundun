@@ -18,6 +18,7 @@ import {
   broadcastOf,
   encodeOffer,
   foundLine,
+  httpUrl,
   isMine,
   listFound,
   NO_DISCOVER,
@@ -104,8 +105,8 @@ console.log('\n一句答话来回：原样出去、原样回来，认不下的�
   const want = { ip: '192.168.1.31', port: 5300, players: 4, gameNo: 1, mode: 'kou', level: 'hard', status: 'waiting', free: 3 };
   ok('自己报的、自己听得回', JSON.stringify(f) === JSON.stringify(want), JSON.stringify(f));
   ok(
-    '地址由 ip 和端口现拼，不照抄线上来的字符串',
-    roomUrl({ ip: '10.1.2.3', port: 5199 }) === 'http://10.1.2.3:5199/',
+    '地址由 ip 和端口现拼，不照抄线上来的字符串，且带着入桌那个标记',
+    httpUrl('10.1.2.3', 5199) === 'http://10.1.2.3:5199/?join=1' && roomUrl({ ip: '10.1.2.3', port: 5199 }) === httpUrl('10.1.2.3', 5199),
   );
 
   const bad = (name: string, text: string, from = '192.168.1.31'): void =>
@@ -311,7 +312,7 @@ console.log('\n搬字节那一头：口令答一句、答话归一本账、野�
   const r2 = await da.find();
   ok('三秒内再按不再发一个包', a.sends.length === sent, `${a.sends.length}`);
   ok('回话讲明白这是上一轮的账', r2.why.includes('刚寻过一轮'), r2.why);
-  ok('上一轮听见的照端出来', r2.rooms.length === 1 && roomUrl(r2.rooms[0]!) === 'http://192.168.1.80:5400/', JSON.stringify(r2.rooms));
+  ok('上一轮听见的照端出来', r2.rooms.length === 1 && roomUrl(r2.rooms[0]!) === 'http://192.168.1.80:5400/?join=1', JSON.stringify(r2.rooms));
 
   const b = new Fake();
   const db = openDiscovery(opt(), b, nowait);

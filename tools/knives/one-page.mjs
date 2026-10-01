@@ -35,8 +35,8 @@ export default {
     {
       rel: 'src/web/style.css',
       note: 'D 整屏那层改成半透黑底（身后其实还挂着首页，半透就是把「还有一层」说出来）',
-      from: '.sheet.as-page {\n  padding: 0;\n  place-items: stretch;\n  background: radial-gradient(120% 90% at 50% 0%, #35291f, var(--bg) 70%);',
-      to: '.sheet.as-page {\n  padding: 0;\n  place-items: stretch;\n  background: rgba(20, 16, 12, 0.6);',
+      from: '.sheet.as-page {\n  padding: 0;\n  place-items: stretch center;\n  background: radial-gradient(120% 90% at 50% 0%, #35291f, var(--bg) 70%);',
+      to: '.sheet.as-page {\n  padding: 0;\n  place-items: stretch center;\n  background: rgba(20, 16, 12, 0.6);',
       expect: '整屏页那层不透明（跟首页同一份渐变，不是 rgba）',
     },
     {

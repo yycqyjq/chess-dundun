@@ -206,6 +206,28 @@ console.log('\n同网桌只摆一处：候场厅里不留第二份');
   // 按这颗的人要的是「换张桌看看」，出口就是列表页那一个；候场厅里再摆一份是两处入口同一件事
   ok('整页没有那颗「找同网的桌」（同网桌的入口只剩列表页）', !app.includes('找同网的桌'));
   ok('CSS 里也没留那条没人使的 .peers', !RULES.some((r) => r.sel.includes('.peers')), RULES.filter((r) => r.sel.includes('.peers')).map((r) => r.sel).join('｜'));
+  // 列表那一排是 .sheet-body（overflow: auto）的第一个孩子，而里头那颗地址按钮 40px 高、hover 还要抬起来：
+  // 顶部不留空，抬起那一截连同上边框就被滚动区的上边缘切掉（他真机看到的「按钮掉了个顶」）。
+  // 这里不写死 6px，量的是「让出的空够不够抬起那一截」——谁把抬起改大，这儿跟着要他补空。
+  const lift = Math.abs(
+    Number(
+      (RULES.find((r) => r.sel === '.btn:not(.dim):not(:disabled):hover')?.decls.get('transform') ?? '').match(
+        /translateY\((-?[\d.]+)px\)/,
+      )?.[1] ?? '',
+    ),
+  );
+  const padTop = Number((val('.peer-list', 'padding-top') ?? '0').replace('px', ''));
+  ok(
+    '列表那排让出的顶空，够地址按钮 hover 抬起那一截',
+    Number.isFinite(lift) && lift > 0 && padTop > lift,
+    `抬起 ${lift}｜让出 ${padTop}`,
+  );
+  // 一行两列时地址那颗被 auto 推到最右、情况那句缩在最左：一行里两个起点隔着一条空缝，就是「飘」。
+  // 这里不写死那一列的写法，数的是列数——谁再添一列（auto 也好、定宽也好）当场红。
+  const cols = (val('.peer-row', 'grid-template-columns') ?? '‹没写›').trim();
+  const tracks = cols.replace(/\([^)]*\)/g, '').split(/\s+/).filter(Boolean).length;
+  ok('同网桌那一行只有一列：地址那颗跟在情况下面，不隔着空缝对着最右', tracks === 1, `${cols}｜${tracks} 列`);
+  ok('那一行的两排对齐到左边：共用左边缘那一根锚', val('.peer-row', 'justify-items') === 'start', val('.peer-row', 'justify-items') ?? '‹没写›');
   // 「只剩你一个」这一句得是数出来的活人，不是「我坐过椅子」；桌那头同一口径还有一道（见 net 那节的 disband）
   ok('那颗「返回」认的是「只剩一个活人」', /this\.exitTable\(this\.seated && alive <= 1\)/.test(app), '‹没找到那句›');
   // 散桌递的是这一句，不是清账那句：递错了账归零、椅子却一把不动，人还坐在那张要散的桌上
@@ -239,6 +261,17 @@ console.log('\n整屏页：三处出口同一份名字，身后不隔着半透�
       /head: '本地联机'/.test(home),
   );
   ok('「摆一桌」那张弹窗卡没了（单机那一屏走整屏）', !/'摆一桌'/.test(app), '‹app.ts 里还写着那张卡›');
+  // 单机那一屏不收种子那一排：开桌前它只是一个谁摇都摇得出来的随机数，摆在那儿等于多一道没人看得懂的题。
+  // 种子该露脸的地方是打完以后那三处（状态栏／战报抬头／报错那句），这儿一条都不动。
+  ok('单机那一屏没有「种子／重掷」那一排', !app.includes('重掷') && !/const dice = /.test(app), (app.match(/^\s*dice\.append\(.*$/m) ?? ['‹那一排已经收掉了›'])[0]);
+  // 收掉那一排就得把那条 CSS 规则一起收：留着一条没人使的选择器，下一个人会当那一排还在
+  ok(
+    'CSS 里也没留那条没人使的 .sheet-row .note',
+    !RULES.some((r) => r.sel.includes('.sheet-row .note')),
+    RULES.filter((r) => r.sel.includes('.sheet-row .note')).map((r) => r.sel).join('｜'),
+  );
+  // 底栏只剩那一排：这一屏少了一排，主按钮跟着滚的地盘就更小了，别把它又塞回 body
+  ok('单机那一屏的底栏就那一排（开桌加返回）', /foot\.append\(go\);/.test(app), (app.match(/^\s*foot\.append\(.*$/gm) ?? ['‹找不到那一行›']).join('｜'));
   // 三屏全走 page()：裸 card() 是那层半透黑底＋居中卡，也就是「叠在首页上」本身。批12 摘掉的就是它，
   // 所以这里钉的是「没人再拿它搭常驻的那一层」——一次性的是非题走 popup()，不在这条的范围里。
   const pages = (app.match(/page\(this\.root/g) ?? []).length;
@@ -248,6 +281,12 @@ console.log('\n整屏页：三处出口同一份名字，身后不隔着半透�
   ok('整屏页那层不透明（跟首页同一份渐变，不是 rgba）', bg.includes('radial-gradient') && !bg.includes('rgba'), bg);
   ok('整屏页撑满一屏：那道 88dvh 的顶不再掐着它', val('.sheet.as-page .sheet-card', 'max-height') === 'none');
   ok('整屏页跟着宽屏那一档放宽', /var\(--card-w-wide\)/.test(val('.sheet.as-page .sheet-card', 'width', WIDE) ?? ''), val('.sheet.as-page .sheet-card', 'width', WIDE) ?? '‹没写›');
+  // 横轴也得自己管：place-items 一条管两个轴，只写 stretch 时水平跟着变成 start，
+  // 而卡是定宽（--card-w）——定宽的东西 stretch 不动，浏览器就贴左摆，右边空一条，跟居中的首页对不上。
+  const place = val('.sheet.as-page', 'place-items') ?? '‹没写›';
+  ok('整屏页那一列横着居中（不贴左）', /\bcenter\b/.test(place), place);
+  // 另一头也得居中，不然「两层都居中」这句只量了一半
+  ok('首页那一列也居中：一进一出同一根轴，别跳', val('.home', 'align-items') === 'center', val('.home', 'align-items') ?? '‹没写›');
   // 反过来量才挡得住新东西：`.as-page` 只重写它自己写的那几条，基础层上没被重写的一律照旧生效。
   // 于是「整屏那一屏继承了什么」得一条条数得出来——以后谁往 `.sheet`／`.sheet-card` 上添一条描边、模糊、投影，
   // 这儿当场红：那一屏是页面，不是浮在首页上面的一张卡。

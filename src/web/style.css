@@ -545,10 +545,12 @@ body {
 }
 
 /* 整屏一页（单机模式／本地联机／候场厅）：还是上面那三块，只是卡撑满一屏、底色不透明。
-   点完入口换的是页面，不是盖在首页上的一张卡——所以没有半透黑底，也没有「点空白关掉」那回事 */
+   点完入口换的是页面，不是盖在首页上的一张卡——所以没有半透黑底，也没有「点空白关掉」那回事。
+   横轴必须自己居中：place-items 一条管两个轴，光写 stretch 会把水平也拉成 start，
+   而卡有定宽（--card-w）没法 stretch，于是整列贴左、右边空一条，跟居中的首页对不上。 */
 .sheet.as-page {
   padding: 0;
-  place-items: stretch;
+  place-items: stretch center;
   background: radial-gradient(120% 90% at 50% 0%, #35291f, var(--bg) 70%);
 }
 
@@ -653,15 +655,11 @@ body {
   color: #fff8e6;
 }
 
-/* 重掷只占自己那点宽，剩下的留给开桌；种子贴在左边 */
+/* 那一排里那颗小的只占自己那点宽：底栏是「一颗主按钮加一两颗顺便的」，
+   等宽就把「顺便」那两颗摆成了跟主按钮一样大的三个是非题（返回／刷新／清账） */
 .sheet-row .btn.mini {
   flex: 0 0 auto;
   padding: 6px 12px;
-}
-
-.sheet-row .note {
-  align-self: center;
-  margin-right: auto;
 }
 
 .note {
@@ -805,13 +803,19 @@ body {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  /* 地址那颗是 40px 高的按钮，而这一排是滚动区（.sheet-body: overflow: auto）的第一个孩子：
+     不留这点空，hover 抬起来的 2px 正好被上边缘切掉，看着像按钮掉了个顶。 */
+  padding-top: 6px;
 }
 
+/* 一行两排：情况在上、地址那颗在下，两排共用左边缘那一根锚。
+   以前是「情况｜地址」两列：地址那颗被 auto 推到最右、情况那句缩在最左，
+   一行里两个起点隔着一条空缝，读起来就是飘的。 */
 .peer-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 8px;
+  grid-template-columns: minmax(0, 1fr);
+  justify-items: start;
+  gap: 4px;
 }
 
 .peer-t {

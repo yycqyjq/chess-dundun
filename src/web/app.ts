@@ -13,9 +13,9 @@ import { nextDrawer, openMatch, recordGame, winners, type MatchBook } from '../c
 import { mulberry32 } from '../core/rng.ts';
 import { viewFor } from '../core/view.ts';
 import { aliveSeats, deckFor, hydrate, type SeatInfo, type Seats, type TableStatus, type ToClient } from '../net/wire.ts';
-import { LIST_REFRESH_MS, peerNote, type FoundRoom } from '../net/discover.ts';
-import { ctrlLift, handCramped, labelBands, LABEL_W, layout, pieceSize, stackSpots, type Board, type TableView } from './board.ts';
-import { autoSeat, BACK, entryHead, homePanel, hostHanded, hostJump, initialScreen, isLoopback, roomRow } from './home.ts';
+import { LIST_REFRESH_MS, peerNote, JOIN_QUERY, type FoundRoom } from '../net/discover.ts';
+import { ctrlLift, draftShape, handCramped, labelBands, LABEL_W, layout, maxStacks, pieceSize, stackSpots, type Board, type TableView } from './board.ts';
+import { autoSeat, BACK, entryHead, homePanel, hostHanded, hostJump, initialScreen, isLoopback, roomRow, seatOption } from './home.ts';
 import { deviceNick, forget, Link, recall, remember, shouldWake } from './net.ts';
 import { MOVE_MS, Pieces } from './pieces.ts';
 import { rules } from './rules.ts';
@@ -51,7 +51,7 @@ const FLIP_READ_MS = 800;
 const BEAT = {
   /** 摊开：那一摞四张彻底铺开，互不遮挡，每张都能单独点 */
   spread: 700,
-  /** 选中：点中这张描一道金、原地大一圈，其余七摞降透明 */
+  /** 选中：点中这张描一道金、原地大一圈，其余那些摞降透明 */
   pick: 260,
   /** 抽出：这张在自己那一格里放大到 1.3 倍并翻面 */
   lift: MOVE_MS,
@@ -59,7 +59,7 @@ const BEAT = {
   show: 900,
   /** 数点：一家一下 */
   countStep: 360,
-  /** 定人：亮出「这 8 摞怎么分归谁定」 */
+  /** 定人：亮出「这一排摞怎么分归谁定」 */
   decider: 1200,
   /** 送回：缩回原来那一格并扣下 */
   cover: MOVE_MS + 150,
@@ -98,13 +98,13 @@ function rollSeed(): number {
 }
 
 /**
- * 邀请别人用的那串地址，第一个就是二维码的内容。
+ * 邀请别人用的那串地址，第一个就是二维码的内容，每一条都带着入桌那个标记。
  * 这台设备自己够得着的 origin 最准——它不是回环就说明这条路真能走；
  * 房主在本机开页面时 origin 是 127.0.0.1，那份不能给别人扫，才退回房主进程报上来的局域网地址。
  */
 function inviteUrls(lan: string[]): string[] {
   const host = location.hostname;
-  const here = !isLoopback(host) && (location.protocol === 'http:' || location.protocol === 'https:') ? `${location.origin}/` : '';
+  const here = !isLoopback(host) && (location.protocol === 'http:' || location.protocol === 'https:') ? `${location.origin}/${JOIN_QUERY}` : '';
   return [...new Set(here ? [here, ...lan] : lan)];
 }
 
@@ -192,7 +192,7 @@ export class App {
 
   constructor(private root: HTMLElement) {
     // 地址是别人给的那就是来入桌的，直接进候场厅；本机自己打开才先落在首页，由人自己挑玩法
-    if (initialScreen(location.hostname) === 'room') this.openRoom('invite');
+    if (initialScreen(location.search) === 'room') this.openRoom('invite');
     else this.showHome();
     // 手机切到别的 app 再回来：路由器早把他那条线收了，浏览器却还以为连着。
     // 与其等下一份快照等不来，不如回来这一刻就重新敲一次门
@@ -295,8 +295,10 @@ export class App {
   // ---------- 开桌 ----------
 
   /**
-   * 首页那块「单机模式」点进来的一屏：三排选项加种子，开桌那颗钉在底栏。
+   * 首页那块「单机模式」点进来的一屏：三排选项，开桌那颗钉在底栏。
    * 身后就是首页，那颗「返回」摘掉这一页就回去——不是一张「不摆一桌就出不去」的卡。
+   * 这一屏不摆种子：种子是打出来的那局的事，开桌前它只是一个谁都摇得出的随机数，
+   * 真要看它、报它，状态栏那一行、战报抬头、报错那句里都带着。
    */
   private pickTable(): void {
     this.closeRoom();
@@ -306,7 +308,7 @@ export class App {
     body.append(
       segment(
         '坐几个人',
-        rules.playerCounts.map((n) => ({ text: `${n} 人 · 每人 ${this.state ? this.state.pieces.length / n : 32 / n} 枚`, value: n })),
+        rules.playerCounts.map((n) => ({ text: seatOption(rules, n), value: n })),
         chosen.players,
         (v) => (chosen.players = v),
       ),
@@ -323,13 +325,6 @@ export class App {
         (v) => (chosen.level = v),
       ),
     );
-    const seedNote = div('note', `种子 ${chosen.seed}`);
-    const roll = () => {
-      chosen.seed = rollSeed();
-      seedNote.textContent = `种子 ${chosen.seed}`;
-    };
-    const dice = div('sheet-row');
-    dice.append(seedNote, button('重掷', roll, 'btn mini'));
     const go = div('sheet-row');
     go.append(
       button(
@@ -343,8 +338,8 @@ export class App {
       ),
       button(BACK, () => this.showHome(), 'btn mini'),
     );
-    // 主按钮进 foot：这一屏三排选项加说明早超出一屏，开桌那颗跟着滚就等于要人先滚到底再摸黑点
-    foot.append(dice, go);
+    // 主按钮进 foot：这一屏三排选项早超出一屏，开桌那颗跟着滚就等于要人先滚到底再摸黑点
+    foot.append(go);
   }
 
   // ---------- 候场厅 ----------
@@ -1044,6 +1039,7 @@ export class App {
       this.root,
       players,
       Math.max(...rules.playerCounts),
+      maxStacks(rules),
       () => this.resign(),
       () => this.toggleLog(),
       () => this.toggleSound(),
@@ -1598,7 +1594,8 @@ export class App {
 
   private size(): Board {
     const el = this.shell.board;
-    return { w: el.clientWidth || 1, h: el.clientHeight || 1 };
+    // 一张牌多大是从「摆摞那一排放得下几张」反推的，所以这个形得跟着这一档的落定规则走（3 人局 10 摞 × 3 张）
+    return { w: el.clientWidth || 1, h: el.clientHeight || 1, ...draftShape(this.state) };
   }
 
   private chip(seat: number): HTMLElement {
@@ -1667,6 +1664,11 @@ export class App {
     // 「选中/抽出」这两拍点中的那张会放大到摞外，标签正好压在它下面——演到这两拍就不画标签
     const focus = this.view.pick !== null || this.view.lift !== null;
     this.shell.pileZones.forEach((el, i) => {
+      // 壳子里搭的是最坏那一排（10 块）：这一档只有 8 摞时多出来的三块别拿 undefined 的领地往桌面上摆
+      if (i >= spots.length) {
+        el.hidden = true;
+        return;
+      }
       const s = spots[i]!;
       el.style.transform = `translate(${s.x}px, ${s.y}px)`;
       el.style.width = `${s.w}px`;
@@ -1712,7 +1714,7 @@ export class App {
           { b: pieceLabel(piece) },
           `，${piece.point} 点从自己数到 `,
           { b: this.who(draft.decider) },
-          draft.decider === this.me ? '：这 8 摞怎么分你定' : `：${this.who(draft.decider)} 定怎么分`,
+          draft.decider === this.me ? `：这 ${draft.stacks.length} 摞怎么分你定` : `：${this.who(draft.decider)} 定怎么分`,
         ]);
         if (draft.decider === this.me && clickable) for (const a of this.acts) this.takeBtn(this.describe(a), () => this.commit(a));
       }

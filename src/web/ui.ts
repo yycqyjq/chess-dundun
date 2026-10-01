@@ -33,11 +33,13 @@ export interface ChipEls {
 /**
  * 台面壳子。座位标记按 `maxSeats` 建够、只亮 `players` 条：
  * 房主在候场厅把 2 人改成 4 人，画面这边不用重搭壳子——重搭会把牌、事件、动画全丢在原地。
+ * 「第 N 摞」那排照同一个办法按 `maxStacks` 建够：摞数随档位（3 人局摆 10 摞），用不上的藏掉就行。
  */
 export function buildShell(
   root: HTMLElement,
   players: number,
   maxSeats: number,
+  maxStacks: number,
   onSetup: () => void,
   onLog: () => void,
   onSound: () => void,
@@ -72,7 +74,7 @@ export function buildShell(
     board.append(chip);
   }
   const pileZones: HTMLElement[] = [];
-  for (let i = 0; i < 8; i++) {
+  for (let i = 0; i < maxStacks; i++) {
     const zone = div('pile-zone');
     const cap = div('cap');
     cap.textContent = `第 ${i + 1} 摞`;

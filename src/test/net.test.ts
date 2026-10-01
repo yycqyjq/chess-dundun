@@ -5,10 +5,26 @@
  */
 import { createServer, type Server } from 'node:http';
 import { connect as netConnect, type Socket } from 'node:net';
-import { pendingSeats, type Action, type GameState } from '../core/game.ts';
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { join, resolve } from 'node:path';
+import { tmpdir } from 'node:os';
+import { pendingSeats, rulesFor, type Action, type GameState } from '../core/game.ts';
 import { openMatch } from '../core/match.ts';
+import { buildPieceSet } from '../core/pieces.ts';
 import { loadRules } from '../node/load_rules.ts';
-import { gate, intFlag, setupFrom, type Verdict } from '../node/room.ts';
+import {
+  claimSave,
+  gate,
+  hasFlag,
+  intFlag,
+  lockPathOf,
+  lockVerdict,
+  openRoom,
+  setupFrom,
+  type Room,
+  type SaveLock,
+  type Verdict,
+} from '../node/room.ts';
 import { Table, IDLE_MS, NICK_MAX, TAKEOVER_MS, type TableSetup } from '../net/table.ts';
 import {
   aliveSeats,
@@ -22,7 +38,7 @@ import {
   type WireState,
 } from '../net/wire.ts';
 import { WsServer } from '../net/ws.ts';
-import { layout, type Board, type TableView } from '../web/board.ts';
+import { draftShape, layout, type Board, type TableView } from '../web/board.ts';
 
 let failures = 0;
 function ok(name: string, condition: boolean, detail = ''): void {
@@ -108,12 +124,29 @@ function pieceOf(view: WireState, id: number): WirePiece | undefined {
   return view.pieces.find((p) => p.id === id);
 }
 
+/**
+ * 全公开快照转一圈回来炸不炸：下去那份 `rules` 是**按人数落定之后**的，
+ * 还原时还要再进一次 parseRules（那道门是给手写 rules.json 设的）。
+ * 3 人档的「一摞 3 张」要是连着整张配置表一起下去，那一趟会拿它去查 2 人档发不发得平，当场自己拒自己。
+ */
+function roundTripWhy(state: GameState): string {
+  try {
+    const back = hydrate(fullWire(state));
+    if (back.players !== state.players) return `人数转一圈变成 ${back.players}`;
+    if (back.rules.draft.stackSize !== state.rules.draft.stackSize) return `一摞张数转一圈变成 ${back.rules.draft.stackSize}`;
+    return '';
+  } catch (e) {
+    return String((e as Error).message);
+  }
+}
+
 /** 把摆牌阶段一路走完：抽签 → 分牌 */
 function finishDraft(table: Table): void {
   const state = table.state;
   let guard = 0;
   while (state.phase === 'draft') {
-    if (++guard > 20) throw new Error('摆牌阶段走不完');
+    // 上限按最挤那一档给：3 人局 10 摞＝抽 10 次＋分 10 次正好 20 步，写死 20 就等于没留一格
+    if (++guard > 40) throw new Error('摆牌阶段走不完');
     const who = pendingSeats(state)[0]!;
     table.act(who, table.legalFor(who)[0]!);
   }
@@ -257,7 +290,8 @@ function pilesOf(state: GameState): number[][] {
   ok('P4 让了座', table.stand(3).ok);
   ok('让完那把椅子彻底空了', !table.seatInfo()[3]!.taken && !table.seatInfo()[3]!.online);
   ok('还坐着两个人时减不到 2 人', !table.changeSetup(0, { players: 2 }).ok);
-  ok('还坐着两个人时减不到 3 人', !table.changeSetup(0, { players: 3 }).ok);
+  // 三档加进来之后，「减不到」只发生在真坐不下那位身上：三把椅子装得下这两位，那就改得动
+  ok('三把椅子坐得下这两位，减到 3 人就改得动', table.changeSetup(0, { players: 3 }).ok && table.lobby().players === 3);
   ok('P3 也让了', table.stand(2).ok);
   ok('人都站开了就减得下来', table.changeSetup(0, { players: 2 }).ok && table.lobby().players === 2);
   ok('减完只剩两把椅子，牌也照新人数重洗', table.state.players === 2 && table.seatInfo().length === 2);
@@ -272,7 +306,8 @@ function pilesOf(state: GameState): number[][] {
   table.join(0, '');
   table.join(1, '');
   ok('不是房主改不了配置', !table.changeSetup(1, { mode: 'ming' }).ok);
-  ok('人数不在档位上改不了', !table.changeSetup(0, { players: 3 }).ok && table.lobby().players === 4);
+  ok('人数不在档位上改不了', !table.changeSetup(0, { players: 5 }).ok && table.lobby().players === 4);
+  ok('那句回绝话也走同一个出口：档位加了 3 就不用改口', table.changeSetup(0, { players: 5 }).why === '这桌只能 2、3 或 4 人');
   ok('递个跟现在一样的配置过去，什么也不动', table.changeSetup(0, { players: 4 }).ok && table.state === first);
   ok('只改电脑水平不动牌面', table.changeSetup(0, { level: 'easy' }).ok && table.state === first && table.lobby().level === 'easy');
   ok('坐过的两位还坐着，没坐的那两把没被算成电脑位', table.seatInfo().slice(0, 2).every((s) => s.taken && s.online) && !table.seatInfo()[3]!.ai);
@@ -385,7 +420,8 @@ function pilesOf(state: GameState): number[][] {
   ok('座位是 -2 坐不下（负数只认 -1 那一句「挑一把空椅」）', why({ t: 'join', seat: -2, token: '' }).length > 0);
   ok('座位是 -9 也坐不下', why({ t: 'join', seat: -9, token: '' }).length > 0);
   ok('令牌不是字坐不下', why({ t: 'join', seat: 1, token: 7 }).length > 0);
-  ok('人数不在档位上改不动', why({ t: 'setup', players: 3 }).length > 0);
+  ok('人数 3 现在过闸（三人档进桌）', held({ t: 'setup', players: 3 })?.t === 'setup');
+  ok('人数不在档位上改不动，那句念 2、3 或 4', why({ t: 'setup', players: 5 }).includes('2、3 或 4'));
   ok('人数写成字符串改不动', why({ t: 'setup', players: '2' }).length > 0);
   ok('没听过的玩法进不了桌', why({ t: 'setup', mode: 'zzz' }).length > 0);
   ok('没听过的档位进不了桌', why({ t: 'setup', level: 'unheard' }).length > 0);
@@ -449,7 +485,11 @@ function pilesOf(state: GameState): number[][] {
   ok('空对象回绝话', reject('{}').length > 0);
   ok('数组也算合 JSON：走回绝那条，不拆线', reject('[1,2]').length > 0 && close('[1,2]') === '');
   ok('座位超出这桌的椅子数：回绝话', reject('{"t":"join","seat":7,"token":""}').length > 0);
-  ok('人数不在档位上：回绝话', reject('{"t":"setup","players":3,"mode":"kou","level":"easy"}').length > 0);
+  ok('人数不在档位上：回绝话', reject('{"t":"setup","players":5,"mode":"kou","level":"easy"}').length > 0);
+  ok('3 人这一档现在原样递到桌前', (() => {
+    const r = v('{"t":"setup","players":3,"mode":"kou","level":"easy"}');
+    return 'msg' in r && r.msg.t === 'setup';
+  })());
   ok('缺字段的野写法：回绝话而不是抛', reject('{"t":"act","action":{}}').length > 0);
 
   // 撞进 catch 的那一路：闸里真抛了（rules 一被读就炸，替 checkHost 撞上没见过的形状那一类 bug）
@@ -563,6 +603,42 @@ function pilesOf(state: GameState): number[][] {
   ok('满两分钟那一秒桌动了手（宿主该落一次盘）', table.tick());
   ok('那把椅子已经还给这桌', !table.seatInfo()[1]!.taken && !table.seatInfo()[1]!.online);
   ok('还给桌之后旧令牌不再挡人，凭它照样坐得回', table.join(1, tok1).ok);
+}
+
+// ───────────────────────── 落定那份规则：三档各往线上和硬盘上走一遍 ─────────────────────────
+
+{
+  // 快照和存档带下去的都是 `GameState.rules`，也就是**按人数落定之后**那一份，还原这一头还要再过一次
+  // `parseRules`（那道门是给手写的 rules.json 设的）。落定要是留着整张档位清单，2 人那一档就会被拿去查
+  // 3 人档的「一摞 3 张」，当场自己拒自己——网页每份快照读不回、host 重启接不回这一桌。
+  // 这一段排在「清账重开」之前是有原因的：往后那几处的 `Table.load` 是裸调用，这一趟闸一拆就当场抛，
+  // 整套死在第一句就一句 ✗ 都打不出来（刀架只会报「红了 0 条」），所以这儿自己接住，先把红字打出来。
+  let wire = '';
+  let disk = '';
+  for (const n of rules.playerCounts) {
+    const want = rulesFor(rules, n);
+    const h = makeTable({ mode: 'kou', players: n });
+    for (const s of Array.from({ length: n }, (_, i) => i)) h.table.join(s, '');
+    h.table.start(0);
+    const why = roundTripWhy(h.table.state);
+    if (why && !wire) wire = `${n} 人那一档：${why}`;
+    try {
+      const back = Table.load(h.table.save(), () => {}, () => {}, h.clock.now);
+      const bad =
+        back.state.players !== n
+          ? `人数接回来变成 ${back.state.players}`
+          : back.state.rules.draft.stackSize !== want.draft.stackSize
+            ? `一摞张数接回来变成 ${back.state.rules.draft.stackSize}`
+            : back.state.pieces.length !== buildPieceSet(want.ranks).length
+              ? `牌堆接回来是 ${back.state.pieces.length} 枚`
+              : '';
+      if (bad && !disk) disk = `${n} 人那一档：${bad}`;
+    } catch (e) {
+      if (!disk) disk = `${n} 人那一档：${String((e as Error).message)}`;
+    }
+  }
+  ok('三档的快照各转一圈都接得回来：落定那份不再带着整张档位清单', wire === '', wire);
+  ok('三档的存档各接一次：人数、一摞张数、牌堆枚数回来还是自己那一档', disk === '', disk);
 }
 
 // ───────────────────────── 清账重开：账归零，椅子一把不动 ─────────────────────────
@@ -757,6 +833,76 @@ function pilesOf(state: GameState): number[][] {
 }
 
 {
+  // 三人档进联机这一头：三把椅子、一副少两枚的牌、摆 10 摞 × 每摞 3 张、分牌只认「层层轮流分」那一种
+  const { table, inbox, clock } = makeTable({ mode: 'kou', players: 3 });
+  for (const s of [0, 1, 2]) table.join(s, '');
+  ok('三人桌只有三把椅子，第四把压根不发', table.seatInfo().length === 3);
+  ok('坐满三把就开得起', table.start(0).ok && table.state.players === 3);
+  ok('这一桌的牌堆是 30 枚（去掉的那枚红兵、那枚黑卒不在里头）', table.state.pieces.length === 30, `${table.state.pieces.length}`);
+  ok('摆的是 10 摞、每摞 3 张', table.state.draft!.stacks.length === 10 && table.state.draft!.stacks.every((st) => st.length === 3));
+  const drawer = table.state.draft!.drawer;
+  table.act(drawer, { kind: 'draw', stackIdx: 0 });
+  // 抽完这一签开口的是「处置人」（draft.decider），不是刚才那位起抽人
+  const keeper = table.state.draft!.decider;
+  const ways = table.legalFor(keeper).filter((a) => a.kind === 'allocate');
+  ok('处置人能挑的拿法只剩一种：层层轮流分', ways.length === 1 && ways[0]!.kind === 'allocate' && 'way' in ways[0] && ways[0].way === 'layered', JSON.stringify(ways));
+  ok('整摞轮流拿在这一桌不合法（10 摞分 3 家拿成不等张）', !table.legalFor(keeper).some((a) => 'way' in a && a.way !== 'layered'));
+  finishDraft(table);
+  ok('分完每家 10 枚、一张没漏', table.state.hands.every((h) => h.length === 10), table.state.hands.map((h) => h.length).join('/'));
+  playToEnd(table, clock);
+  ok('三人局在桌这一头走得完（两家对打的文案没卡住三位）', table.state.phase === 'over');
+  const got = table.state.won.reduce((x, n) => x + n, 0);
+  ok('打完那一刻 30 枚全收进某家的牌摞', got === 30, `${got}`);
+  ok('三人桌那份快照转一圈回来不炸：落定的规则自己过得了那道门', roundTripWhy(table.state) === '', roundTripWhy(table.state));
+  ok('第三把椅子也拿到了快照', inbox.all.some((o) => o.seat === 2 && o.msg.t === 'state'));
+}
+
+{
+  // 三人桌往硬盘上写那一趟：下去的同样是落定那份规则，接不回来的话 host 重启只会念一句「发不平」重开一桌
+  const a = makeTable({ mode: 'kou', players: 3 });
+  for (const s of [0, 1, 2]) a.table.join(s, '');
+  a.table.start(0);
+  finishDraft(a.table);
+  let restored: Table | null = null;
+  let boom = '';
+  try {
+    restored = Table.load(a.table.save(), () => {}, () => {}, a.clock.now);
+  } catch (e) {
+    boom = String((e as Error).message);
+  }
+  ok('三人桌的存档接得回来', restored !== null, boom);
+  ok(
+    '接回来那桌还是 3 人档：30 枚、一摞 3 张',
+    (restored?.state.pieces.length ?? 0) === 30 && (restored?.state.rules.draft.stackSize ?? 0) === 3,
+    `${restored?.state.pieces.length} 枚、一摞 ${restored?.state.rules.draft.stackSize}`,
+  );
+}
+
+{
+  // 候场厅里从四人减到三人：多出来的那把椅子要还给桌，坐过的人不带着牌走
+  const { table } = makeTable({ mode: 'kou', players: 4 });
+  for (const s of [0, 1, 2, 3]) table.join(s, '');
+  ok('四人桌先坐满四把', table.seatInfo().length === 4);
+  ok('第四把还坐着人时减不下来', !table.changeSetup(0, { players: 3 }).ok);
+  ok('P4 让了座就减得动', table.stand(3).ok && table.changeSetup(0, { players: 3 }).ok);
+  ok('改完是三人这一档', table.state.players === 3);
+  ok('减下来的那把椅子还给了这桌', table.seatInfo().length === 3);
+  ok('坐着的三位还在原来那三把椅子上', table.seatInfo().slice(0, 3).every((s) => s.taken && s.online));
+  ok(
+    '三人那一桌按下开始就是 30 枚',
+    (() => {
+      const t2 = makeTable({ mode: 'kou', players: 3 });
+      for (const s of [0, 1, 2]) t2.table.join(s, '');
+      return t2.table.start(0).ok && t2.table.state.pieces.length === 30;
+    })(),
+  );
+  // 快照／存档带下去的是落定那一份，它只说这一档；档位清单得另外从开桌那份取，
+  // 不然闸拿 state.rules 认人数，三人桌就再也改不回四人（room.ts 那句 gate 走的就是这条线）
+  ok('落定那份规则只说 3 人这一档', table.state.rules.playerCounts.join() === '3');
+  ok('档位清单还是开桌那份：2、3、4 都在', table.config.playerCounts.join() === '2,3,4');
+}
+
+{
   // 入座那句话排在快照前面：客户端拿到快照时已经知道自己坐的是哪把椅子
   const { table, inbox } = makeTable({ mode: 'ming' });
   table.join(0, '');
@@ -841,7 +987,8 @@ function pilesOf(state: GameState): number[][] {
   ok('--名 值 和 --名=值 两种写法都认', given.players === 4 && given.mode === 'ming' && given.level === 'easy' && given.seed === 7 && given.hostSeat === 3);
   ok('空着等值（--players=）当没给，照默认来', setupFrom(['--players='], rules).players === 2);
   ok('--players=abc 说清是哪三个字，不抱着 NaN 开桌', shout(['--players=abc']).includes('abc'));
-  ok('--players=3 不是这桌的档位', shout(['--players=3']).includes('2 或 4'));
+  ok('--players=3 现在是档位了，桌开得起', setupFrom(['--players=3'], rules).players === 3);
+  ok('--players=5 不是这桌的档位，念的是 2、3 或 4', shout(['--players=5']).includes('2、3 或 4'));
   ok('--mode=明 认不出这种玩法', shout(['--mode=明']).includes('mode'));
   ok('--level=zzz 认不出这档', shout(['--level=zzz']).includes('level'));
   ok('--host-seat=9 超出一把椅子都没有', shout(['--host-seat=9']).length > 0);
@@ -849,6 +996,131 @@ function pilesOf(state: GameState): number[][] {
   ok('--players=1.5 也不算整数', shout(['--players=1.5']).includes('players'));
   ok('--port 那行同样由这道闸兜：写歪了抛，不抛给 node 的 listen', (() => { try { intFlag(['--port=abc'], 'port', 5200, 1, 65535); return false; } catch { return true; } })());
   ok('端口不给就用默认值，给了 0 也算出界', intFlag([], 'port', 5200, 1, 65535) === 5200 && (() => { try { intFlag(['--port=0'], 'port', 5200, 1, 65535); return false; } catch { return true; } })());
+
+  // 开关那一档以前只认「整项等于 --名」：--fresh=1 静默不生效，加了开关的人以为桌重开了，
+  // 其实接回的是上一桌——这跟「没加这个开关」是两种结果，却一点看不出来
+  ok('--fresh 光写算开，写成 --fresh=1／--fresh=yes 也算开', hasFlag(['--fresh'], 'fresh') && hasFlag(['--fresh=1'], 'fresh') && hasFlag(['--fresh=yes'], 'fresh'));
+  ok('--fresh=0／false／no 才是关，大小写都算', !hasFlag(['--fresh=0'], 'fresh') && !hasFlag(['--fresh=false'], 'fresh') && !hasFlag(['--fresh=NO'], 'fresh') && !hasFlag(['--fresh=False'], 'fresh'));
+  ok('--fresh= 空值算开：写了个等号不是把开关关掉', hasFlag(['--fresh='], 'fresh'));
+  const maybe = (() => {
+    try {
+      return `值=${String(hasFlag(['--fresh=maybe'], 'fresh'))}`;
+    } catch (e) {
+      return `抛了：${String((e as Error).message)}`;
+    }
+  })();
+  ok('认不出的值（--fresh=maybe）算开：不报错、也不猜成关', maybe === '值=true', maybe);
+  ok('那一项根本没写就是关', hasFlag(['--players=4'], 'fresh') === false);
+  ok('前缀撞不上名字：--no-discover 不是 --discover，--discover-slot=0 也不是那一档', hasFlag(['--no-discover', '--discover-slot=0'], 'discover') === false && hasFlag(['--no-discover'], 'no-discover') === true);
+  ok('带值的写法也撞不上别人的名字：--fresh=1 关不掉 --no-discover 那档', hasFlag(['--fresh=1'], 'no-discover') === false);
+}
+
+// ───────────────────────── 一份存档只许一张桌写 ─────────────────────────
+
+const refuse = (fn: () => unknown): string => {
+  try {
+    fn();
+    return '';
+  } catch (e) {
+    return String((e as Error).message);
+  }
+};
+/** 条上此刻写着什么。整套测里凡是「量一条红字」的句子都不许被一句 ENOENT 打断——打断了后面几十条一起没跑 */
+const peekLock = (file: string): string => (existsSync(file) ? readFileSync(file, 'utf8') : '‹没有占位条›');
+const asLock = (file: string): SaveLock | null => {
+  try {
+    return JSON.parse(readFileSync(file, 'utf8')) as SaveLock;
+  } catch {
+    return null;
+  }
+};
+const lockBody = (held: Partial<SaveLock>): string => JSON.stringify(held);
+
+{
+  // 一把尺子量的几档：这台桌能不能占这份存档。判断全在这个纯函数里，好让每种都点得着
+  const here = '/repo/table.json';
+  const mine: SaveLock = { pid: 1111, port: 5200, save: here };
+  const living = (_pid: number): boolean => true;
+  const dead = (_pid: number): boolean => false;
+  ok('硬盘上没写过那条：能占', lockVerdict(null, mine, living) === 'free');
+  ok('那条写的根本不是这一份存档（项目被整个拷了一份）：能占', lockVerdict({ pid: 57898, port: 5199, save: '/elsewhere/table.json' }, mine, living) === 'free');
+  ok('写那条的就是自己这个进程、自己这个端口：同一趟里重起桌，算自己的', lockVerdict(mine, mine, living) === 'mine');
+  ok('只对上 pid、端口不一样照样拒（同进程两张桌也打得起来才怪）', lockVerdict({ pid: 1111, port: 5199, save: here }, mine, living) === 'taken');
+  ok('别人还活着占着：拒', lockVerdict({ pid: 2222, port: 5199, save: here }, mine, living) === 'taken');
+  ok('写那条的进程已经没了：让开（前人挨 SIGKILL 走的留条不算闸）', lockVerdict({ pid: 2222, port: 5199, save: here }, mine, dead) === 'free');
+}
+
+{
+  const dir = mkdtempSync(join(tmpdir(), 'qdd-lock-'));
+  const save = join(dir, 'table.json');
+  const lock = lockPathOf(save);
+  ok('占位条就躺在存档旁边：存档名加个 .lock，跟存档一起被 .gitignore 盖住', lock === `${save}.lock`, lock);
+
+  const release = claimSave(save, 5199, () => false);
+  const written = asLock(lock);
+  ok('头一张桌占住了：写进去的是自己这个进程、这个端口、还有这一份存档的绝对路径', written?.pid === process.pid && written?.port === 5199 && written?.save === resolve(save), peekLock(lock));
+  ok('同一趟里重起桌不算撞：同 pid 同端口照样占得下来', refuse(() => claimSave(save, 5199, () => false)) === '', refuse(() => claimSave(save, 5199, () => false)));
+
+  const clash = refuse(() => claimSave(save, 5200, () => true));
+  ok('另一张活桌抢同一份存档：当场拒，不悄悄把人家的账盖了', clash.length > 0, clash || '居然让它占上了');
+  ok('那句念得出撞上的是哪份存档、谁占着、往哪儿改', clash.includes(save) && clash.includes('5199') && clash.includes(String(process.pid)) && clash.includes('--save'), clash);
+  ok('被拒那一张没把闸抢走：条上写的还是头一张', asLock(lock)?.port === 5199, peekLock(lock));
+
+  writeFileSync(lock, lockBody({ pid: 424242, port: 7000 }));
+  ok('读不懂的一条（半截字节、老代码留的没写存档路径的）当没人占：宁可让桌开起来，别拿烂字节把门锁死', refuse(() => claimSave(save, 5201, () => true)) === '', peekLock(lock));
+
+  writeFileSync(lock, lockBody({ pid: 57898, port: 5199, save: join(dir, '别人的那份 table.json') }));
+  ok('条上写着另一个进程号、占的却是另一份存档：这一份照开（冒烟在副本里跑就是这一档）', refuse(() => claimSave(save, 5202, () => true)) === '', peekLock(lock));
+
+  writeFileSync(lock, lockBody({ pid: 424242, port: 7000, save: resolve(save) }));
+  ok('留条那位早没了：让开，这一张占上并把条换成自己的', refuse(() => claimSave(save, 5200, () => false)) === '' && asLock(lock)?.port === 5200, peekLock(lock));
+
+  writeFileSync(lock, '{ 半截字');
+  ok('整条读不出 JSON 的也让开（硬盘写满那一下留的半截字，不该把门永远锁上）', refuse(() => claimSave(save, 5201, () => true)) === '', peekLock(lock));
+
+  writeFileSync(lock, lockBody({ pid: process.pid, port: 7777, save: resolve(save) }));
+  const real = refuse(() => claimSave(save, 5199));
+  ok('不注入 alive 时也真认得「这个进程还活着」：同进程另一个端口照样拒', real.includes('7777'), real || '放行了');
+
+  writeFileSync(lock, lockBody({ pid: 999999, port: 7777, save: resolve(save) }));
+  ok('不注入 alive 也认得死人：那条留条拦不住新桌（真进程号问出来的）', refuse(() => claimSave(save, 5199)) === '', peekLock(lock));
+
+  const mineNow = claimSave(save, 5199, () => false);
+  ok('收桌摘闸：摘掉之后这份存档空出来了', (mineNow(), !existsSync(lock)), peekLock(lock));
+  ok('再摘一次不抛（close 走两趟也不该炸）', refuse(() => mineNow()) === '');
+  const theirs = lockBody({ pid: 888888, port: 6000, save: resolve(save) });
+  writeFileSync(lock, theirs);
+  mineNow();
+  ok('别人的那条不许摘：接管过这张桌的人的闸，拆了等于没闸', peekLock(lock) === theirs, peekLock(lock));
+  release();
+}
+
+{
+  // 两个宿主（npm run dev 和 npm run host）走的是同一个 openRoom：闸在那儿，不在各自那份横幅里
+  const dir = mkdtempSync(join(tmpdir(), 'qdd-room-'));
+  const save = join(dir, 'table.json');
+  const lock = lockPathOf(save);
+  const first: { room: Room | null; err: string } = { room: null, err: '' };
+  try {
+    first.room = openRoom(['--no-discover', `--save=${save}`], 5901);
+  } catch (e) {
+    first.err = String((e as Error).message);
+  }
+  ok('头一张桌起得来，起桌第一件事就是占住这份存档：条上写的就是这个端口', first.err === '' && asLock(lock)?.port === 5901, first.err || peekLock(lock));
+  const clash = refuse(() => openRoom(['--no-discover', `--save=${save}`], 5902));
+  ok('第二张桌在同一份存档上起不来：openRoom 当场抛，两句宿主都念这一句', clash.includes('5901') && clash.includes('--save'), clash || '两张桌都起来了');
+  ok('被拒那一张没碰头一张的闸：条上写的还是 5901 那一桌', asLock(lock)?.port === 5901, peekLock(lock));
+  first.room?.close();
+  ok('收桌把占位条一起摘了：下一张不该被一个已经收杆的人挡在门外', !existsSync(lock), peekLock(lock));
+  const another = join(dir, 'another.json');
+  const second: { room: Room | null; err: string } = { room: null, err: '' };
+  try {
+    second.room = openRoom(['--no-discover', `--save=${another}`], 5902);
+  } catch (e) {
+    second.err = String((e as Error).message);
+  }
+  ok('各用各的存档就互不挡事：加了 --save=另一份文件照样起桌', second.err === '' && existsSync(lockPathOf(another)), second.err);
+  second.room?.close();
 }
 
 // ───────────────────────── 一秒一次的表：动了手才要落盘 ─────────────────────────
@@ -952,14 +1224,15 @@ function pilesOf(state: GameState): number[][] {
  * 浏览器那一头每一帧都是 layout(还原出来的状态)：打码留下的空位一旦被读到就抛错，
  * 牌名没到却画成正面就是一张空白牌。整局走一遍，两种玩法各查一遍。
  */
-function sweepLayout(mode: 'ming' | 'kou'): void {
-  const { table, clock } = openedTable({ mode });
+function sweepLayout(mode: 'ming' | 'kou', players = 2): void {
+  const { table, clock } = openedTable({ mode, players }, Array.from({ length: players }, (_, i) => i));
   const state = table.state;
-  const board: Board = { w: 900, h: 620 };
+  // 和 app.ts 那一头同一个写法：桌面的摞数／层数由这一档的状态给（3 人 10 摞 × 3），别写死一份
+  const board: Board = { w: 900, h: 620, ...draftShape(state) };
   let frames = 0;
   let bad = '';
   const once = (): void => {
-    for (const seat of [0, 1]) {
+    for (const seat of Array.from({ length: state.players }, (_, i) => i)) {
       const raw = snapshotFor(state, seat, state.log.length);
       const labeled = new Set(raw.pieces.filter((p) => p.label !== undefined).map((p) => p.id));
       try {
@@ -997,11 +1270,14 @@ function sweepLayout(mode: 'ming' | 'kou'): void {
     table.act(seat, table.legalFor(seat)[0]!);
     once();
   }
-  ok(`${mode === 'kou' ? '扣棋' : '明棋'}：整局每一份快照都排得出版面`, bad === '' && frames >= 20, bad || `只排了 ${frames} 帧`);
+  ok(`${mode === 'kou' ? '扣棋' : '明棋'} ${players} 人：整局每一份快照都排得出版面`, bad === '' && frames >= 20, bad || `只排了 ${frames} 帧`);
 }
 
 sweepLayout('kou');
 sweepLayout('ming');
+// 3 人档那一副牌少两枚、一摞三层：打码和排版在联机那一头也得各走一整局
+sweepLayout('kou', 3);
+sweepLayout('ming', 3);
 
 // ───────────────────────── 越权与非法动作 ─────────────────────────
 

@@ -1,25 +1,37 @@
 import { anchor, button, div } from './ui.ts';
-import { seatName } from '../core/game.ts';
+import { rulesFor, seatName, type Rules } from '../core/game.ts';
+import { buildPieceSet } from '../core/pieces.ts';
 import { foundLine, roomUrl, type FoundRoom } from '../net/discover.ts';
 import type { Lobby } from '../net/wire.ts';
 import type { Saved } from './net.ts';
 
-/** 本机自己打开页面（127／localhost／[::1）才停在首页 */
+/** 本机自己打开页面（127／localhost／[::1）的那几种写法 */
 const LOOPBACK = /^127\.|^localhost$|^\[?::1/;
 
 export type Screen = 'home' | 'room';
 
-/** 本机自己打开页面（127／localhost／[::1）——邀请地址也不能拿这条给别人扫，同一把尺子量两处 */
+/** 是不是本机。这条尺子现在只管一件事：那份 origin 不能拿去给别人扫（落哪一屏改看地址上那句意图） */
 export function isLoopback(host: string): boolean {
   return LOOPBACK.test(host);
 }
 
+/** 写着「不入桌」的那几种写法：其余任何值（含空值、含只写个 ?join）都算开了这个口 */
+const NOT_JOIN = new Set(['0', 'false', 'no']);
+
 /**
- * 进门先落在哪一页。地址不是本机就说明人是拿着链接进来的，直接落进候场厅——
- * 他是来入桌的，别再问他一遍「要不要联机」。
+ * 地址栏上有没有「我是来入桌的」那一句。只认标记，不认这台机器是谁：
+ * 「地址不是本机」只说明人不是在自家电脑上打开页面，不说明他是来干什么的——
+ * 拿着邀请链接、扫码进来的人带的就是这个标记，直落候场厅；
+ * 手输一条裸局域网地址（`http://192.168.1.11:5200/`）的人没带，就先落首页自己挑。
  */
-export function initialScreen(host: string): Screen {
-  return isLoopback(host) ? 'home' : 'room';
+export function wantsJoin(search: string): boolean {
+  const v = new URLSearchParams(search).get('join');
+  return v !== null && !NOT_JOIN.has(v.toLowerCase());
+}
+
+/** 进门先落在哪一页：开了入桌那个口的落候场厅，其余一律首页 */
+export function initialScreen(search: string): Screen {
+  return wantsJoin(search) ? 'room' : 'home';
 }
 
 /** 版本由 Vite 的 define 注进来（只注这一个字符串，不把整份 package.json 打进 bundle） */
@@ -114,6 +126,15 @@ export function hostHanded(from: number, to: number, seats: { taken: boolean; ni
  * 住在这个文件里而不是 app.ts，是因为 app.ts 永远进不了 node 测试（rules.json?raw），
  * 「点了往哪儿走」这件事得有闸。
  */
+/**
+ * 「N 人 · 每人 M 枚」那一行。M 得按**这一档自己落定**的牌组算：3 人局那一档减了两枚兵卒（30 枚），
+ * 拿上一桌的牌堆去除会念成「每人 10.67 枚」这种数。
+ */
+export function seatOption(rules: Rules, n: number): string {
+  const r = rulesFor(rules, n);
+  return `${n} 人 · 每人 ${Math.floor(buildPieceSet(r.ranks).length / n)} 枚`;
+}
+
 export function homePanel(onSolo: () => void, onRoom: () => void): HTMLElement {
   const entry = (k: 'solo' | 'room', go: () => void): HTMLButtonElement => {
     const btn = button('', undefined, 'btn home-entry');
@@ -130,7 +151,7 @@ export function homePanel(onSolo: () => void, onRoom: () => void): HTMLElement {
   const el = div('home');
   el.append(
     div('home-title', '棋墩墩'),
-    div('home-brief', '32 枚 · 7 个职级 · 黑 < 红'),
+    div('home-brief', '7 个职级 · 黑 < 红'),
     list,
     foot,
   );

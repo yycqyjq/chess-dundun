@@ -3,19 +3,23 @@ import { createInterface } from 'node:readline/promises';
 import { fileURLToPath } from 'node:url';
 import { choose, LEVELS, type Level } from '../ai/agent.ts';
 import {
+  ALL_WAYS,
   apply,
   createGame,
   currentActor,
   isFaceDown,
   legalActions,
+  parseRules,
   pendingSeats,
+  rulesFor,
   seatName,
   type Action,
+  type AllocWay,
   type GameState,
 } from '../core/game.ts';
 import { loadRules } from '../node/load_rules.ts';
 import { indexedHand, pickByIndices, sizesOf, tooLong } from './menu.ts';
-import { buildPieceSet, buildRanks, pieceLabel, type RankDef } from '../core/pieces.ts';
+import { buildPieceSet, buildRanks, pieceLabel } from '../core/pieces.ts';
 import { nextDrawer, openMatch, recordGame, winners } from '../core/match.ts';
 import { viewFor } from '../core/view.ts';
 import { mulberry32 } from '../core/rng.ts';
@@ -31,17 +35,22 @@ function rulesPath(): string {
   return fileURLToPath(new URL(`../../rules.json`, import.meta.url));
 }
 
+/** 三种拿法的短名：报「这一档能选哪几种」时用，一行里塞不下整句解释 */
+const WAY_NAME: Record<AllocWay, string> = {
+  layered: '层层轮流分',
+  'stacks-left': '整摞轮流拿·从左',
+  'stacks-right': '整摞轮流拿·从右',
+};
+
+/** 三种拿法念成人话，`check` 报「这一档能选哪几种」和桌上真按某一种分牌时都念这一份 */
+const WAY_TEXT: Record<AllocWay, string> = {
+  layered: '层层轮流分：从自己开始，一人一张',
+  'stacks-left': '整摞轮流拿：从最左边那摞开始',
+  'stacks-right': '整摞轮流拿：从最右边那摞开始',
+};
+
 function check(): number {
-  const raw = JSON.parse(readFileSync(rulesPath(), 'utf8')) as {
-    ranks: RankDef[];
-    playerCounts: number[];
-    name: string;
-    tieBreak?: string;
-    nextLeader?: string;
-    mingqi?: { groupCompare?: string; mustBeatIfAble?: boolean; discardCost?: number | 'same' };
-    kouqi?: { groupCompare?: string; mustBeatIfAble?: boolean; discardCost?: number | 'same' };
-    draft?: { stackSize?: number };
-  };
+  const raw = JSON.parse(readFileSync(rulesPath(), 'utf8')) as Parameters<typeof parseRules>[0];
   const ranks = buildRanks(raw.ranks);
   const pieces = buildPieceSet(ranks);
   let problems = 0;
@@ -70,23 +79,27 @@ function check(): number {
   );
 
   console.log('\n人数与牌堆\n');
-  const stackSize = raw.draft?.stackSize ?? 4;
-  for (const n of raw.playerCounts) {
-    const okCount = pieces.length % n === 0;
-    const per = pieces.length / n;
-    console.log(
-      `  ${okCount ? '✓' : '✗'} ${n} 人局：${okCount ? `每人 ${per} 枚${Number.isInteger(per / stackSize) ? ` = ${per / stackSize} 摞 × ${stackSize} 层` : `（不是 ${stackSize} 的倍数，摆不满整摞）`}` : `${pieces.length} 除不尽 ${n}`}`,
-    );
-    if (!okCount) problems++;
+  // 这一档有几枚、摆几摞、能选哪几种拿法，全照引擎的 rulesFor 落定之后再念：
+  // 免得「check 说发得平、桌却开不起来」两张嘴。3 人局减的那两枚兵卒就是从这儿才认得的。
+  let table: ReturnType<typeof parseRules> | null = null;
+  try {
+    table = parseRules(raw);
+  } catch (e) {
+    console.log(`  ✗ ${(e as Error).message}`);
+    problems++;
   }
-  console.log(`  牌堆：${Math.ceil(pieces.length / stackSize)} 摞 × ${stackSize} 层 = ${pieces.length} 枚，随机码扣、不按大小排`);
+  for (const eff of table ? table.playerCounts.map((n) => ({ n, r: rulesFor(table!, n) })) : []) {
+    const total = buildPieceSet(eff.r.ranks).length;
+    const size = eff.r.draft.stackSize;
+    console.log(
+      `  ✓ ${eff.n} 人局：${total} 枚 ÷ ${eff.n} = 每人 ${total / eff.n} 枚｜摆 ${total / size} 摞 × 每摞 ${size} 张｜处置人能选：${eff.r.draft.ways.map((w) => WAY_NAME[w]).join(' ／ ')}`,
+    );
+  }
 
   console.log('\n摆摞与分牌（全局只抽一次签）\n');
-  console.log('  起抽人从 8 摞里挑一摞、摊开点其中一张（命令行没「点」这个动作，一律抽摞口那张），按职级点数从自己开始顺时针数，数到的人就是处置人');
-  console.log('  处置人三种拿法：');
-  console.log('    1) 层层轮流分：每摞从顶上开始，从自己起顺时针一人一张');
-  console.log('    2) 整摞轮流拿·从左：自己拿最左那摞，然后顺时针一人一摞');
-  console.log('    3) 整摞轮流拿·从右：同上，反过来从最右那摞开始');
+  console.log('  起抽人从任一摞里挑一摞、摊开点其中一张（命令行没「点」这个动作，一律抽摞口那张），按职级点数从自己开始顺时针数，数到的人就是处置人');
+  console.log('  拿法一共这三种，每一档只留规则表 ways 里写的那些（上面每档各报了一遍）：');
+  for (const way of ALL_WAYS) console.log(`    ${ALL_WAYS.indexOf(way) + 1}) ${WAY_TEXT[way]}`);
   console.log('  只能定拿的规则，不能把某摞指名给谁');
 
   const groupRule: Record<string, string> = {
@@ -120,11 +133,7 @@ function describeAction(state: GameState, action: Action): string {
     case 'draw':
       return `抽第 ${action.stackIdx + 1} 摞（命令行不给挑，抽摞口那张定点数；网页上点哪张抽哪张）`;
     case 'allocate':
-      return {
-        layered: '层层轮流分：从自己开始，一人一张',
-        'stacks-left': '整摞轮流拿：从最左边那摞开始',
-        'stacks-right': '整摞轮流拿：从最右边那摞开始',
-      }[action.way];
+      return WAY_TEXT[action.way];
     case 'noop':
       return '过（无牌可出）';
     default:
@@ -366,7 +375,16 @@ function toLevel(raw: string): Level {
 
 const [, , cmd = 'check', ...rest] = process.argv;
 const mode = flag(rest, 'mode', 'ming') as 'ming' | 'kou';
-const players = Number(flag(rest, 'players', '4'));
+const playersArg = flag(rest, 'players', '4');
+// check 那一头自己会念规则表哪里不对，别在这儿先把它那份报告抛穿了
+const counts = cmd === 'check' ? [] : loadRules().playerCounts;
+// 一路 Number 过去，`--players=abc` 就是 NaN、`--players=5` 就是开一桌五个人：牌桌抱着它摆牌，
+// 崩的位置离这行参数十万八千里远。这儿当场念一句人话（宿主那头同一条判断在 room.ts::intFlag）
+if (counts.length > 0 && !counts.includes(Number(playersArg))) {
+  console.log(`人数只能是 ${counts.join(' 或 ')}，你给的是 --players=${playersArg}`);
+  process.exit(2);
+}
+const players = Number(playersArg);
 const seed = Number(flag(rest, 'seed', '7'));
 
 if (cmd === 'check') process.exit(check() === 0 ? 0 : 1);
@@ -389,6 +407,8 @@ if (cmd === 'play') {
   process.exit(0);
 }
 console.log(
-  `未知命令：${cmd}\n可用：check | selfplay | play   （都能带 --mode=ming|kou --players=2|4 --seed=N；play 带 --level=easy|greedy|hard，selfplay 带 --levels=easy,greedy,hard；默认一局接一局、上一局赢家起抽，加 --independent 则每局各摇签）`,
+  `未知命令：${cmd}\n可用：check | selfplay | play   （都能带 --mode=ming|kou --players=${
+    loadRules().playerCounts.join('|')
+  } --seed=N；play 带 --level=easy|greedy|hard，selfplay 带 --levels=easy,greedy,hard；默认一局接一局、上一局赢家起抽，加 --independent 则每局各摇签）`,
 );
 process.exit(2);

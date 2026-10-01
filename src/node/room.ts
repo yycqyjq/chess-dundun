@@ -1,16 +1,16 @@
 import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { dirname, join, normalize } from 'node:path';
+import { dirname, join, normalize, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { networkInterfaces } from 'node:os';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Duplex } from 'node:stream';
 import { LEVELS } from '../ai/agent.ts';
-import type { Rules } from '../core/game.ts';
+import { countsText, type Rules } from '../core/game.ts';
 import { loadRules } from './load_rules.ts';
 import { Table, type TableSetup } from '../net/table.ts';
 import { checkHost, type ToClient, type ToHost } from '../net/wire.ts';
 import { WsServer, type Conn } from '../net/ws.ts';
-import { announcePortOf, encodeOffer, NO_DISCOVER, offerOf, slotOf } from '../net/discover.ts';
+import { announcePortOf, encodeOffer, httpUrl, NO_DISCOVER, offerOf, slotOf } from '../net/discover.ts';
 import { openDiscovery, type Discovery, type Found } from './discover.ts';
 
 /**
@@ -33,8 +33,88 @@ export function flag(argv: string[], name: string, fallback: string): string {
   return at >= 0 && argv[at + 1] ? argv[at + 1] : fallback;
 }
 
+/**
+ * 开关口径：光写 `--名` 算开；写成 `--名=值` 就认那个值——`0／false／no`（大小写都算）是关，
+ * 其余（含 `1`、`yes`、空值、只写个 `--名=`）都是开。
+ * 以前只认「整项等于 --名」，于是 `--fresh=1` 静默不生效：加了开关的人以为桌重开了，其实接回的是上一桌，
+ * 这跟没加这个开关是两种结果，却看不出来。
+ */
 export function hasFlag(argv: string[], name: string): boolean {
+  const hit = argv.find((a) => a.startsWith(`--${name}=`));
+  if (hit) return !NOT_OFF.has(hit.slice(name.length + 3).toLowerCase());
   return argv.includes(`--${name}`);
+}
+
+/** 写着「关」的那几种写法；`--save=off` 那种不算——那是值，不是开关 */
+const NOT_OFF = new Set(['0', 'false', 'no']);
+
+/**
+ * 存档旁边的占位条（`table.json.lock`，跟存档一起被 .gitignore 盖住）。
+ * 一台机器上开两张桌是真有过的事（dev 5199 加 host 5200），两张桌写同一份存档就是互相盖：
+ * 一边打到第 8 局，另一边重启接回的是自己那半本账，椅子、令牌、局号全对不上。
+ * 起桌前先占，占不着就当场说一句人话，比「后起的那张悄悄把前一张的账盖了」好收拾得多。
+ */
+export interface SaveLock {
+  pid: number;
+  port: number;
+  /** 占的是哪一份存档（绝对路径）。没有这一格，「把项目整个拷一份再开一桌」都会被拦：
+   *  拷走的条上写着一个还活着的进程号，可那位占的是原来那一份，跟这份副本无关（冒烟就是这么撞上的） */
+  save: string;
+}
+
+export function lockPathOf(save: string): string {
+  return `${save}.lock`;
+}
+
+/**
+ * 这把存档能不能占。四种「能」：没人写过、那条写的是另一份存档、写那条的进程已经没了
+ * （前人挨 SIGKILL 走的留条不算闸）、还有写的就是自己这个进程同一个端口同一份文件（同一趟里重起一次）。
+ * 只看 pid 不算数：同进程不同端口也得拒，不然一台机器上两张桌照样各写各的。
+ */
+export function lockVerdict(held: SaveLock | null, mine: SaveLock, alive: (pid: number) => boolean): 'free' | 'mine' | 'taken' {
+  if (!held || held.save !== mine.save) return 'free';
+  if (held.pid === mine.pid && held.port === mine.port) return 'mine';
+  return alive(held.pid) ? 'taken' : 'free';
+}
+
+/** 这个进程号还在不在：报 EPERM 是「在，但不是我的人」，一样算活着 */
+function pidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code === 'EPERM';
+  }
+}
+
+/** 占住这份存档，回一句「收桌时把它摘了」；被另一张活着的桌占着就抛人话（两个宿主都念这一句） */
+export function claimSave(save: string, port: number, alive: (pid: number) => boolean = pidAlive): () => void {
+  const file = lockPathOf(save);
+  const mine: SaveLock = { pid: process.pid, port, save: resolve(save) };
+  const body = JSON.stringify(mine);
+  let held: SaveLock | null = null;
+  try {
+    const raw = JSON.parse(readFileSync(file, 'utf8')) as Partial<SaveLock>;
+    held =
+      Number.isInteger(raw?.pid) && Number.isInteger(raw?.port) && typeof raw?.save === 'string'
+        ? { pid: raw.pid!, port: raw.port!, save: raw.save }
+        : null;
+  } catch {
+    held = null;
+  }
+  // 读不懂的一条（半截字、别人随手写的、老代码留的没写存档路径的）当没人占：
+  // 宁可让桌开起来，也别拿一条烂字节把门锁死
+  if (lockVerdict(held, mine, alive) === 'taken')
+    throw new Error(`这份存档（${save}）已经被 ${held!.port} 端口上那张桌占着（进程 ${held!.pid}）：先关掉那张，或者给这一张另加 --save=另一份文件`);
+  writeFileSync(file, body);
+  return () => {
+    // 只摘自己写的那条：这张桌被别人接管过之后，前一个人的收桌不该去拆现在这位的闸
+    try {
+      if (readFileSync(file, 'utf8') === body) rmSync(file, { force: true });
+    } catch {
+      /* 读不回就当不是我的 */
+    }
+  };
 }
 
 /**
@@ -54,7 +134,7 @@ export function intFlag(argv: string[], name: string, fallback: number, lo: numb
 export function setupFrom(argv: string[], rules: Rules): TableSetup {
   const players = intFlag(argv, 'players', rules.playerCounts[0] ?? 2, 1, 8);
   if (!rules.playerCounts.includes(players))
-    throw new Error(`--players 只能是 ${rules.playerCounts.join(' 或 ')}，你给的是 ${players}`);
+    throw new Error(`--players 只能是 ${countsText(rules.playerCounts)}，你给的是 ${players}`);
   // 从引擎那张清单里挑，而不是把字符串硬转成档位：自定义的 rules.json 少了哪种玩法，这儿就跟着少一种
   const said = flag(argv, 'mode', 'kou');
   const mode = rules.modes.find((m) => m === said);
@@ -158,6 +238,8 @@ export function gate(text: string, seats: number, rules: Pick<Rules, 'modes' | '
 export function openRoom(argv: string[], port: number): Room {
   const setup = setupFrom(argv, loadRules());
   const savePath = flag(argv, 'save', SAVE);
+  // 先把这份存档占住再往下走：restore() 一读就是几十毫秒，那中间另一张桌也在写同一份就晚了
+  const releaseSave = claimSave(savePath, port);
   /** 谁连着坐哪个位子：一条连接进来先没位子，join 成功才绑上 */
   const seatOf = new Map<Conn, number>();
   const connOf = new Map<number, Conn>();
@@ -251,7 +333,7 @@ export function openRoom(argv: string[], port: number): Room {
     onMessage(conn, text) {
       // 认字节那一趟全在 gate 里（那儿有闸）；这儿只剩搬运，加一道兜底：
       // handle 真办砸了也该它自己下桌，凭什么叫全桌跟着掉线
-      const v = gate(text, table.state.players, table.state.rules);
+      const v = gate(text, table.state.players, table.config);
       if ('close' in v) {
         tell(`${v.close}（来自 ${conn.addr}），先请它下桌`);
         conn.close(v.close);
@@ -408,9 +490,12 @@ export function openRoom(argv: string[], port: number): Room {
     }
   }
 
-  /** 别的设备能不能直接敲进浏览器，全看这个端口是谁的：房主 5200、dev 5199 */
+  /**
+   * 别的设备能不能直接敲进浏览器，全看这个端口是谁的：房主 5200、dev 5199。
+   * 每一条都带着入桌那个标记（拼法在 httpUrl 那一份里）：这些人是被叫来入桌的，别再让他们挑一遍「要不要联机」。
+   */
   function inviteUrls(): string[] {
-    return lanAddresses().map((ip) => `http://${ip}:${port}/`);
+    return lanAddresses().map((ip) => httpUrl(ip, port));
   }
 
   ws.start();
@@ -461,6 +546,8 @@ export function openRoom(argv: string[], port: number): Room {
       clearInterval(ticker);
       disc?.close();
       ws.stop();
+      // 占位条最后摘：这条桌的账已经存好了，下一张桌不该被一个已经收杆的人还挡在门外
+      releaseSave();
     },
   };
 }

@@ -8,6 +8,8 @@
     "noEmit": true,
     "noUnusedLocals": true,
     "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitReturns": true,
     "allowImportingTsExtensions": true,
     "verbatimModuleSyntax": true,
     "resolveJsonModule": true,

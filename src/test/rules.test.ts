@@ -1,13 +1,17 @@
 import {
+  ALL_WAYS,
   apply,
   createGame,
   currentActor,
   finalRank,
   isFaceDown,
   legalActions,
+  parseRules,
   pendingSeats,
+  rulesFor,
   seatName,
   type Action,
+  type AllocWay,
   type GameState,
 } from '../core/game.ts';
 import { loadRules } from '../node/load_rules.ts';
@@ -376,6 +380,90 @@ ok('两种整摞拿法也是人手相同', left.state.hands.every((h) => h.lengt
 const lay2 = drafted('layered', 2, 34);
 ok('2 人局层层分：每人 16 枚', lay2.state.hands.every((h) => h.length === perHead(2)), lay2.state.hands.map((h) => h.length).join(','));
 
+console.log('\n3 人局：去掉一枚黑卒一枚红兵，一摞 3 张＝10 摞，拿法只留层层轮流分');
+const three = rulesFor(base, 3);
+const p3 = buildPieceSet(three.ranks);
+const count3 = (label: string) => p3.filter((p) => p.label === label).length;
+ok(
+  '3 人档 30 枚：兵卒各减一枚，黑 15 红 15（砍的是两边各一枚，不是只削一家）',
+  p3.length === 30 && count3('卒') === 4 && count3('兵') === 4 && p3.filter((x) => x.color === 'black').length === 15,
+  `${p3.length} 枚，卒 ${count3('卒')} 兵 ${count3('兵')}`,
+);
+ok('3 人档只改枚数：职级名与顺序一个没动，点数照旧从 7 数到 1', three.ranks.map((r) => r.name).join() === base.ranks.map((r) => r.name).join());
+ok('最低级还是 8 枚、抽到的点数还是 7：3 人局的抽签和 4 人局一样', Math.max(...p3.map((x) => x.point)) === 7 && count3('卒') + count3('兵') === 8);
+ok('2 人档、4 人档不受影响：还是 32 枚、一摞 4 张', buildPieceSet(rulesFor(base, 2).ranks).length === 32 && rulesFor(base, 4).draft.stackSize === 4);
+ok(
+  '拿法表就随档位落定：3 人只层层分，2 与 4 人还是三种',
+  three.draft.ways.join() === 'layered' && rulesFor(base, 2).draft.ways.join() === ALL_WAYS.join() && rulesFor(base, 4).draft.ways.join() === ALL_WAYS.join(),
+  three.draft.ways.join(),
+);
+
+const g3 = createGame({ rules: base, players: 3, mode: 'ming', seed: 71, drawer: 0 });
+ok('引擎自己按人数落定：GameState.rules 存的就是 3 人档那份', g3.rules.draft.stackSize === 3 && g3.rules.draft.ways.length === 1);
+const stacks3 = g3.draft!.stacks.map((s) => [...s]);
+ok('3 人局摆 10 摞 × 每摞 3 张，30 枚一张不落进摞里', stacks3.length === 10 && stacks3.every((s) => s.length === 3));
+ok(
+  '起抽人还是能从任意一摞抽（10 摞就是 10 个目标）',
+  legalActions(g3, 0).length === 10 && legalActions(g3, 1).length === 0,
+  legalActions(g3, 0).map((a) => a.kind).join(','),
+);
+apply(g3, 0, { kind: 'draw', stackIdx: 0 });
+const dec3 = g3.draft!.decider;
+ok(
+  '抽完这一签，处置人能选的拿法只有一种：整摞轮流拿不在这个档的合法清单里',
+  legalActions(g3, dec3).length === 1 && (legalActions(g3, dec3)[0] as { way: string }).way === 'layered',
+  legalActions(g3, dec3).map((a) => JSON.stringify(a)).join(' '),
+);
+ok(
+  '别的家一律没牌可出（这一档少了一种拿法不等于多了别人能插手的一步）',
+  [0, 1, 2].filter((seat) => legalActions(g3, seat).length > 0).join() === String(dec3),
+);
+apply(g3, dec3, { kind: 'allocate', way: 'layered' });
+ok('10 摞 × 3 张一人一张：三家各 10 枚，发完一张不剩', g3.hands.every((h) => h.length === 10) && g3.hands.reduce((a, h) => a + h.length, 0) === 30, g3.hands.map((h) => h.length).join(','));
+ok(
+  '3 人局的日志念的是这一档的摞数（不是抄来的 8）',
+  g3.log.some((l) => l.includes('这 10 摞')) && !g3.log.some((l) => l.includes('8 摞')),
+  g3.log.join(' | '),
+);
+let threeErr = '';
+try {
+  for (const mode of ['ming', 'kou'] as const) playOut(createGame({ rules: base, players: 3, mode, seed: 72 }));
+} catch (e) {
+  threeErr = String((e as Error).message);
+}
+ok('3 人局明暗两版都打得完（发牌、比牌、收牌、终局这条链没有 3 人走不通的地方）', threeErr === '', threeErr);
+
+console.log('\n规则表改坏了要当场拒，别抱着一副坏牌组打到中局');
+type RawRules = Parameters<typeof parseRules>[0];
+type VariantFile = NonNullable<RawRules['variants']>[number];
+function refuses(name: string, raw2: RawRules, needle: string): void {
+  let msg = '';
+  try {
+    parseRules(raw2);
+  } catch (e) {
+    msg = String((e as Error).message);
+  }
+  ok(`parseRules 拒掉「${name}」`, msg.includes(needle), msg === '' ? '没抛错，静默放过了' : msg);
+}
+const raw = () => JSON.parse(JSON.stringify(base)) as RawRules;
+ok('rules.json 这一份自己过得了这套校验', (() => { try { parseRules(base); return true; } catch { return false; } })());
+const badWays = (...ways: string[]) => ways as unknown as AllocWay[];
+refuses('ways 里写错拿法名', { ...raw(), draft: { stackSize: 4, ways: badWays('layered', 'stacks-middle') } }, 'stacks-middle');
+refuses('ways 留空', { ...raw(), draft: { stackSize: 4, ways: [] } }, '至少得留一种拿法');
+refuses('一摞张数写成 0', { ...raw(), draft: { stackSize: 0, ways: badWays('layered') } }, '正整数');
+const v3 = (patch: Partial<VariantFile>): RawRules => {
+  const r = raw();
+  r.variants = [{ players: 3, ...patch }];
+  return r;
+};
+refuses('3 人档职级名打错', v3({ ranks: { '兵祖': [4, 4] } }), '职级「兵祖」');
+refuses('覆盖写了一档压根开不起来的人数', { ...raw(), playerCounts: [2, 4], variants: [{ players: 5 }] }, 'playerCounts 里没有 5');
+refuses('3 人档枚数发不平', v3({ ranks: { '兵卒': [4, 3] } }), '3 人发不平');
+// 这三条都得把上一行那份「30 枚、一摞 3 张」一起写上：只改一处，会先撞上前面那层校验，量不到这一条自己想量的那一层
+const threeOk = (): Partial<VariantFile> => ({ ranks: { '兵卒': [4, 4] }, draft: { stackSize: 3 } });
+refuses('一摞张数除不尽家数', v3({ ...threeOk(), draft: { stackSize: 4 } }), '多出一截');
+refuses('3 人档加回整摞轮流拿（10 摞分 3 家必然不等张）', v3({ ...threeOk(), draft: { stackSize: 3, ways: badWays('layered', 'stacks-left') } }), '要么改一摞张数，要么 ways 只留 layered');
+
 console.log('\n本墩最大的人领下一墩');
 const spin = toPlay(
   createGame({ rules: base, players: 4, mode: 'ming', seed: 6 }),
@@ -600,14 +688,16 @@ console.log('\n换人数那本账：只发新本，不伸缩老本（口径钉�
 }
 
 console.log('\n守恒与收敛（每种局面各 200 局）');
-for (const players of [2, 4]) {
+for (const players of [2, 3, 4]) {
   for (const mode of ['ming', 'kou'] as const) {
     let bad = '';
     for (let g = 0; g < 200; g++) {
       const state = createGame({ rules: base, players, mode, seed: 5000 + g * 31 });
       playOut(state);
+      // 分母取这一档自己那副牌：3 人档是 30 枚，不是基础档的 32
+      const all = state.pieces.length;
       const total = state.won.reduce((a, b) => a + b, 0) + state.hands.reduce((a, h) => a + h.length, 0);
-      if (total !== TOTAL) bad = `收牌+手牌 = ${total}，应为 ${TOTAL}`;
+      if (total !== all) bad = `收牌+手牌 = ${total}，应为 ${all}`;
       if (state.phase !== 'over') bad = `没走到 end：${state.phase}`;
     }
     ok(`${players} 人 ${mode}：牌数守恒且能终局`, bad === '', bad);

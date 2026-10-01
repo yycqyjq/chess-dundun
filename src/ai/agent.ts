@@ -35,7 +35,7 @@ export function choose(view: View, actions: Action[], level: Level, rng: () => n
  */
 function scoreAction(view: View, action: Action, level: Level): number {
   switch (action.kind) {
-    // 牌堆随机扣着、没人看得见，所以抽哪摞、三种分法怎么选在信息上等值——不做偏好，交给同分随机
+    // 牌堆随机扣着、没人看得见，所以抽哪摞、这一档允许的几种分法怎么选在信息上等值——不做偏好，交给同分随机
     case 'draw':
     case 'allocate':
     case 'noop':

@@ -18,10 +18,10 @@ export default {
     },
     {
       rel: "src/node/room.ts",
-      note: "11 setupFrom 不查椅子数（--players=3 开一桌三人棋）",
-      from: "  if (!rules.playerCounts.includes(players))\n    throw new Error(`--players 只能是 ${rules.playerCounts.join(' 或 ')}，你给的是 ${players}`);",
+      note: "11 setupFrom 不查档位（--players=5 开一桌五人棋）",
+      from: "  if (!rules.playerCounts.includes(players))\n    throw new Error(`--players 只能是 ${countsText(rules.playerCounts)}，你给的是 ${players}`);",
       to: "  // 拆了：引擎那张清单不作数",
-      expect: "--players=3 不是这桌的档位",
+      expect: "--players=5 不是这桌的档位，念的是 2、3 或 4",
     },
     {
       rel: "src/node/room.ts",

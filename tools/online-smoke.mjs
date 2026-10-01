@@ -145,10 +145,11 @@ ok(
   JSON.stringify(lobby).slice(0, 160),
 );
 ok(
-  '座位表还带着局域网地址：端口跟这个房一致，且短到画得出二维码',
+  '座位表还带着局域网地址：端口跟这个房一致，每条都带着入桌那个标记，且短到画得出二维码',
   Array.isArray(lobby.lan) &&
     lobby.lan.length > 0 &&
-    lobby.lan.every((u) => u === `http://${u.slice(7).split(':')[0]}:${PORT}/`) &&
+    lobby.lan.every((u) => u === `http://${u.slice(7).split(':')[0]}:${PORT}/?join=1`) &&
+    lobby.lan.every((u) => new URL(u).search === '?join=1') &&
     lobby.lan.every((u) => new TextEncoder().encode(u).length <= 78),
   JSON.stringify(lobby.lan),
 );
@@ -280,8 +281,21 @@ await a.until(['state'], (m) => m.view.players === 4);
 a.ask({ t: 'lobby' });
 const seats4 = await a.until(['seats']);
 ok('改成 4 人，两位还坐在原位', seats4.players === 4 && seats4.seats.slice(0, 2).every((s) => s.taken && s.online), JSON.stringify(seats4.seats));
+a.ask({ t: 'setup', players: 5 });
+ok('人数不在档位上改不了', (await a.until(['reject'])).why.includes('这桌只能 2、3 或 4 人'));
+
+// 档位里有 3 人这一档：4 把椅子只坐过两位，减一把减得动，多出来的那把当场归桌（后面还要坐第 3、4 把，改完就加回去）
 a.ask({ t: 'setup', players: 3 });
-ok('人数不在档位上改不了', (await a.until(['reject'])).why.includes('这桌只能 2 或 4 人'));
+await a.until(['state'], (m) => m.view.players === 3);
+a.ask({ t: 'lobby' });
+const seats3 = await a.until(['seats']);
+ok(
+  '改成 3 人：座位表只剩三把椅子，坐过的两位还在原位',
+  seats3.players === 3 && seats3.seats.length === 3 && seats3.seats.slice(0, 2).every((s) => s.taken && s.online),
+  JSON.stringify(seats3.seats),
+);
+a.ask({ t: 'setup', players: 4 });
+await a.until(['state'], (m) => m.view.players === 4);
 
 // 还没开局也坐得进来：坐下、看看、再把椅子还回去
 const c = new Client();

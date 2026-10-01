@@ -3,9 +3,10 @@
  * 不用等浏览器、也不会被后台标签页的定时器节流骗到。
  * 每次改锚点、间距、按钮条位置都跑一遍。
  */
-import { apply, createGame, type GameState } from '../core/game.ts';
+import { apply, createGame, rulesFor, type GameState } from '../core/game.ts';
+import { buildPieceSet } from '../core/pieces.ts';
 import { loadRules } from '../node/load_rules.ts';
-import { bottomBand, ctrlLift, fanStep, handBand, handCramped, handSpread, labelBand, labelBands, LABEL_X, layout, PILE_SIZE, pieceSize, stackSpots, type Board, type TableView } from '../web/board.ts';
+import { bottomBand, ctrlLift, draftShape, fanStep, handBand, handCramped, handSpread, labelBand, labelBands, LABEL_X, layout, maxStacks, PILE_SIZE, pieceSize, stackSpots, type Board, type TableView } from '../web/board.ts';
 
 let failures = 0;
 function ok(name: string, condition: boolean, detail = ''): void {
@@ -60,12 +61,13 @@ function blankView(players: number): TableView {
 }
 
 /**
- * 手工摆一个出牌阶段的空桌。hands/piles 各家张数之和必须正好 32——
- * 只测真打得出来的分布（4 人局起手每人 8 枚，手里的只会变少、收进来的只会变多）。
+ * 手工摆一个出牌阶段的空桌。hands/piles 各家张数之和必须正好这一档的整副牌——
+ * 只测真打得出来的分布（起手每人 32/家 枚，手里的只会变少、收进来的只会变多）。
  */
 function midGame(players: number, seed: number, hands: number[], piles: number[]): { state: GameState; view: TableView } {
   const sum = (a: number[]) => a.reduce((x, y) => x + y, 0);
-  if (sum(hands) + sum(piles) !== 32) throw new Error(`这副局面不守恒：手 ${sum(hands)} + 摞 ${sum(piles)}`);
+  const deck = deckOf(players);
+  if (sum(hands) + sum(piles) !== deck) throw new Error(`这副局面不守恒：手 ${sum(hands)} + 摞 ${sum(piles)}，应为 ${deck}`);
   const state = createGame({ rules, players, mode: 'kou', seed });
   const all = state.pieces.map((p) => p.id);
   state.draft = null;
@@ -77,21 +79,53 @@ function midGame(players: number, seed: number, hands: number[], piles: number[]
   const view = blankView(players);
   view.piles = cut(piles);
   // 夹具自己先自检：同一张牌不该同时在手里和摞里，否则下面所有断言都在量同一个东西
-  if (new Set([...state.hands.flat(), ...view.piles.flat()]).size !== 32) throw new Error('这副局面有重复牌');
+  if (new Set([...state.hands.flat(), ...view.piles.flat()]).size !== deck) throw new Error('这副局面有重复牌');
   return { state, view };
 }
 
 const BOARDS: { name: string; board: Board }[] = [
-  { name: '手机竖屏 390×844', board: { w: 374, h: 520 } },
+  { name: '手机竖屏 390×844', board: { w: 374, h: 520, stacks: 8, layers: 4 } },
   // 16 张摊开在这块尺寸上最容易出事：竖着只塞得下 1.3 张牌，原来只看横向够不够，最上那排就爬到按钮条上了
-  { name: '大屏手机竖屏 598×844', board: { w: 580, h: 707 } },
-  { name: '窄窗 558×668', board: { w: 542, h: 517 } },
-  { name: '平板横屏 844×390', board: { w: 812, h: 325 } },
-  { name: '桌面 1280×800', board: { w: 1264, h: 700 } },
-  { name: '极窄 320×568', board: { w: 304, h: 430 } },
+  { name: '大屏手机竖屏 598×844', board: { w: 580, h: 707, stacks: 8, layers: 4 } },
+  { name: '窄窗 558×668', board: { w: 542, h: 517, stacks: 8, layers: 4 } },
+  { name: '平板横屏 844×390', board: { w: 812, h: 325, stacks: 8, layers: 4 } },
+  { name: '桌面 1280×800', board: { w: 1264, h: 700, stacks: 8, layers: 4 } },
+  { name: '极窄 320×568', board: { w: 304, h: 430, stacks: 8, layers: 4 } },
 ];
 
-/** 真打得出来的分布：各家手牌 + 收牌摞 = 32 */
+/**
+ * 这一档摆几摞、一摞几张：从规则表自己算，不读 board.ts 那份 `draftShape`——
+ * 拿被测代码当尺子就量不出差别（这条口径在 band 那组里已经踩过一次）。
+ */
+function shapeOf(players: number): { stacks: number; layers: number } {
+  const r = rulesFor(rules, players);
+  const layers = r.draft.stackSize;
+  return { stacks: Math.ceil(buildPieceSet(r.ranks).length / layers), layers };
+}
+
+/** 整副牌在这一档有几枚：3 人档减了两枚兵卒，是 30，不是基础档那份 32 */
+const deckOf = (players: number) => buildPieceSet(rulesFor(rules, players).ranks).length;
+
+/** 同一块桌面换个档位：牌径随摞数变（10 摞比 8 摞挤），所以几何要按这一档自己那份量 */
+const deskOf = (rect: { w: number; h: number }, players: number): Board => ({ ...rect, ...shapeOf(players) });
+
+console.log('\n摞的形：摆摞那一排的块数和层数由规则表给，2、4 人 8 摞 × 4，3 人 10 摞 × 3');
+for (const players of [2, 3, 4]) {
+  const { stacks, layers } = shapeOf(players);
+  ok(
+    `${players} 人档：${deckOf(players)} 枚正好摆满 ${stacks} 摞 × ${layers} 张，一张不落`,
+    stacks * layers === deckOf(players) && deckOf(players) % players === 0,
+    `${stacks} × ${layers} = ${stacks * layers}，牌堆 ${deckOf(players)}`,
+  );
+  ok(
+    `board.ts 自己算的那份形和规则表一致（${players} 人 ${stacks} 摞）`,
+    draftShape(createGame({ rules, players, mode: 'ming', seed: 3 })).stacks === stacks &&
+      draftShape(createGame({ rules, players, mode: 'ming', seed: 3 })).layers === layers,
+  );
+}
+ok('壳子按最坏那一排搭：maxStacks 量出来就是 3 人档那 10 块', maxStacks(rules) === 10, String(maxStacks(rules)));
+
+/** 真打得出来的分布：各家手牌 + 收牌摞 = 这一档的整副牌 */
 const CASES: Record<number, [number[], number[]][]> = {
   // 起手（谁都没收到）、中盘、你独吞一大摞、你出空了但别人还在打
   2: [
@@ -101,6 +135,18 @@ const CASES: Record<number, [number[], number[]][]> = {
     [[0, 6], [26, 0]],
     // 一家独吞整副：八组摞，每组都得各占一格
     [[0, 0], [32, 0]],
+  ],
+  3: [
+    [[10, 10, 10], [0, 0, 0]],
+    [[8, 8, 8], [2, 2, 2]],
+    [[4, 6, 8], [4, 4, 4]],
+    [[0, 10, 10], [10, 0, 0]],
+    // 第三家被塞了一大摞（12 张＝4 组）：它的摞只能在对面那条边里排，不许爬到别人或我头上来
+    [[2, 2, 6], [4, 4, 12]],
+    // 整副都在我这条边：10 组摞，每组都得各占一格
+    [[0, 0, 0], [30, 0, 0]],
+    // 左边那家（相对座位 1）独吞 18 张（6 组）：一排得排在自己那半截地盘里
+    [[4, 4, 4], [0, 18, 0]],
   ],
   4: [
     [[8, 8, 8, 8], [0, 0, 0, 0]],
@@ -118,8 +164,10 @@ const CASES: Record<number, [number[], number[]][]> = {
 };
 
 console.log('\n收牌摞：各家贴自己那条边，互不压、也不压手牌和桌面');
-for (const { name, board } of BOARDS) {
-  for (const players of [2, 4]) {
+for (const { name, board: rect } of BOARDS) {
+  for (const players of [2, 3, 4]) {
+    // 牌径跟着档位那份摞数走（3 人 10 摞比 8 摞挤），同一块桌面得换成这一档自己的那张
+    const board = deskOf(rect, players);
     for (const [hands, piles] of CASES[players]!) {
       const { state, view } = midGame(players, 11, hands, piles);
       const box = boxes(state, view, board);
@@ -143,9 +191,10 @@ for (const { name, board } of BOARDS) {
   }
 }
 
-console.log('\n同一家的组与组：四张一墩算一格，超过地盘里那四格就缩牌加排，一张都不许叠在另一组上');
-for (const { name, board } of BOARDS) {
-  for (const players of [2, 4]) {
+console.log('\n同一家的组与组：四张一墩算一格（这是显示用的码法，三家四家都一样），超过地盘里那四格就缩牌加排，一张都不许叠在另一组上');
+for (const { name, board: rect } of BOARDS) {
+  for (const players of [2, 3, 4]) {
+    const board = deskOf(rect, players);
     for (const [hands, piles] of CASES[players]!) {
       const { state, view } = midGame(players, 11, hands, piles);
       const box = boxes(state, view, board);
@@ -167,8 +216,9 @@ for (const { name, board } of BOARDS) {
 }
 
 console.log('\n名字条：谁的摞挨着谁的名字，pill 底下不许压着任何一张牌');
-for (const { name, board } of BOARDS) {
-  for (const players of [2, 4]) {
+for (const { name, board: rect } of BOARDS) {
+  for (const players of [2, 3, 4]) {
+    const board = deskOf(rect, players);
     for (const [hands, piles] of CASES[players]!) {
       const { state, view } = midGame(players, 11, hands, piles);
       const box = boxes(state, view, board);
@@ -220,127 +270,145 @@ for (const { name, board } of BOARDS) {
 }
 
 console.log('\n摸签：hover 那一摞必须整列摊开，牌与牌之间不遮挡、且全在自己那一摞的领地里');
-for (const { name, board } of BOARDS) {
-  const state = createGame({ rules, players: 4, mode: 'kou', seed: 14 });
-  const view = blankView(4);
-  const cw = pieceSize(board);
-  const spots = stackSpots(board);
-  let worst = Infinity;
-  let out = 0;
-  let escaped = 0;
-  for (let i = 0; i < 8; i++) {
-    view.hover = i;
-    const box = boxes(state, view, board);
-    const ids = state.draft!.stacks[i]!;
-    const ys = ids.map((id) => box.get(id)!).sort((a, b) => a.y - b.y);
-    for (let k = 1; k < ys.length; k++) worst = Math.min(worst, ys[k]!.y - ys[k - 1]!.y - cw);
-    out += ys.filter((r) => r.x < -1 || r.y < -1 || r.x + r.w > board.w + 1 || r.y + r.h > board.h + 1).length;
-    escaped += ys.filter((r) => !inside(r, spots[i]!)).length;
+for (const { name, board: rect } of BOARDS) {
+  for (const players of [4, 3]) {
+    // 这一档摆几摞、一摞几张都从规则表来：3 人是 10 摞 × 3，写死 8／4 就永远量不到那一档
+    const board = deskOf(rect, players);
+    const { stacks, layers } = shapeOf(players);
+    const state = createGame({ rules, players, mode: 'kou', seed: 14 });
+    const view = blankView(players);
+    const cw = pieceSize(board);
+    const spots = stackSpots(board);
+    let worst = Infinity;
+    let out = 0;
+    let escaped = 0;
+    for (let i = 0; i < stacks; i++) {
+      view.hover = i;
+      const box = boxes(state, view, board);
+      const ids = state.draft!.stacks[i]!;
+      const ys = ids.map((id) => box.get(id)!).sort((a, b) => a.y - b.y);
+      for (let k = 1; k < ys.length; k++) worst = Math.min(worst, ys[k]!.y - ys[k - 1]!.y - cw);
+      out += ys.filter((r) => r.x < -1 || r.y < -1 || r.x + r.w > board.w + 1 || r.y + r.h > board.h + 1).length;
+      escaped += ys.filter((r) => !inside(r, spots[i]!)).length;
+    }
+    ok(
+      `${name}｜${players} 人 ${stacks} 摞 × ${layers} 逐个摊开：最小间距余量 ${worst.toFixed(1)}px，出界 ${out}，脱离领地 ${escaped}`,
+      worst >= 0 && out === 0 && escaped === 0,
+    );
   }
-  ok(
-    `${name}｜8 摞逐个摊开：最小间距余量 ${worst.toFixed(1)}px，出界 ${out}，脱离领地 ${escaped}`,
-    worst >= 0 && out === 0 && escaped === 0,
-  );
 }
 
 console.log('\n抽出展示：点的那张就在自己那一格里放大——中心不飘、整桌只有它在放大、还在界内');
-for (const { name, board } of BOARDS) {
-  for (let i = 0; i < 8; i++) {
-    // 摊开之后摞里每一张都是点击目标，四张都得各自演一遍「抽出」——只量摞口那张测不出「点的和亮的不是同一张」
-    for (const slot of [0, 1, 2, 3]) {
-      const state = createGame({ rules, players: 4, mode: 'kou', seed: 21 });
-      const view = blankView(4);
-      const target = state.draft!.stacks[i]![slot]!;
-      apply(state, state.draft!.drawer, { kind: 'draw', stackIdx: i, pieceId: target });
-      const drawn = state.draft!.drawn;
-      view.hover = i;
-      // 比的是「格子」而不是视觉框：放大绕中心长，视觉框本来就会往外涨一圈，那不是飘位
-      const rest = layout(state, view, board);
-      view.lift = drawn;
-      const plan = layout(state, view, board);
-      const box = boxes(state, view, board);
-      const r = box.get(drawn)!;
-      const was = rest.get(drawn)!;
-      const out = r.x < -1 || r.y < -1 || r.x + r.w > board.w + 1 || r.y + r.h > board.h + 1;
-      // 原地：竖向一格都不许动，横向最多为桌沿让 4px（最窄那档量出来 2.8px）。
-      // 飘走就又回到老毛病——「我点的那张和翻过来展示的那张不是一个位置」
-      const dx = Math.abs(was.x - plan.get(drawn)!.x);
-      const dy = Math.abs(was.y - plan.get(drawn)!.y);
-      const still = dy < 0.5 && dx <= 4;
-      const only = plan.get(target)!.scale > 1 && [...plan.values()].filter((p) => p.scale > 1).length === 1;
-      const top = [...plan.values()].every((p) => p.z <= plan.get(drawn)!.z);
-      // 展示位上必须亮着（数点就靠这张），送回扣下时才翻回背面
-      const shown = !plan.get(drawn)!.down;
-      view.holdDown = new Set([drawn]);
-      const covered = layout(state, view, board).get(drawn)!.down;
-      // 放大这张还得留在自己那一摞的横坐标里，别爬到邻居家那摞上去
-      const own = stackSpots(board)[i]!;
-      const cx = r.x + r.w / 2;
-      const under = cx >= own.x && cx <= own.x + own.w;
-      // 摞口朝下：数组末尾那张必须停在整列最下面那格。
-      // 整列上下是对称的，方向翻回去别的断言一条都不会红，所以这条必须单独守
-      view.lift = null;
-      view.holdDown = new Set();
-      const col = boxes(state, view, board);
-      const ids = state.draft!.stacks[i]!;
-      const mouthY = col.get(ids[3])!.y;
-      const lowestY = Math.max(...ids.map((id) => col.get(id)!.y));
-      ok(
-        `${name}｜第 ${i + 1} 摞第 ${slot + 1} 张抽出 y=${r.y.toFixed(0)}：原地=${still} 只它放大=${only} 摞口朝下=${Math.abs(mouthY - lowestY) < 0.5}`,
-        !out && still && only && top && shown && covered && under && Math.abs(mouthY - lowestY) < 0.5,
-        `出界 ${out} 飘位 dx=${dx.toFixed(1)}/dy=${dy.toFixed(1)} 只有它大 ${only} 最上 ${top} 亮 ${shown} 扣 ${covered} 在本摞横坐标 ${under} 摞口 y=${mouthY.toFixed(0)}/最下 ${lowestY.toFixed(0)}`,
-      );
+for (const { name, board: rect } of BOARDS) {
+  for (const players of [4, 3]) {
+    const board = deskOf(rect, players);
+    const { stacks, layers } = shapeOf(players);
+    for (let i = 0; i < stacks; i++) {
+      // 摊开之后摞里每一张都是点击目标，几张都得各自演一遍「抽出」——只量摞口那张测不出「点的和亮的不是同一张」
+      for (const slot of Array.from({ length: layers }, (_, k) => k)) {
+        const state = createGame({ rules, players, mode: 'kou', seed: 21 });
+        const view = blankView(players);
+        const target = state.draft!.stacks[i]![slot]!;
+        apply(state, state.draft!.drawer, { kind: 'draw', stackIdx: i, pieceId: target });
+        const drawn = state.draft!.drawn;
+        view.hover = i;
+        // 比的是「格子」而不是视觉框：放大绕中心长，视觉框本来就会往外涨一圈，那不是飘位
+        const rest = layout(state, view, board);
+        view.lift = drawn;
+        const plan = layout(state, view, board);
+        const box = boxes(state, view, board);
+        const r = box.get(drawn)!;
+        const was = rest.get(drawn)!;
+        const out = r.x < -1 || r.y < -1 || r.x + r.w > board.w + 1 || r.y + r.h > board.h + 1;
+        // 原地：竖向一格都不许动，横向最多为桌沿让 4px（最窄那档量出来 2.8px）。
+        // 飘走就又回到老毛病——「我点的那张和翻过来展示的那张不是一个位置」
+        const dx = Math.abs(was.x - plan.get(drawn)!.x);
+        const dy = Math.abs(was.y - plan.get(drawn)!.y);
+        const still = dy < 0.5 && dx <= 4;
+        const only = plan.get(target)!.scale > 1 && [...plan.values()].filter((p) => p.scale > 1).length === 1;
+        const top = [...plan.values()].every((p) => p.z <= plan.get(drawn)!.z);
+        // 展示位上必须亮着（数点就靠这张），送回扣下时才翻回背面
+        const shown = !plan.get(drawn)!.down;
+        view.holdDown = new Set([drawn]);
+        const covered = layout(state, view, board).get(drawn)!.down;
+        // 放大这张还得留在自己那一摞的横坐标里，别爬到邻居家那摞上去
+        const own = stackSpots(board)[i]!;
+        const cx = r.x + r.w / 2;
+        const under = cx >= own.x && cx <= own.x + own.w;
+        // 摞口朝下：数组末尾那张必须停在整列最下面那格。
+        // 整列上下是对称的，方向翻回去别的断言一条都不会红，所以这条必须单独守
+        view.lift = null;
+        view.holdDown = new Set();
+        const col = boxes(state, view, board);
+        const ids = state.draft!.stacks[i]!;
+        const mouthY = col.get(ids[layers - 1])!.y;
+        const lowestY = Math.max(...ids.map((id) => col.get(id)!.y));
+        ok(
+          `${name}｜${players} 人 第 ${i + 1} 摞第 ${slot + 1} 张抽出 y=${r.y.toFixed(0)}：原地=${still} 只它放大=${only} 摞口朝下=${Math.abs(mouthY - lowestY) < 0.5}`,
+          !out && still && only && top && shown && covered && under && Math.abs(mouthY - lowestY) < 0.5,
+          `出界 ${out} 飘位 dx=${dx.toFixed(1)}/dy=${dy.toFixed(1)} 只有它大 ${only} 最上 ${top} 亮 ${shown} 扣 ${covered} 在本摞横坐标 ${under} 摞口 y=${mouthY.toFixed(0)}/最下 ${lowestY.toFixed(0)}`,
+        );
+      }
     }
   }
 }
 
-console.log('\n强调类：选中那张挂 pick、别家七摞每张挂 dim，摊开的这一摞自己不压暗（CSS 只认这几个名字）');
-for (const { name, board } of BOARDS) {
-  for (const [stage, setView] of [
-    ['选中', (v: TableView, id: number, pile: number) => ((v.hover = pile), (v.pick = id))],
-    ['抽出', (v: TableView, id: number, pile: number) => ((v.hover = pile), (v.lift = id))],
-  ] as [string, (v: TableView, id: number, pile: number) => void][]) {
-    for (let i = 0; i < 8; i += 3) {
-      const state = createGame({ rules, players: 4, mode: 'kou', seed: 22 });
-      const view = blankView(4);
-      apply(state, state.draft!.drawer, { kind: 'draw', stackIdx: i });
-      const drawn = state.draft!.drawn;
-      setView(view, drawn, i);
-      const plan = layout(state, view, board);
-      const has = (c: string) => [...plan.values()].filter((p) => p.cls.split(' ').includes(c)).length;
-      const self = plan.get(drawn)!;
-      const thisPile = state.draft!.stacks[i]!;
-      const dimmedOnes = thisPile.filter((id) => plan.get(id)!.cls.includes('dim')).length;
-      // 别家那七摞全都得压暗，摊开的这一摞一张都不压；pick 只有「选中」那一拍才有
-      const wantDim = plan.size - thisPile.length;
-      const wantPick = stage === '选中' ? 1 : 0;
-      ok(
-        `${name}｜${stage} 第 ${i + 1} 摞：pick ${has('pick')}/dim ${has('dim')}`,
-        has('pick') === wantPick && has('dim') === wantDim && dimmedOnes === 0 && !self.cls.includes('dim') && self.cls.includes('drawn'),
-        `pick=${has('pick')} dim=${has('dim')}/${wantDim} 本摞被压=${dimmedOnes} 抽的那张=${self.cls}`,
-      );
+console.log('\n强调类：选中那张挂 pick、别家其余几摞每张挂 dim，摊开的这一摞自己不压暗（CSS 只认这几个名字）');
+for (const { name, board: rect } of BOARDS) {
+  for (const players of [4, 3]) {
+    const board = deskOf(rect, players);
+    const { stacks } = shapeOf(players);
+    for (const [stage, setView] of [
+      ['选中', (v: TableView, id: number, pile: number) => ((v.hover = pile), (v.pick = id))],
+      ['抽出', (v: TableView, id: number, pile: number) => ((v.hover = pile), (v.lift = id))],
+    ] as [string, (v: TableView, id: number, pile: number) => void][]) {
+      for (let i = 0; i < stacks; i += 3) {
+        const state = createGame({ rules, players, mode: 'kou', seed: 22 });
+        const view = blankView(players);
+        apply(state, state.draft!.drawer, { kind: 'draw', stackIdx: i });
+        const drawn = state.draft!.drawn;
+        setView(view, drawn, i);
+        const plan = layout(state, view, board);
+        const has = (c: string) => [...plan.values()].filter((p) => p.cls.split(' ').includes(c)).length;
+        const self = plan.get(drawn)!;
+        const thisPile = state.draft!.stacks[i]!;
+        const dimmedOnes = thisPile.filter((id) => plan.get(id)!.cls.includes('dim')).length;
+        // 别家那几摞全都得压暗，摊开的这一摞一张都不压；pick 只有「选中」那一拍才有
+        const wantDim = plan.size - thisPile.length;
+        const wantPick = stage === '选中' ? 1 : 0;
+        ok(
+          `${name}｜${players} 人 ${stage} 第 ${i + 1} 摞：pick ${has('pick')}/dim ${has('dim')}`,
+          has('pick') === wantPick && has('dim') === wantDim && dimmedOnes === 0 && !self.cls.includes('dim') && self.cls.includes('drawn'),
+          `pick=${has('pick')} dim=${has('dim')}/${wantDim} 本摞被压=${dimmedOnes} 抽的那张=${self.cls}`,
+        );
+      }
     }
   }
 }
 
 console.log('\n小手挂在牌上：没抽之前摞里每张都带 stack（CSS 靠它给 cursor），抽完这一签就摘掉');
-for (const { name, board } of BOARDS) {
-  const state = createGame({ rules, players: 4, mode: 'kou', seed: 23 });
-  const view = blankView(4);
-  const count = (plan: { cls: string }[]) => plan.filter((p) => p.cls.split(' ').includes('stack')).length;
-  const before = count([...layout(state, view, board).values()]);
-  apply(state, state.draft!.drawer, { kind: 'draw', stackIdx: 2 });
-  const after = count([...layout(state, view, board).values()]);
-  ok(`${name}｜stack：抽前 ${before}/32 张，抽完 ${after} 张`, before === 32 && after === 0);
+for (const { name, board: rect } of BOARDS) {
+  for (const players of [4, 3]) {
+    const board = deskOf(rect, players);
+    const state = createGame({ rules, players, mode: 'kou', seed: 23 });
+    const view = blankView(players);
+    const count = (plan: { cls: string }[]) => plan.filter((p) => p.cls.split(' ').includes('stack')).length;
+    const before = count([...layout(state, view, board).values()]);
+    apply(state, state.draft!.drawer, { kind: 'draw', stackIdx: 2 });
+    const after = count([...layout(state, view, board).values()]);
+    ok(`${name}｜${players} 人 stack：抽前 ${before}/${deckOf(players)} 张，抽完 ${after} 张`, before === deckOf(players) && after === 0);
+  }
 }
 
 console.log('\n认角：收牌摞和别家的手牌坨都落在自己那半边，别家的摞一张都不许进我底边那条带');
 const CORNERS: [number, [number[], number[]][]][] = [
   [2, [[[8, 8], [8, 8]], [[4, 10], [12, 6]], [[0, 6], [26, 0]]]],
+  [3, [[[8, 8, 8], [2, 2, 2]], [[2, 2, 6], [4, 4, 12]], [[0, 0, 0], [30, 0, 0]], [[4, 4, 4], [0, 18, 0]]]],
   [4, [[[6, 6, 6, 6], [2, 2, 2, 2]], [[2, 4, 6, 6], [8, 2, 2, 2]], [[0, 8, 8, 8], [8, 0, 0, 0]], [[4, 4, 4, 0], [4, 12, 4, 0]], [[2, 2, 0, 0], [4, 4, 20, 0]]]],
 ];
-for (const { name, board } of BOARDS) {
+for (const { name, board: rect } of BOARDS) {
   for (const [players, cases] of CORNERS) {
+    const board = deskOf(rect, players);
     for (const [hands, piles] of cases) {
       const { state, view } = midGame(players, 17, hands, piles);
       const box = boxes(state, view, board);
@@ -375,8 +443,9 @@ for (const { name, board } of BOARDS) {
 }
 
 console.log('\n归属：每家的摞紧贴自家名字条，谁收了这几张一眼读得出来');
-for (const { name, board } of BOARDS) {
-  for (const players of [2, 4]) {
+for (const { name, board: rect } of BOARDS) {
+  for (const players of [2, 3, 4]) {
+    const board = deskOf(rect, players);
     for (const [hands, piles] of CASES[players]!) {
       const { state, view } = midGame(players, 20, hands, piles);
       const box = boxes(state, view, board);
@@ -410,10 +479,12 @@ console.log('\n名字条钉哪一头：跟着自家那摞在同一侧，钉的�
   // 任一被改回去，条就会飘在桌心那一侧（截图里「对面的条跑我这儿来了」有一半是这个）
   const FULL: Record<number, [number[], number[]]> = {
     2: [[8, 8], [8, 8]],
+    3: [[6, 6, 6], [4, 4, 4]],
     4: [[4, 4, 4, 4], [4, 4, 4, 4]],
   };
-  for (const { name, board } of BOARDS) {
-    for (const players of [2, 4]) {
+  for (const { name, board: rect } of BOARDS) {
+    for (const players of [2, 3, 4]) {
+      const board = deskOf(rect, players);
       const [hands, piles] = FULL[players]!;
       for (let mine = 0; mine < players; mine++) {
         const { state, view } = midGame(players, 20, hands, piles);
@@ -447,8 +518,9 @@ console.log('\n名字条钉哪一头：跟着自家那摞在同一侧，钉的�
 }
 
 console.log('\n手牌摊开：每张各占一格、互不遮挡，还在自己那块地盘里（按钮条以下、名字条以上）');
-for (const { name, board } of BOARDS) {
-  for (const players of [2, 4]) {
+for (const { name, board: rect } of BOARDS) {
+  for (const players of [2, 3, 4]) {
+    const board = deskOf(rect, players);
     for (const [hands, piles] of CASES[players]!) {
       const { state, view } = midGame(players, 24, hands, piles);
       view.spread = true;
@@ -508,8 +580,9 @@ console.log('\n摊开是宽度优先：先挑「排数少、每张原样大」�
     ok(`${name}｜16 张桌上没摞 不超过两排、每张原样大`, rows <= 2 && size === 1, `排 ${rows}｜每张 ${size.toFixed(2)}`);
   }
   // ③ 有摞挡着也一样不许缩：让的是摞实际占的那一段，不是整桌一律让出 CORNER_KEEP
-  for (const { name, board } of BOARDS) {
-    for (const players of [2, 4] as const) {
+  for (const { name, board: rect } of BOARDS) {
+    for (const players of [2, 3, 4] as const) {
+      const board = deskOf(rect, players);
       for (const [hands, piles] of CASES[players]!.slice(1, 3)) {
         const { state, view } = midGame(players, 27, hands, piles);
         view.spread = true;
@@ -540,7 +613,9 @@ console.log('\n摊开挤紧那一档：空地被吃掉一大半时，每张仍�
 {
   // 真桌面不会有这么大一块摞，但「挤紧」那一档只有这种极端才走得到——走不到的分支等于没闸，
   // 所以这里造一面墙直接把它逼出来（墙占掉左边多宽，两种都得走一遍）
-  const board: Board = { w: 304, h: 430 };
+  // 这块极端桌面量的是「摊开」那套排格算法本身，跟档位无关——16 张只有 2 人档发得出来，
+  // 所以桌面按 2 人档那份形摆（8 摞 × 4 张），牌径才和真桌上一致
+  const board: Board = deskOf({ w: 304, h: 430 }, 2);
   const full = pieceSize(board);
   const band = handBand(board);
   for (const wallW of [150, 210]) {
@@ -583,13 +658,16 @@ console.log('\n摊开挤紧那一档：空地被吃掉一大半时，每张仍�
 }
 
 console.log('\n扇形最低点：坠到最低的那张牌不许压进底边那条名字条（收牌摞靠横向让位隔开，见上面那组）');
-for (const { name, board } of BOARDS) {
+for (const { name, board: rect } of BOARDS) {
   for (const [players, hands, piles] of [
     [2, [8, 8], [8, 8]],
     [2, [4, 10], [12, 6]],
+    [3, [10, 10, 10], [0, 0, 0]],
+    [3, [4, 6, 8], [4, 4, 4]],
     [4, [6, 6, 6, 6], [2, 2, 2, 2]],
     [4, [2, 4, 6, 6], [8, 2, 2, 2]],
   ] as [number, number[], number[]][]) {
+    const board = deskOf(rect, players);
     const { state, view } = midGame(players, 18, hands, piles);
     const box = boxes(state, view, board);
     const low = Math.max(...state.hands[0]!.map((id) => box.get(id)!.y + box.get(id)!.h));
@@ -600,14 +678,17 @@ for (const { name, board } of BOARDS) {
 }
 
 console.log('\n别家的手牌坨不压我的扇形（挪锚点最容易撞的就是这条）');
-for (const { name, board } of BOARDS) {
+for (const { name, board: rect } of BOARDS) {
   for (const [players, hands, piles] of [
     [2, [8, 8], [8, 8]],
     [2, [4, 10], [12, 6]],
+    [3, [8, 8, 8], [2, 2, 2]],
+    [3, [0, 10, 10], [10, 0, 0]],
     [4, [6, 6, 6, 6], [2, 2, 2, 2]],
     [4, [2, 4, 6, 6], [8, 2, 2, 2]],
     [4, [0, 8, 8, 8], [8, 0, 0, 0]],
   ] as [number, number[], number[]][]) {
+    const board = deskOf(rect, players);
     const { state, view } = midGame(players, 19, hands, piles);
     const box = boxes(state, view, board);
     const fan = state.hands[0]!.map((id) => box.get(id)!);
@@ -625,7 +706,8 @@ console.log('\n谁坐哪号都只是转个角度：联机坐到 P2/P3/P4 那几�
   const seatTable = (board: Board, players: number, mine: number) => {
     const each = players === 2 ? 8 : 6;
     const hands = Array.from({ length: players }, () => each);
-    const piles = Array.from({ length: players }, () => (32 - each * players) / players);
+    // 剩下的那点量摊成每家一样的摞：三家四家都是整副减掉手里的，写成 32 就把 3 人档那份 30 漏了
+    const piles = Array.from({ length: players }, () => (deckOf(players) - each * players) / players);
     const { state, view } = midGame(players, 31, hands, piles);
     view.mine = mine;
     view.freeze = state.hands.map((h, seat) => ({ seat, ids: h.slice(0, 2), pledge: false, best: false }));
@@ -647,8 +729,9 @@ console.log('\n谁坐哪号都只是转个角度：联机坐到 P2/P3/P4 那几�
       y2: Math.max(...rs.map((r) => r.y + r.h)),
     };
   };
-  for (const { name, board } of BOARDS) {
-    for (const players of [2, 4]) {
+  for (const { name, board: rect } of BOARDS) {
+    for (const players of [2, 3, 4]) {
+      const board = deskOf(rect, players);
       const home = seatTable(board, players, 0);
       for (const mine of Array.from({ length: players }, (_, i) => i)) {
         const here = seatTable(board, players, mine);
@@ -702,6 +785,31 @@ console.log('\n摊开不摊开：扇形本来就张得开的就别多要一下�
     // 同一种屏上张数只会越叠越挤，不许 8 张要摊开、16 张反倒不用
     for (let n = 8; n < 16; n++) {
       ok(`${name}｜${n}→${n + 1} 张不会变松`, !handCramped(n, board) || handCramped(n + 1, board), `${n + 1} 张成了直接点`);
+    }
+  }
+  // 3 人档自己那一遍：桌面矩形一样，但那份形是 10 摞 × 3 层，牌径跟着档位涨（横屏上 43.3 而不是 32.5），
+  // 扇形摊得的步长和「挤不挤」都换个数——这张表也是探针实测的：起手 10 张只有竖屏/窄窗要摊开，6 张往下一律直接点
+  const want3: Record<string, Record<number, boolean>> = {
+    '手机竖屏 390×844': { 10: true, 6: false },
+    '大屏手机竖屏 598×844': { 10: true, 6: false },
+    '窄窗 558×668': { 10: true, 6: false },
+    '平板横屏 844×390': { 10: false, 6: false },
+    '桌面 1280×800': { 10: false, 6: false },
+    '极窄 320×568': { 10: true, 6: false },
+  };
+  for (const { name, board: rect } of BOARDS) {
+    const board = deskOf(rect, 3);
+    for (const n of [10, 6]) {
+      const step = fanStep(n, board);
+      const cramped = handCramped(n, board);
+      ok(
+        `${name}｜3 人档 ${n} 张 露 ${(step / pieceSize(board)).toFixed(2)}cw → ${cramped ? '先摊开' : '直接点'}`,
+        cramped === want3[name]![n],
+        `期望 ${want3[name]![n] ? '先摊开' : '直接点'}`,
+      );
+    }
+    for (let n = 3; n < 10; n++) {
+      ok(`${name}｜3 人档 ${n}→${n + 1} 张不会变松`, !handCramped(n, board) || handCramped(n + 1, board), `${n + 1} 张成了直接点`);
     }
   }
 }

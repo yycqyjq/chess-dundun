@@ -38,11 +38,28 @@ export interface Rules {
   nextLeader: 'clockwise' | 'trick-winner';
   mingqi: ModeRules;
   kouqi: ModeRules;
-  draft: { stackSize: number };
+  draft: { stackSize: number; ways: AllocWay[] };
+  /** 按人数落定的那一档覆盖；没有覆盖的人数直接用上面那份 */
+  variants?: PlayerVariant[];
 }
 
 /** 处置人定的三种分牌规则：层层轮流分 / 整摞轮流拿（从左起 / 从右起） */
 export type AllocWay = 'layered' | 'stacks-left' | 'stacks-right';
+
+/** 三种拿法的全集，规则表里写的 `ways` 只能是它的子集 */
+export const ALL_WAYS: readonly AllocWay[] = ['layered', 'stacks-left', 'stacks-right'];
+
+/**
+ * 某一档人数的牌组与发牌覆盖。枚数是**替换**不是增减（`"兵卒": [4, 4]` 就是这一级黑四枚红四枚），
+ * 省得「减几枚」这种事要在两处对账。
+ */
+export interface PlayerVariant {
+  players: number;
+  note?: string;
+  /** 职级名 → 这一档的 [黑, 红] 枚数 */
+  ranks?: Record<string, [number, number]>;
+  draft?: { stackSize?: number; ways?: AllocWay[] };
+}
 
 export type Action =
   | { kind: 'draw'; stackIdx: number; pieceId?: number }
@@ -97,10 +114,94 @@ export interface GameState {
   seed: number;
 }
 
-/** 规则表进引擎的唯一入口：谁读文件、谁 fetch、谁内联 JSON 都随调用方，core 不碰 fs */
+function checkDraft(draft: { stackSize: number; ways: AllocWay[] }, at: string): void {
+  if (!Number.isInteger(draft.stackSize) || draft.stackSize < 1)
+    throw new Error(`rules.json：${at} 的一摞张数得是个正整数，写的是 ${draft.stackSize}`);
+  if (!Array.isArray(draft.ways) || draft.ways.length === 0)
+    throw new Error(`rules.json：${at} 的 ways 至少得留一种拿法，否则处置人那一步没人能落子`);
+  for (const way of draft.ways)
+    if (!ALL_WAYS.includes(way))
+      throw new Error(`rules.json：${at} 写了「${way}」，拿法只有 ${ALL_WAYS.join(' / ')} 这三种`);
+}
+
+/** 发得平才算这套规则跑得起来：枚数除得尽家数、一摞张数除得尽家数（层层轮流分每摞要走完整圈），整摞拿还要求摞数除得尽家数 */
+function checkDealt(total: number, draft: { stackSize: number; ways: AllocWay[] }, players: number, at: string): void {
+  if (total % players !== 0) throw new Error(`rules.json：${at} 一共 ${total} 枚，${players} 人发不平`);
+  if (draft.stackSize % players !== 0)
+    throw new Error(
+      `rules.json：${at} 一摞 ${draft.stackSize} 张分给 ${players} 家，层层轮流分每摞都要多出一截（一摞张数得是家数的整数倍）`,
+    );
+  if (draft.ways.some((way) => way !== 'layered') && (total / draft.stackSize) % players !== 0)
+    throw new Error(
+      `rules.json：${at} 一共 ${total / draft.stackSize} 摞分给 ${players} 家，整摞轮流拿会拿成不等张：要么改一摞张数，要么 ways 只留 layered`,
+    );
+}
+
+/**
+ * 规则表进引擎的唯一入口：谁读文件、谁 fetch、谁内联 JSON 都随调用方，core 不碰 fs。
+ * rules.json 是给人手写改的，所以那些「改错了会静默不生效」的形状在这儿当场拒：
+ * 职级名打错（那一档覆盖就白写）、人数没进 playerCounts（那档桌压根开不起来）、拿法名字写错、
+ * 摞大小发不平。宁可开不起来念一句人话，也别抱着一副坏牌组打到中局。
+ */
 export function parseRules(raw: Omit<Rules, 'ranks'> & { ranks: readonly RankFile[] }): Rules {
   const { ranks, ...rest } = raw;
-  return { ...rest, ranks: buildRanks(ranks) };
+  const rules: Rules = { ...rest, ranks: buildRanks(ranks) };
+  for (const n of rules.playerCounts)
+    if (!Number.isInteger(n) || n < 2)
+      throw new Error(`rules.json：playerCounts 里的「${n}」不算一档人数（至少 2 人，且得是整数）`);
+  checkDraft(rules.draft, '默认那一档');
+  for (const v of rules.variants ?? []) {
+    const at = `${v.players} 人那一档`;
+    if (!rules.playerCounts.includes(v.players))
+      throw new Error(`rules.json：${at} 的覆盖写了，可 playerCounts 里没有 ${v.players} 人——这张覆盖永远走不到`);
+    const unknown = Object.keys(v.ranks ?? {}).filter((name) => !rules.ranks.some((r) => r.name === name));
+    if (unknown.length)
+      throw new Error(`rules.json：${at} 改的职级「${unknown.join('、')}」在这张表里不存在（职级名要照 ranks 里那个 name 写）`);
+    for (const [name, count] of Object.entries(v.ranks ?? {}))
+      if (!Array.isArray(count) || count.length !== 2 || !count.every((c) => Number.isInteger(c) && c >= 0))
+        throw new Error(`rules.json：${at} 的「${name}」枚数得写成 [黑, 红] 两个非负整数`);
+    if (v.draft) checkDraft({ stackSize: v.draft.stackSize ?? rules.draft.stackSize, ways: v.draft.ways ?? rules.draft.ways }, at);
+  }
+  for (const players of rules.playerCounts) {
+    const eff = settle(rules, players);
+    checkDealt(buildPieceSet(eff.ranks).length, eff.draft, players, `${players} 人那一档`);
+  }
+  return rules;
+}
+
+/**
+ * 按人数把牌组枚数、一摞张数、能选哪几种拿法落定成「只这一档」那一份。
+ * 落定要连档位清单一起收掉：`GameState.rules` 说的是一桌的牌怎么发，不再是那张给人手写的配置表。
+ * 留着 `variants` 会出两件事：一是不再适用（覆盖已经吃进来了），二是这张表再进一次 `parseRules`
+ * （线上快照、存档还原都走这一趟）会拿 3 人档的「一摞 3 张」去查 2 人档发不发得平，当场自己拒自己。
+ */
+function settle(rules: Rules, players: number): Rules {
+  const v = rules.variants?.find((x) => x.players === players);
+  const { variants: _applied, ...rest } = rules;
+  return {
+    ...rest,
+    playerCounts: [players],
+    ranks: rules.ranks.map((r) => (v?.ranks?.[r.name] ? { ...r, count: v.ranks[r.name]! } : r)),
+    draft: { stackSize: v?.draft?.stackSize ?? rules.draft.stackSize, ways: v?.draft?.ways ?? rules.draft.ways },
+  };
+}
+
+/**
+ * 按人数落定的那一份规则——GameState 里存的就是它，往下比牌、发牌、界面念的数全出自同一份。
+ * 校验已经在 parseRules 做过了，这儿只是替换，不再抛。
+ */
+export function rulesFor(rules: Rules, players: number): Rules {
+  return settle(rules, players);
+}
+
+/**
+ * 档位人数念成一句人话：`2、3 或 4`。
+ * 拒人那句（命令行、开桌请求、改人数）都从这一处出口，三处各写各的 join 就会一个念「2 或 3 或 4 人」。
+ */
+export function countsText(playerCounts: number[]): string {
+  const last = playerCounts[playerCounts.length - 1];
+  if (playerCounts.length < 2) return `${last}`;
+  return `${playerCounts.slice(0, -1).join('、')} 或 ${last}`;
 }
 
 export function createGame(opts: {
@@ -112,13 +213,15 @@ export function createGame(opts: {
   drawer?: number;
 }): GameState {
   const rng = mulberry32(opts.seed);
-  const pieces = buildPieceSet(opts.rules.ranks);
+  // 先按人数落定这一档的牌组枚数与摞大小，再铺牌——3 人局那两张减掉的兵卒就是在这儿生效的
+  const rules = rulesFor(opts.rules, opts.players);
+  const pieces = buildPieceSet(rules.ranks);
   const byId = new Map(pieces.map((p) => [p.id, p]));
   // 随机扣摞：只洗牌不分大小排序，摆好的牌堆本身不带任何可推算的信息
-  const stacks = chunks(shuffled(pieces.map((p) => p.id), rng), opts.rules.draft.stackSize);
+  const stacks = chunks(shuffled(pieces.map((p) => p.id), rng), rules.draft.stackSize);
   const drawer = opts.drawer ?? Math.floor(rng() * opts.players);
   return {
-    rules: opts.rules,
+    rules,
     mode: opts.mode,
     players: opts.players,
     pieces,
@@ -273,8 +376,8 @@ function draftActions(state: GameState, seat: number): Action[] {
     return draft.drawer === seat ? draft.stacks.map((_, stackIdx) => ({ kind: 'draw', stackIdx })) : [];
   }
   if (draft.decider !== seat) return [];
-  const ways: AllocWay[] = ['layered', 'stacks-left', 'stacks-right'];
-  return ways.map((way) => ({ kind: 'allocate', way }));
+  // 能选哪几种拿法归规则表（3 人局那一档只有「层层轮流分」：10 摞分 3 家，整摞拿必然不等张）
+  return state.rules.draft.ways.map((way) => ({ kind: 'allocate', way }));
 }
 
 export function apply(state: GameState, seat: number, action: Action): GameState {
@@ -299,7 +402,7 @@ function applyDraw(state: GameState, stackIdx: number, pieceId?: number): GameSt
   const draft = state.draft!;
   const stack = draft.stacks[stackIdx];
   // 界面上点哪张抽哪张；CLI 和 AI 都不传 pieceId，永远抽摞口那张。
-  // 摸签阶段四张全扣着，抽哪张的点数期望都一样，所以拆开热点不影响公平
+  // 摸签阶段这一摞全扣着，抽哪张的点数期望都一样，所以拆开热点不影响公平
   const drawn = pieceId ?? stack[stack.length - 1];
   const piece = state.byId.get(drawn)!;
   draft.stackIdx = stackIdx;
@@ -308,7 +411,7 @@ function applyDraw(state: GameState, stackIdx: number, pieceId?: number): GameSt
   draft.stage = 'allocate';
   state.opening = { drawer: draft.drawer, stackIdx, pieceId: drawn, seat: draft.decider };
   state.log.push(
-    `${seatName(draft.drawer)} 从第 ${stackIdx + 1} 摞抽到 ${label(state, drawn)}（${piece.point} 点，当场各家都看见，进手后跟着扣），从自己数到 ${seatName(draft.decider)}——这 8 摞怎么分归他定，第一轮也由他先出`,
+    `${seatName(draft.drawer)} 从第 ${stackIdx + 1} 摞抽到 ${label(state, drawn)}（${piece.point} 点，当场各家都看见，进手后跟着扣），从自己数到 ${seatName(draft.decider)}——这 ${draft.stacks.length} 摞怎么分归他定，第一轮也由他先出`,
   );
   return state;
 }

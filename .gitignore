@@ -1,6 +1,7 @@
 node_modules
 dist
 table.json
+table.json.lock
 *.log
 .DS_Store
 .idea

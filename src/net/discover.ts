@@ -57,9 +57,25 @@ export interface FoundRoom extends RoomOffer {
   ip: string;
 }
 
-/** 由校验过的 ip ＋ port 现拼一条能敲进浏览器的地址 */
+/**
+ * 入桌那一句意图，写在地址上：拿着这条地址进的人才是「来入桌的」，页面直接落进候场厅。
+ * 手输的裸地址（`http://192.168.1.11:5200/`）没带它，就先落首页让人自己挑——
+ * 「地址不是本机」只说明他不是在自己电脑上打开页面，不说明他是来干什么的。
+ */
+export const JOIN_QUERY = '?join=1';
+
+/**
+ * 递给人敲进浏览器的那条地址：拼法只有这一份。
+ * 列表里那一条、房主进程报的邀请地址、二维码的内容，全从这儿出——
+ * 一处少带那个标记，那条路上的人就白被问一遍「要不要联机」。
+ */
+export function httpUrl(ip: string, port: number): string {
+  return `http://${ip}:${port}/${JOIN_QUERY}`;
+}
+
+/** 由校验过的 ip ＋ port 现拼一条能敲进浏览器的地址：列表里点一条本来就是去入桌，标记跟着走 */
 export function roomUrl(f: { ip: string; port: number }): string {
-  return `http://${f.ip}:${f.port}/`;
+  return httpUrl(f.ip, f.port);
 }
 
 export const MODES = ['ming', 'kou'] as const;
