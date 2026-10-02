@@ -25,7 +25,7 @@ import {
   type TableStatus,
   type ToClient,
   type WireState,
-} from './wire.ts';
+} from '../net/wire.ts';
 
 /** 掉线多久转代打。想牌的人不催，催的是回不来的那位 */
 export const TAKEOVER_MS = 30_000;

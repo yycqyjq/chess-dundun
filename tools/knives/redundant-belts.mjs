@@ -14,28 +14,28 @@ export default {
   suite: 'test:net',
   knives: [
     {
-      rel: 'src/net/ws.ts',
+      rel: 'src/node/ws.ts',
       note: 'b1 bail 不标 dead（只清缓冲、只说一次）',
       from: '      this.dead = true;',
       to: '      // 拆了：接着当它还活着',
       belt: true,
     },
     {
-      rel: 'src/net/ws.ts',
+      rel: 'src/node/ws.ts',
       note: "b2 push 不再看 dead（掐过之后新到的字节照解）",
       from: '  push(chunk: Buffer): void {\n    if (this.dead) return;',
       to: '  push(chunk: Buffer): void {',
       belt: true,
     },
     {
-      rel: 'src/net/ws.ts',
+      rel: 'src/node/ws.ts',
       note: "b3 consume 的 'stop' 不往上递",
       from: "    return this.consume(fin, opcode, payload) === 'stop' ? 'stop' : true;",
       to: "    this.consume(fin, opcode, payload);\n    return true;",
       belt: true,
     },
     {
-      rel: 'src/net/table.ts',
+      rel: 'src/node/table.ts',
       note: 'b4 新本子多长一位（真实 mutation 走不到「四条账目只剩两把椅子」那条路）',
       from: '      this.book = openMatch(players);',
       to: '      this.book = openMatch(players); this.book.ties = 7;',

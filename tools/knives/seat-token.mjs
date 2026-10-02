@@ -14,14 +14,14 @@ export default {
   suite: 'test:net',
   knives: [
     {
-      rel: 'src/net/table.ts',
+      rel: 'src/node/table.ts',
       note: 'A 令牌回到那把种子流上取：同种子的两张桌发出同一把钥匙，外人拿到一条快照就能把每把椅子的令牌推出来',
       from: "    if (fresh) slot.token = `s${seat}-${randomBytes(8).toString('hex')}`;",
       to: '    if (fresh) slot.token = `s${seat}-${this.rng().toString(36).slice(2, 10)}`;',
       expect: '同样种子、同样参数的两张桌，第一把椅子的令牌不许一样：一样就等于它是 seed 的函数，而 seed 发给全桌',
     },
     {
-      rel: 'src/net/table.ts',
+      rel: 'src/node/table.ts',
       note: 'B 换一条来路却仍然是 seed 的函数（拿 seed 跟座位号异或）：换个拼法不等于换个随机源',
       from: "    if (fresh) slot.token = `s${seat}-${randomBytes(8).toString('hex')}`;",
       to: '    if (fresh) slot.token = `s${seat}-${(this.setup.seed ^ seat).toString(36)}`;',

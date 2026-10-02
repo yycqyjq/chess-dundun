@@ -44,7 +44,7 @@ export default {
       expect: '一摞张数除不尽家数',
     },
     {
-      rel: 'src/net/table.ts',
+      rel: 'src/node/table.ts',
       note: '4 桌这一头的拒人话自己拼一遍（三处文案漂开，这句还念「2 或 3 或 4」）',
       from: '      return { ok: false, why: `这桌只能 ${countsText(this.setup.rules.playerCounts)} 人` };',
       to: "      return { ok: false, why: `这桌只能 ${this.setup.rules.playerCounts.join(' 或 ')} 人` };",
@@ -58,7 +58,7 @@ export default {
       expect: '人数不在档位上改不动，那句念 2、3 或 4',
     },
     {
-      rel: 'src/net/table.ts',
+      rel: 'src/node/table.ts',
       note: '6 档位清单从落定那份取（room.ts 那句 gate 拿它认人数，三人桌就再也改不回四人）',
       from: '    return this.setup.rules;\n  }',
       to: '    return this.state.rules;\n  }',

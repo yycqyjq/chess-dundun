@@ -16,7 +16,7 @@
     "test:rules": "node --experimental-strip-types src/test/rules.test.ts",
     "test:layout": "node --experimental-strip-types src/test/layout.test.ts",
     "test:style": "node --experimental-strip-types src/test/style.test.ts",
-    "test:net": "node --experimental-strip-types src/test/net.test.ts",
+    "test:net": "node --experimental-strip-types src/test/net.table.test.ts; s=$?; node --experimental-strip-types src/test/net.host.test.ts; t=$?; node --experimental-strip-types src/test/net.wire.test.ts; u=$?; exit $((s+t+u))",
     "test:link": "node --experimental-strip-types src/web/net.test.ts",
     "test:discover": "node --experimental-strip-types src/test/discover.test.ts",
     "test:local": "node --experimental-strip-types src/web/local.test.ts",

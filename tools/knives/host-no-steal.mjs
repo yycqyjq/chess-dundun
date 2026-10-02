@@ -1,6 +1,6 @@
 /**
  * 批11（(a) 砍掉房主位自动收回 ＋ (c) 交接要在候场厅说一句）的八把刀。
- * 前两把拆 `src/net/table.ts` 走 `test:net`，中间五把拆 `src/web/home.ts` 那句交接话走 `test:ui`，
+ * 前两把拆 `src/node/table.ts` 走 `test:net`，中间五把拆 `src/web/home.ts` 那句交接话走 `test:ui`，
  * 最后一把拆 `src/web/app.ts` 的调用点走 `test:style`（一张谱子混三套闸）。
  * 刀口 2026-09-29 逐个核过：现源码里各出现 1 次，且没有别的谱子碰过这几行
  * （`seat-recycle` 那本原来钉着「凭令牌坐回家那把就交回」这一支，那条规则已作废，刀口跟着删了）。
@@ -17,7 +17,7 @@ export default {
   suite: 'test:net',
   knives: [
     {
-      rel: 'src/net/table.ts',
+      rel: 'src/node/table.ts',
       note: 'A 坐下就抢：不看现任那把还连着不连着',
       from: `    const keeper = this.slots[host];
     if (keeper?.token && keeper.online) return null;`,
@@ -25,7 +25,7 @@ export default {
       expect: '不是房主按不动开始',
     },
     {
-      rel: 'src/net/table.ts',
+      rel: 'src/node/table.ts',
       note: 'B 代持那位也让不成座：还回去这条路没了',
       from: `      if (host === home) return { ok: false, why: '房主不能让座，这桌得有人开局' };
       this.setup.hostSeat = home;

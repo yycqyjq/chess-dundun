@@ -10,21 +10,21 @@ export default {
   suite: "test:net",
   knives: [
     {
-      rel: "src/net/ws.ts",
+      rel: "src/node/ws.ts",
       note: "1 分片拼起来不设上限（A5：内存想涨多少涨多少）",
       from: "    if (frag.bytes > MAX_MESSAGE) return this.bail('分片拼起来也超限');",
       to: "    // 拆了：拼到多少都接着攒",
       expect: "分片拼起来超限就掐",
     },
     {
-      rel: "src/net/ws.ts",
+      rel: "src/node/ws.ts",
       note: "2 Origin 那道闸整个拆掉（别人家的页面也握得上手）",
       from: "    if (origin !== undefined && hostPart(origin) !== hostPart(req.headers.host ?? '')) {",
       to: "    if (origin !== undefined && false) {",
       expect: "Origin 不是这一桌的，握手直接回 403",
     },
     {
-      rel: "src/net/ws.ts",
+      rel: "src/node/ws.ts",
       note: "3 比 Origin 时不摊平默认端口（:80 对不上 Host，自己人也被拒）",
       from: "  return (s.split('/')[0] ?? '').toLowerCase().replace(/:(80|443)$/, '');",
       to: "  return (s.split('/')[0] ?? '').toLowerCase();",

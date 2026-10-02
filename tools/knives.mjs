@@ -159,17 +159,19 @@ function parseOnly(raw) {
 // ---------------- --affected：按当前改动挑刀谱（宁多勿漏） ----------------
 
 /**
- * `package.json` 里每条 `test:*` 脚本的入口文件（套件名 → 仓库相对路径）。
+ * `package.json` 里每条 `test:*` 脚本的入口文件（套件名 → 仓库相对路径数组）。
  * 陷阱：别按文件名猜——`test:link` 走的是 `src/web/net.test.ts`、`test:ui` 走的是 `src/web/ui.test.ts`，
- * 两条都不在 `src/test/`。所以从脚本命令里抽末尾那个入口，而不是拼 `src/test/<name>.test.ts`。
+ * 两条都不在 `src/test/`。所以从脚本命令里抽入口，而不是拼 `src/test/<name>.test.ts`。
+ * 一条脚本可能串起多个入口（`test:net` 拆成 table/host/wire 三份后用 `;` 聚合），
+ * 所以把命令里每个 `node --experimental-strip-types <path>` 都抠出来，闭包按并集算。
  */
 function suiteEntries() {
   const pkg = JSON.parse(readFileSync(join(REPO, 'package.json'), 'utf8'));
   const map = new Map();
   for (const [name, cmd] of Object.entries(pkg.scripts ?? {})) {
     if (!name.startsWith('test:')) continue;
-    const m = String(cmd).match(/(\S+\.(?:ts|mts|cts|js|mjs|cjs))\s*$/);
-    if (m) map.set(name, m[1]);
+    const entries = [...String(cmd).matchAll(/node\s+--experimental-strip-types\s+(\S+\.(?:ts|mts|cts|js|mjs|cjs))/g)].map((m) => m[1]);
+    if (entries.length) map.set(name, entries);
   }
   return map;
 }
@@ -223,6 +225,13 @@ function closureOf(entryRel) {
   return seen;
 }
 
+/** 一套闸可能串起多个入口（test:net 拆成三份）：闭包取这些入口闭包的并集 */
+function closureOfEntries(entries) {
+  const all = new Set();
+  for (const e of entries) for (const f of closureOf(e)) all.add(f);
+  return all;
+}
+
 /** `git --name-status` 两种列式：普通 M/A/D 是一列路径；R/C 是「旧 新」两列，两个都算 */
 function nameStatus(args) {
   const set = new Set();
@@ -264,9 +273,9 @@ function isGlobal(f, entrySet) {
  * 全部取并集，宁多勿漏。
  */
 function selectAffected(specs, changed, entries) {
-  const entrySet = new Set(entries.values());
+  const entrySet = new Set([...entries.values()].flat());
   const suiteClosure = new Map();
-  for (const [suite, entry] of entries) suiteClosure.set(suite, closureOf(entry));
+  for (const [suite, list] of entries) suiteClosure.set(suite, closureOfEntries(list));
 
   const byRel = new Map();
   const specSuites = new Map();
@@ -331,8 +340,8 @@ if (closureArg) {
     console.error(`--print-closure 认的套件名来自 package.json 的 test:*，没有：${closureArg}`);
     process.exit(2);
   }
-  const cl = [...closureOf(entries.get(closureArg))].sort();
-  console.log(`${closureArg} 入口 ${entries.get(closureArg)} 的传递闭包（${cl.length} 个文件）：`);
+  const cl = [...closureOfEntries(entries.get(closureArg))].sort();
+  console.log(`${closureArg} 入口 ${entries.get(closureArg).join('、')} 的传递闭包（${cl.length} 个文件）：`);
   for (const f of cl) console.log(`  ${f}`);
   process.exit(0);
 }

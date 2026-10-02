@@ -7,9 +7,9 @@ import type { Duplex } from 'node:stream';
 import { LEVELS } from '../ai/agent.ts';
 import { countsText, type Rules } from '../core/game.ts';
 import { loadRules } from './load_rules.ts';
-import { Table, type TableSetup } from '../net/table.ts';
+import { Table, type TableSetup } from './table.ts';
 import { checkHost, type ToClient, type ToHost } from '../net/wire.ts';
-import { WsServer, type Conn } from '../net/ws.ts';
+import { WsServer, type Conn } from './ws.ts';
 import { announcePortOf, encodeOffer, httpUrl, NO_DISCOVER, offerOf, slotOf } from '../net/discover.ts';
 import { openDiscovery, type Discovery, type Found } from './discover.ts';
 

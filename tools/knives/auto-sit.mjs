@@ -55,7 +55,7 @@ export default {
       expect: 'seat 写成 -1 认得',
     },
     {
-      rel: 'src/net/table.ts',
+      rel: 'src/node/table.ts',
       note: '7 代持那把不单独绕开（家那把＋「没人坐过」两道还挡着：单拆这一处本该没人看得见）',
       from: '    return this.slots.find((s) => s.seat !== host && s.seat !== home && !s.token)?.seat ?? null;',
       to: '    return this.slots.find((s) => s.seat !== home && !s.token)?.seat ?? null;',
@@ -63,7 +63,7 @@ export default {
       belt: true,
     },
     {
-      rel: 'src/net/table.ts',
+      rel: 'src/node/table.ts',
       note: '8 房主位也跟着自动发：谁扫到码谁就当上开局那位',
       from: '    return this.slots.find((s) => s.seat !== host && s.seat !== home && !s.token)?.seat ?? null;',
       to: '    return this.slots.find((s) => !s.token)?.seat ?? null;',
