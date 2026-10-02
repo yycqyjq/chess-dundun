@@ -5,6 +5,9 @@
  *   npm run knives                 # tools/knives/ 下全跑
  *   npm run knives -- spread       # 只跑一个（按文件名，不带 .mjs）
  *   npm run knives -- spread --only=3   # 只跑那把刀（调试用）
+ *   npm run knives -- spread --only=4-9 # 连号；也认 4,6,12 这种点名，可混写 4-6,9
+ *   npm run knives -- spread --no-baseline  # 跳过基准（同一份源码刚验过绿才许用，省一轮全闸）
+ *   npm run knives -- --drop        # 不跑刀：清掉所有缓存的临时副本，一把收干净
  *   npm run knives -- spread --verbose  # 把每一刀红掉的那几句全打出来（量 expect 用）
  *
  * 刀谱格式（`tools/knives/*.mjs` 默认导出一张）：
@@ -21,13 +24,14 @@
  * ② 起跑先把这套闸里要用的每一套都测一次未变异的绿做基准：基准就红说明崩在刀口之外，下面全不算；
  * ③ 判红要同时看退出码**和**那句专属断言文案（`expect`）——只看退出码，别的断言先摔也算它红。
  *
- * 仓库本体一个字都不碰：全程只在 `makeScratch` 造的临时目录里动刀，量完就删。
+ * 仓库本体一个字都不碰：全程只在 `makeScratch` 造的临时目录里动刀；副本常驻复用不自动删，
+ * 分批跑不再每调用一次就建删一整份（2026-10-02 前每把 --only 都全仓建删一次，弹窗全是它）——想清用 `--drop`。
  * 刀口（`from`）一律抄源码里现成的那一段，别凭记忆写——凭记忆写的刀全部「刀口没找着」。
  */
 import { readFileSync, writeFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { makeScratch, dropScratch, run, syncSrc, REPO } from './lib.mjs';
+import { makeScratch, dropAllScratch, run, syncSrc, REPO } from './lib.mjs';
 import { smokeOnce } from './smoke.mjs';
 
 const KNIVES_DIR = join(REPO, 'tools', 'knives');
@@ -73,26 +77,32 @@ async function tryKnife(spec, k, scratch) {
   };
 }
 
-async function runSpec(spec, only) {
-  const knives = only ? spec.knives.filter((_, i) => String(i + 1) === only) : spec.knives;
+async function runSpec(spec, only, noBaseline) {
+  // 号码集合筛刀；idx 一律用谱子里的原号（report 靠 r.idx 回查 spec.knives[idx-1]）
+  const knives = spec.knives.map((k, i) => ({ k, idx: i + 1 })).filter((x) => !only || only.has(x.idx));
   const scratch = makeScratch(`knife-${spec.id}`);
   const rows = [];
   try {
-    // 基准：这套谱子里要用的每一套闸，没动过刀都得是绿的，否则后面每一把刀都是白量
-    const gates = [...new Set(knives.map((k) => gateOf(spec, k)))];
-    for (const g of gates) {
-      const base = g.startsWith('smoke:')
-        ? await smokeOnce({ kind: g.split(':')[1], dir: scratch })
-        : run('npm', ['run', g], { cwd: scratch, timeout: 300_000 });
-      if (base.code !== 0) {
-        const first = (base.out.match(/✗ [^\n]*/) ?? [''])[0];
-        return { abort: `基准（没动刀）就红：${g} 退出码 ${base.code}｜${first || base.err || '没吐出 ✗ 那几句'}——下面全不算` };
+    if (noBaseline) {
+      // 只在「同一份源码刚验过绿」时用：基准红的话下面每把刀都会「没见红」，别拿它当常态
+      console.log(`\n${spec.title}｜基准跳过（--no-baseline）`);
+    } else {
+      // 基准：这套谱子里要用的每一套闸，没动过刀都得是绿的，否则后面每一把刀都是白量
+      const gates = [...new Set(knives.map((x) => gateOf(spec, x.k)))];
+      for (const g of gates) {
+        const base = g.startsWith('smoke:')
+          ? await smokeOnce({ kind: g.split(':')[1], dir: scratch })
+          : run('npm', ['run', g], { cwd: scratch, timeout: 300_000 });
+        if (base.code !== 0) {
+          const first = (base.out.match(/✗ [^\n]*/) ?? [''])[0];
+          return { abort: `基准（没动刀）就红：${g} 退出码 ${base.code}｜${first || base.err || '没吐出 ✗ 那几句'}——下面全不算` };
+        }
+        console.log(`\n${spec.title}｜基准（没动刀）绿：${g} ${(base.out.match(/✓ /g) ?? []).length} 条通过，退出码 0`);
       }
-      console.log(`\n${spec.title}｜基准（没动刀）绿：${g} ${(base.out.match(/✓ /g) ?? []).length} 条通过，退出码 0`);
     }
-    for (let i = 0; i < knives.length; i++) rows.push({ idx: only ? Number(only) : i + 1, ...(await tryKnife(spec, knives[i], scratch)) });
+    for (const x of knives) rows.push({ idx: x.idx, ...(await tryKnife(spec, x.k, scratch)) });
   } finally {
-    dropScratch(scratch);
+    // 副本留着复用（下一场开头 rsync --delete 盖平），不删——清理是 --drop 的活
   }
   return { rows };
 }
@@ -114,8 +124,35 @@ function report(spec, r, verbose = false) {
 }
 
 const argv = process.argv.slice(2);
-const only = argv.find((a) => a.startsWith('--only='))?.split('=')[1] ?? null;
+
+/** --only 认三种写法：3 ／ 4,6 ／ 4-9（可混：4-6,9）→ 号码集合 */
+function parseOnly(raw) {
+  if (!raw) return null;
+  const set = new Set();
+  for (const part of raw.split(',')) {
+    if (part.includes('-')) {
+      const [a, b] = part.split('-').map(Number);
+      for (let i = a; i <= b; i++) set.add(i);
+    } else set.add(Number(part));
+  }
+  if (!set.size || [...set].some((n) => !Number.isInteger(n) || n < 1)) {
+    console.error(`--only 认 3 ／ 4,6 ／ 4-9 这几种写法，收到的是：${raw}`);
+    process.exit(2);
+  }
+  return set;
+}
+
+const only = parseOnly(argv.find((a) => a.startsWith('--only='))?.split('=')[1] ?? null);
+const noBaseline = argv.includes('--no-baseline');
 const verbose = argv.includes('--verbose');
+
+// --drop 是维护动作：不跑刀，把缓存的副本（含老版本 mkdtemp 留下的随机名残骸）一把清掉
+if (argv.includes('--drop')) {
+  const gone = dropAllScratch();
+  console.log(gone.length ? `清了 ${gone.length} 份缓存副本：${gone.join('、')}` : '没有缓存的副本，不用清');
+  process.exit(0);
+}
+
 const wanted = argv.filter((a) => !a.startsWith('--'));
 const files = readdirSync(KNIVES_DIR)
   .filter((f) => f.endsWith('.mjs'))
@@ -132,7 +169,7 @@ let problems = 0;
 let beltReds = 0;
 for (const f of files) {
   const spec = (await import(pathToFileURL(join(KNIVES_DIR, f)).href)).default;
-  const { abort, rows } = await runSpec(spec, only);
+  const { abort, rows } = await runSpec(spec, only, noBaseline);
   if (abort) {
     console.log(`\n${spec.title}：${abort}`);
     problems++;

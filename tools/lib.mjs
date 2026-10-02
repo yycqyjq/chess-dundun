@@ -3,13 +3,14 @@
  *
  * 为什么非得抄一份：`src/node/room.ts` 一开桌就往存档上写（`openRoom` 里那句 `write()`），
  * 而默认存档就是仓库根的 `table.json`——那可能是他正在打的那一桌。
- * 所以任何一场冒烟、任何一把刀都只在临时目录里跑，量完就扔，一笔都不许落在他家硬盘上。
+ * 所以任何一场冒烟、任何一把刀都只在临时目录里跑，一笔都不许落在他家硬盘上。
+ * 副本本身是常驻复用的（见 `makeScratch`）：改花的部分每场开头增量盖回，想清才用 `--drop`。
  *
  * `node_modules` 不整份搬（54M，每把刀搬一次太蠢），也不整条软链接（那样 Vite 的 `.vite` 缓存会写进
  * 他那个 `node_modules`）：在副本里开一个真目录，一个一个软链过去，`.vite` 就落在副本里。
  */
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -78,12 +79,25 @@ export function pickPort({ discover = true, from = 5341, to = 5399 } = {}) {
   throw new Error(`${from}..${to} 里没有又空又躲得开他那张桌的端口`);
 }
 
-/** 抄一份干净仓库到临时目录；`dist` 端的是仓库现在那份，改过界面要先 `npm run build` */
+/**
+ * 拿一份干净仓库到临时目录；`dist` 端的是仓库现在那份，改过界面要先 `npm run build`。
+ *
+ * 副本**常驻复用**（2026-10-02 改）：目录名固定（`chess-<label>`），不再每次 mkdtemp 起随机名。
+ * 之前每调用一次就建一份、收尾删一份全仓——分批跑 --only 时十几次建删，弹窗全是它。
+ * 现在复用时先 `rsync -a --delete` 增量盖一遍：源码没变则近乎 no-op，上一场跑挂留下的动刀痕迹
+ * （改花的文件、多出来的文件）在 --delete 里一并抹平，等价于全新副本，但**不删目录**。
+ * 清理走 `dropAllScratch()`（knives 的 `--drop`）——从「每次跑都删」变成「想清才清」。
+ *
+ * 注意：同一个 label 同时只能跑一个进程（以前 mkdtemp 天然隔离，现在目录是共享的）。
+ */
 export function makeScratch(label = 'run') {
-  const dir = mkdtempSync(join(tmpdir(), `chess-${label}-`));
-  execFileSync('rsync', ['-a', ...NOT_COPIED, `${REPO}/`, `${dir}/`]);
+  const dir = join(tmpdir(), `chess-${label}`);
+  mkdirSync(dir, { recursive: true });
+  execFileSync('rsync', ['-a', '--delete', ...NOT_COPIED, `${REPO}/`, `${dir}/`]);
+  // 上一场留在副本里的存档是「坐过人的椅子」：不清，基准就卡在「这把椅子坐了人」上
+  if (existsSync(join(dir, 'table.json'))) rmSync(join(dir, 'table.json'), { force: true });
   linkNodeModules(dir);
-  if (existsSync(join(REPO, 'dist'))) symlinkSync(join(REPO, 'dist'), join(dir, 'dist'));
+  if (existsSync(join(REPO, 'dist')) && !existsSync(join(dir, 'dist'))) symlinkSync(join(REPO, 'dist'), join(dir, 'dist'));
   return dir;
 }
 
@@ -91,11 +105,16 @@ function linkNodeModules(dir) {
   const nm = join(REPO, 'node_modules');
   if (!existsSync(nm)) throw new Error(`${nm} 还没装，先 npm install`);
   const mine = join(dir, 'node_modules');
-  mkdirSync(mine);
+  mkdirSync(mine, { recursive: true });
   for (const name of readdirSync(nm)) {
     // .vite 是开发服务器的依赖缓存：不链，让它在副本里自己长一份
     if (name === '.vite') continue;
-    symlinkSync(join(nm, name), join(mine, name));
+    // 复用的副本里链子已经在了：撞 EEXIST 就是「链过了」，跳过
+    try {
+      symlinkSync(join(nm, name), join(mine, name));
+    } catch {
+      /* 已有一条 */
+    }
   }
 }
 
@@ -115,6 +134,20 @@ export function syncSrc(dir) {
 export function dropScratch(dir) {
   if (!dir.startsWith(join(tmpdir(), 'chess-'))) throw new Error(`这不是冒烟造的临时目录，不删：${dir}`);
   rmSync(dir, { recursive: true, force: true });
+}
+
+/**
+ * 清掉所有缓存的副本（knives 的 `--drop`）。副本平时常驻复用不自动删——
+ * 想把「建了不删」的账一把清掉时跑它；只收 `chess-` 前缀的，别的照样不碰。
+ */
+export function dropAllScratch() {
+  const gone = [];
+  for (const name of readdirSync(tmpdir())) {
+    if (!name.startsWith('chess-')) continue;
+    rmSync(join(tmpdir(), name), { recursive: true, force: true });
+    gone.push(name);
+  }
+  return gone;
 }
 
 /**
