@@ -2,7 +2,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { existsSync } from 'node:fs';
 import { dirname, join, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { hasFlag, intFlag, openRoom, type Room } from './room.ts';
+import { hasFlag, intFlag, openRoom, orphanWatch, type Room } from './room.ts';
 import { fileFor, notFound, sendFile } from './serve.ts';
 
 /**
@@ -37,6 +37,7 @@ if (hasFlag(argv, 'help')) {
       '  --save=另一份文件  一台机器上要同时开两张桌就得各用各的存档：抢同一份存档的那张会被当场拒掉\n' +
       '  --no-discover   不参与同网寻呼（一台机器开两张桌时，其中一张加这个）\n' +
       '  --discover-slot=0..7  寻呼换一槽守；默认按 http 端口落槽\n' +
+      '  --watch-parent  盯着拉起自己的那个进程（桌面外壳）：它没了就先存档再退，别赖着端口和占位条。手动 npm run host 别加——那条路的爹是终端\n' +
       '  先 npm run build 把 dist/ 端出来，这进程只负责把它和 WebSocket 挂在同一个端口上\n' +
       '  只想改界面、顺手也要能联机：npm run dev 一条命令就够，那张桌就挂在 Vite 上',
   );
@@ -84,6 +85,8 @@ server.listen(port, '0.0.0.0', () => {
 
 process.once('SIGINT', quit);
 process.once('SIGTERM', quit);
+// 桌面外壳挨强退／崩了的时候，这张桌别赖在端口和存档锁上（闸在 room.ts::orphanWatch，外壳带 --watch-parent 才装）
+orphanWatch(argv, quit);
 
 /** 参数写歪了就撂一句人话退台：终端上甩一串栈，谁都看不出是自己那行敲错了 */
 function openTable(): { port: number; room: Room } {

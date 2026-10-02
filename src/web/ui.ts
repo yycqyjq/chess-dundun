@@ -148,6 +148,21 @@ export function anchor(text: string, href: string, cls = 'btn'): HTMLAnchorEleme
 }
 
 /**
+ * 一格手填的地址。type=url 是给手机键盘的（那一版把「.」和「:」摆到手边），
+ * spellcheck／autocapitalize 关掉：给一串 IP 画红波浪线、把首字母自动大写，都是添乱。
+ */
+export function input(cls: string, value: string, placeholder: string): HTMLInputElement {
+  const el = document.createElement('input');
+  el.className = cls;
+  el.type = 'url';
+  el.value = value;
+  el.placeholder = placeholder;
+  el.setAttribute('spellcheck', 'false');
+  el.setAttribute('autocapitalize', 'off');
+  return el;
+}
+
+/**
  * 把一句话画成能扫的二维码。canvas 底图一格一像素，靠 CSS 整数倍放大配 pixelated，
  * 放大多少倍都还是方块，不会糊成一片灰。装不下（超 78 字节）回 null，让界面退回只显文字。
  */

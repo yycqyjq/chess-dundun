@@ -6,3 +6,10 @@ table.json.lock
 .DS_Store
 .idea
 .vscode
+release/
+/android/build
+/android/app/build
+/android/.gradle
+/android/local.properties
+# 从 mac 交叉打 win 包要的那份 Electron dist（一份 zip 151 MB，每台机器自己按 README 那句取，不进仓库）
+vendor/

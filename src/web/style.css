@@ -831,6 +831,32 @@ body {
   -webkit-user-select: all;
 }
 
+/* App 外壳里那格手填的桌地址：长得跟 .btn 同一族（同一条边、同一个圆角、同一份字），
+   因为它是「这一屏要你动手的那件事」，不是页面上一块注释。
+   44px 高、字 15px：那是拇指要按的地方，也是抄来的地址要看得清的地方。不描边加投影，输入框浮起来没道理。 */
+.addr {
+  appearance: none;
+  width: 100%;
+  min-height: 44px;
+  padding: 10px 12px;
+  border: 1px solid #6b5b48;
+  border-radius: 10px;
+  background: #241d16;
+  color: var(--ink);
+  font: inherit;
+  font-size: 15px;
+}
+
+.addr::placeholder {
+  color: rgba(243, 231, 211, 0.38);
+}
+
+/* 聚焦只把边换成金色，不动位置：一屏一层里 anything 弹一下都是噪音 */
+.addr:focus {
+  border-color: var(--gold);
+  outline: none;
+}
+
 .drawer {
   position: fixed;
   inset: auto 0 0 0;

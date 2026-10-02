@@ -3,9 +3,11 @@ import type { LastMove, ToClient, ToHost } from '../net/wire.ts';
 
 /**
  * 联机这一头的连接：断线自动重连、座位凭令牌认回原来那把椅子。
- * 地址一律同源——页面和 WebSocket 挂在同一个端口上，局域网里只能走 http，
+ * 浏览器里地址一律同源——页面和 WebSocket 挂在同一个端口上，局域网里只能走 http，
  * https 页面连 ws://192.168.x.x 会被浏览器当混合内容掐掉。
  * 两个宿主都守这条：npm run host 端 dist/，npm run dev 那张桌直接挂在 Vite 的服务器上。
+ * App 外壳（APK）里没有这个同源可抄：页面住在设备自己身上，桌在另一台机器上，
+ * 所以那一头由人把桌的地址敲进来（tableAddr），其余连接规矩一条不变。
  */
 
 /** 重连间隔：头几次快一点，路由器抖一下不该让人干等半分钟 */
@@ -18,6 +20,43 @@ export const PROBE_MS = 6_000;
 
 /** 令牌就躺在这台设备的 localStorage 里：换浏览器、清缓存就得重新挑一把空椅子 */
 const KEY = 'chess-dundun.seat';
+/** App 外壳里那串手敲的桌地址也躺在这儿：装一次设备不用每次重敲 */
+const ADDR_KEY = 'chess-dundun.addr';
+
+/**
+ * 这台设备敲过的桌地址，浏览器里没敲过就是空串。
+ * 空串是「跟着页面走」的意思（同源那条老路），不是「连不上」——所以浏览器那头一个字都不变。
+ */
+export function tableAddr(): string {
+  try {
+    return localStorage.getItem(ADDR_KEY) ?? '';
+  } catch {
+    return '';
+  }
+}
+
+/** 记下（addr 给空串就是抹掉，退回同源那条口径）；存不进去也别把人堵在门外，这一次连上就算数 */
+export function setTableAddr(addr: string): void {
+  try {
+    if (addr) localStorage.setItem(ADDR_KEY, addr);
+    else localStorage.removeItem(ADDR_KEY);
+  } catch {
+    // 隐私模式／存储坏了：这一趟照样能连，只是下次进来还得重敲
+  }
+}
+
+/** 这条连接该敲哪扇门：手敲的地址优先，没敲过就同源 */
+export function tableHost(): string {
+  return tableAddr() || location.host;
+}
+
+/**
+ * 地址 → 那条 WebSocket 的路，拼法只有这一份：https 页面走 wss，其余走 ws，路径固定 /ws。
+ * 两个宿主都只认 /ws 这一条（host.ts 和 vite.config.ts 里那个插件共用 room.ts 的口径）。
+ */
+export function wsUrl(pageProtocol: string, host: string): string {
+  return `${pageProtocol === 'https:' ? 'wss' : 'ws'}://${host}/ws`;
+}
 
 export interface Saved {
   seat: number;
@@ -36,7 +75,7 @@ export interface NetHandlers {
 function read(): (Saved & { host: string }) | null {
   try {
     const raw = JSON.parse(localStorage.getItem(KEY) ?? 'null') as (Saved & { host: string }) | null;
-    return raw && raw.host === location.host && typeof raw.seat === 'number' && typeof raw.token === 'string' ? raw : null;
+    return raw && raw.host === tableHost() && typeof raw.seat === 'number' && typeof raw.token === 'string' ? raw : null;
   } catch {
     // 存的东西读不成，就当没存过——不能因为一条脏数据把进桌堵死
     return null;
@@ -51,7 +90,7 @@ export function recall(): Saved | null {
 
 export function remember(seat: number, token: string): void {
   try {
-    localStorage.setItem(KEY, JSON.stringify({ host: location.host, seat, token }));
+    localStorage.setItem(KEY, JSON.stringify({ host: tableHost(), seat, token }));
   } catch {
     // 隐私模式写不进去：这一局照样打，只是刷新或断线后得重挑椅子
   }
@@ -195,8 +234,8 @@ export class Link {
   }
 
   private open(): void {
-    // 路径固定 /ws：两个宿主都只认这一条（host.ts 和 vite.config.ts 里那个插件共用 room.ts 的口径）
-    const ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`);
+    // 哪扇门由 tableHost 说了算：浏览器里就是页面自己那台，App 外壳里是人敲进来的桌地址
+    const ws = new WebSocket(wsUrl(location.protocol, tableHost()));
     this.ws = ws;
     ws.onopen = () => {
       this.tries = 0;

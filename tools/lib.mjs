@@ -24,7 +24,21 @@ export const slotOf = (port) => ((port % 8) + 8) % 8;
 /** 5199 是 `npm run dev`、5200 是 `npm run host` 自己占的槽，冒烟别去撞他的桌 */
 export const RESERVED = [5199, 5200];
 
-const NOT_COPIED = ['--exclude=node_modules', '--exclude=.git', '--exclude=dist', '--exclude=table.json', '--exclude=*.log', '--exclude=.DS_Store'];
+/**
+ * 副本里不带的东西：`node_modules` 走软链，`dist` 是端出去的那份（另接），存档是他正在打的账。
+ * `release/` 和 `android/` 是装包那条路的产物（一份 dmg 就 123 MB，gradle 中间产物更多）：
+ * 每造一份临时副本都把它们抄一遍，量一刀的功夫全花在拷机上。
+ */
+const NOT_COPIED = [
+  '--exclude=node_modules',
+  '--exclude=.git',
+  '--exclude=dist',
+  '--exclude=table.json',
+  '--exclude=release',
+  '--exclude=android',
+  '--exclude=*.log',
+  '--exclude=.DS_Store',
+];
 
 /** 跑一条命令，把 stdout+stderr 都收下，退出码非 0 也不抛 */
 export function run(cmd, args, opts = {}) {
@@ -85,9 +99,14 @@ function linkNodeModules(dir) {
   }
 }
 
-/** 把仓库的 src 整个盖回副本：只补单个文件会被上一把刀的伤口连坐 */
+/**
+ * 把仓库的源码整个盖回副本：只补单个文件会被上一把刀的伤口连坐。
+ * 要盖的不止 `src/`——桌面外壳那两文件（`desktop/`）也架着刀，漏了它下一把刀就砍在上一把的伤口上。
+ */
 export function syncSrc(dir) {
-  execFileSync('rsync', ['-a', '--delete', `${REPO}/src/`, `${dir}/src/`]);
+  for (const sub of ['src', 'desktop']) {
+    if (existsSync(join(REPO, sub))) execFileSync('rsync', ['-a', '--delete', `${REPO}/${sub}/`, `${dir}/${sub}/`]);
+  }
   // 副本那份存档是上一场冒烟坐过的椅子：不清就卡在「这把椅子坐了人」，跑不到要量的那一段
   if (existsSync(join(dir, 'table.json'))) rmSync(join(dir, 'table.json'));
 }

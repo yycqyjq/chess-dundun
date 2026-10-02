@@ -8,7 +8,8 @@
  * A 钉「起桌前根本没占」；B 钉「只看 pid 不看端口」；C 钉「死人的留条也算闸」；
  * D 钉「读不懂的留条反过来把人锁在门外」；E 钉「收桌时把别人的闸拆了」；
  * F 钉那句人话不含证据（撞上哪份存档、谁占着、往哪儿改）；G 钉「进程号问出来的活着」那把真尺子；
- * H 钉「不比对路径」＝回到冒烟撞上那一晚的行为；I 钉「条上那一格写死」，占的是哪份存档根本没记下来。
+ * H 钉「不比对路径」＝回到冒烟撞上那一晚的行为；I 钉「条上那一格写死」，占的是哪份存档根本没记下来；
+ * J 钉「比的是那串字而不是那个文件」（2026-10-02 桌面版量到的软链那一档）；K 钉「存档还没落盘就不认父目录的实底」。
  * 跑法：npm run knives -- save-lock（全跑就 npm run knives；要看每刀全红几句加 --verbose）
  */
 export default {
@@ -42,7 +43,7 @@ export default {
       rel: 'src/node/room.ts',
       note: 'D 读不懂的留条当「有人占着」：半截字节（硬盘写满那一下）就把门锁死，宁可让桌开起来也不该这样',
       from: '  } catch {\n    held = null;\n  }',
-      to: '  } catch {\n    held = { pid: 1, port: 1, save: resolve(save) };\n  }',
+      to: '  } catch {\n    held = { pid: 1, port: 1, save: canonicalSave(save) };\n  }',
       expect: '整条读不出 JSON 的也让开',
     },
     {
@@ -76,9 +77,23 @@ export default {
     {
       rel: 'src/node/room.ts',
       note: 'I 条上那一格写死成一个文件名：占的到底是哪份存档再也没记下来，比对路径的那两档全悬空',
-      from: '  const mine: SaveLock = { pid: process.pid, port, save: resolve(save) };',
+      from: '  const mine: SaveLock = { pid: process.pid, port, save: canonicalSave(save) };',
       to: "  const mine: SaveLock = { pid: process.pid, port, save: 'table.json' };",
       expect: '头一张桌占住了',
+    },
+    {
+      rel: 'src/node/room.ts',
+      note: 'J 那格只摊平不认软链：同一个存档写成两条串就被看成两份，两张桌各写各的、账互相盖（macOS 的 /tmp、/var 本来就是软链）',
+      from: '  const mine: SaveLock = { pid: process.pid, port, save: canonicalSave(save) };',
+      to: '  const mine: SaveLock = { pid: process.pid, port, save: resolve(save) };',
+      expect: '同一份存档换条软链写法照样撞：两张桌不许写同一本账，哪怕路径串得不一样',
+    },
+    {
+      rel: 'src/node/room.ts',
+      note: 'K 存档还没落盘就不认父目录的实底：新桌那一下两条路径谁也没认到底，软链那头照样溜过去',
+      from: '      return join(real(dirname(abs)), basename(abs));',
+      to: '      return abs;',
+      expect: '存档还没落盘（新桌第一局）：认父目录的实底，再把文件名接回去',
     },
   ],
 };

@@ -5,9 +5,11 @@
  * 握手成功那一下得先认椅子再补发攒下的话（反过来那句会被桌当成「没坐下的人递的」默默丢掉，人就锁死了），
  * 桌上安静不等于断线（对面想牌六秒太正常，先问一声 ping，问而不答才拆线），
  * 以及卡在「等我出牌」时来的那份现状快照得把等待解开（不然对面重连回来了，这边还冻在写着「掉线」的那一帧）。
+ * 最后一组钉的是「那扇门敲哪儿」：浏览器里跟着页面走（同源），App 外壳里跟着人敲的桌地址走——
+ * 令牌认的也是那一串，换了地址就是另一张桌，别拿旧椅子去撞。
  * 这个文件住在 src/web：它要替 window/location/WebSocket 造假，只有这份 tsconfig 带着 DOM。
  */
-import { deviceNick, forget, Link, PROBE_MS, QUIET_MS, recall, remember, shouldWake } from './net.ts';
+import { deviceNick, forget, Link, PROBE_MS, QUIET_MS, recall, remember, setTableAddr, shouldWake, tableAddr, tableHost, wsUrl } from './net.ts';
 
 let failures = 0;
 function ok(name: string, condition: boolean, detail = ''): void {
@@ -284,6 +286,43 @@ function make(now?: () => number): { link: Link; sock: () => FakeSocket; log: st
   // 挂着的那一手已经不作数了（被代打、或者这一墩翻篇）：再攒下去就是死等
   ok('已经不该我出：哪怕带着要演的手也得解', shouldWake({ last: play, acts: [] }));
   ok('既没要演的手、也不该我出：更要解', shouldWake({ last: null, acts: [] }));
+}
+
+// ---------- 那扇门敲哪儿：浏览器跟着页面走，App 外壳里由人敲桌地址 ----------
+{
+  store.clear();
+  session.clear();
+  made.length = 0;
+  // 同源那条老路一个字没动：浏览器里没敲过地址，连接照旧跟着页面
+  ok('没敲过地址就是同源', tableAddr() === '' && tableHost() === host, `${tableAddr()}｜${tableHost()}`);
+  ok('那条路只有两种写法：https 页面走 wss，其余走 ws，末尾都是 /ws', wsUrl('http:', '10.0.0.9:5200') === 'ws://10.0.0.9:5200/ws' && wsUrl('https:', 'a.example:5200') === 'wss://a.example:5200/ws');
+
+  setTableAddr('10.0.0.9:5200');
+  ok('敲过之后门跟着那串走，不再跟着页面', tableHost() === '10.0.0.9:5200', tableHost());
+  const { link, sock } = make();
+  ok('这条线敲的是那台机器，不是设备自己', sock().url === 'ws://10.0.0.9:5200/ws', sock().url);
+  link.close();
+
+  // 令牌认的是那一串地址：它跟着人走，不跟着「这台设备打开过哪个页面」走
+  remember(2, 'tk-9');
+  ok('存椅子存的是那串地址', JSON.parse(store.get('chess-dundun.seat')!).host === '10.0.0.9:5200', store.get('chess-dundun.seat')!);
+  ok('还在同一张桌上就认回原来那把', recall()?.seat === 2);
+  setTableAddr('10.0.0.8:5200');
+  ok('换了地址就不算：那是另一张桌，别拿旧令牌去撞', recall() === null, JSON.stringify(recall()));
+  setTableAddr('');
+  ok('地址抹掉就退回同源（浏览器那头本来就这样）', tableHost() === host && store.get('chess-dundun.addr') === undefined, tableHost());
+
+  // 存储炸了的那台（隐私模式）：读不到就当没敲过、写不进去也别把人堵在门外
+  broken = true;
+  let threw = '';
+  try {
+    setTableAddr('10.0.0.7:5200');
+    ok('存储炸了的时候读回空串＝照旧同源', tableHost() === host, tableHost());
+  } catch (e) {
+    threw = String((e as Error).message);
+  }
+  ok('存储炸了也不许抛：那一次连上就算数', threw === '', threw);
+  broken = false;
 }
 
 console.log(failures === 0 ? '\n全部通过\n' : `\n${failures} 项失败\n`);

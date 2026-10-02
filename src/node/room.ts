@@ -1,5 +1,5 @@
-import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { dirname, join, normalize, resolve } from 'node:path';
+import { existsSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { basename, dirname, join, normalize, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { networkInterfaces } from 'node:os';
 import type { IncomingMessage, ServerResponse } from 'node:http';
@@ -49,6 +49,28 @@ export function hasFlag(argv: string[], name: string): boolean {
 const NOT_OFF = new Set(['0', 'false', 'no']);
 
 /**
+ * 桌面外壳那条路上的看门狗：外壳（Electron 主进程）挨 SIGKILL、强退、自己崩了，子进程这张桌**不会跟着死**——
+ * macOS 把它交回 launchd（ppid 变成 1），端口和存档锁还攥在手里。后果是再点图标永远起不来：
+ * 新外壳被 `claimSave` 拒掉，而它那句理由打在终端上，从访达打开的人根本没有终端，屏幕上什么都不出现。
+ * 2026-10-02 桌面版撞的：`kill -9` 掉外壳，桌活了、条也留着，第二张桌当场被拒。
+ * 所以只认「父进程换人了」这一件事：换了就走 `quit()` 那条正路——先把这一桌存进存档、摘掉占位条，再退。
+ * `--watch-parent` 得外壳自己显式给：`npm run host` 那条路的爹是终端，掀不得（挂后台的人被误杀过一次就再也不敢挂了）。
+ * 判断收在这一颗函数里，`ppid` 和「多久问一次」都能注入，`host.ts` 只剩一句调用。
+ */
+export function orphanWatch(
+  argv: string[],
+  onGone: () => void,
+  ppid: () => number = () => process.ppid,
+  arm: (ms: number, cb: () => void) => void = (ms, cb) => void setInterval(cb, ms).unref(),
+): void {
+  if (!hasFlag(argv, 'watch-parent')) return;
+  const born = ppid();
+  arm(1000, () => {
+    if (ppid() !== born) onGone();
+  });
+}
+
+/**
  * 存档旁边的占位条（`table.json.lock`，跟存档一起被 .gitignore 盖住）。
  * 一台机器上开两张桌是真有过的事（dev 5199 加 host 5200），两张桌写同一份存档就是互相盖：
  * 一边打到第 8 局，另一边重启接回的是自己那半本账，椅子、令牌、局号全对不上。
@@ -87,10 +109,29 @@ function pidAlive(pid: number): boolean {
   }
 }
 
+/**
+ * 占位条上要比的是**那个文件**，不是那串路径：`resolve` 只把 `..` 和相对写法摊平，不认软链，
+ * 而 macOS 的 `/tmp`、`/var` 本身就是软链——同一个存档换个写法就被看成两份，闸当场失效。
+ * 2026-10-02 桌面版量到的：Electron 交回来的 userData 是 `/private/tmp/…`，而 `--save=/tmp/…` 写的还是 `/tmp/…`。
+ * 存档往往还没落盘（新桌），所以认到底的是父目录，再把文件名接回去；父目录也不存在就退回摊平那一条。
+ */
+export function canonicalSave(save: string, real: (p: string) => string = realpathSync): string {
+  const abs = resolve(save);
+  try {
+    return real(abs);
+  } catch {
+    try {
+      return join(real(dirname(abs)), basename(abs));
+    } catch {
+      return abs;
+    }
+  }
+}
+
 /** 占住这份存档，回一句「收桌时把它摘了」；被另一张活着的桌占着就抛人话（两个宿主都念这一句） */
 export function claimSave(save: string, port: number, alive: (pid: number) => boolean = pidAlive): () => void {
   const file = lockPathOf(save);
-  const mine: SaveLock = { pid: process.pid, port, save: resolve(save) };
+  const mine: SaveLock = { pid: process.pid, port, save: canonicalSave(save) };
   const body = JSON.stringify(mine);
   let held: SaveLock | null = null;
   try {

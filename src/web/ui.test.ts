@@ -6,13 +6,33 @@
  * 寻到的那条桌是一个真 href 的 <a>（不拿 JS 拼跳转、也不往 HTML 里写字）、
  * 进门那一刻落哪把椅子（建房即房主／扫码递 -1／断线认回原来那把）、
  * 整屏那一页不给「点空白关掉」（那条监听只归弹窗，且钉得住两头：页面点不掉、弹窗点得掉）、
- * 房主位交接那一句既得说清位在哪把、也得挑对开口的时机（头一份跟没换人都得闭嘴）。
+ * 房主位交接那一句既得说清位在哪把、也得挑对开口的时机（头一份跟没换人都得闭嘴），
+ * 还有 App 外壳那一屏：地址读不出来就一次也不许往连接上递。
  *
  * 放 src/web 是有原因的：tsconfig.json 不带 DOM 库。
  * 全文件（连假元素自己）都不许用构造器参数属性——`--experimental-strip-types` 只抹类型，不改写赋值。
  */
 import { anchor, buildShell, button, card, page, paintChip, popup, rich, segment, toast, type Shell } from './ui.ts';
-import { appVersion, autoSeat, BACK, entryHead, homePanel, hostHanded, hostJump, initialScreen, isLoopback, roomRow, seatOption, wantsJoin } from './home.ts';
+import {
+  ADDR_BAD,
+  ADDR_HINT,
+  appVersion,
+  autoSeat,
+  BACK,
+  entryHead,
+  entryNote,
+  fillAddr,
+  homePanel,
+  hostHanded,
+  hostJump,
+  inAppShell,
+  initialScreen,
+  isLoopback,
+  normAddr,
+  roomRow,
+  seatOption,
+  wantsJoin,
+} from './home.ts';
 import type { Rules } from '../core/game.ts';
 import { foundLine, JOIN_QUERY, type FoundRoom } from '../net/discover.ts';
 import type { SeatInfo } from '../net/wire.ts';
@@ -44,6 +64,9 @@ class FEl {
   hidden = false;
   disabled = false;
   type = '';
+  /** 手填那一格当前的字：只有 fillAddr 那条路使到，别的元素不碰 */
+  value = '';
+  placeholder = '';
   dataset: Record<string, string> = {};
   style: Record<string, string> = {};
   isText = false;
@@ -519,6 +542,65 @@ function planOf(spotFor: (i: number) => Placed): Map<number, Placed> {
   const withVersion = F(homePanel(() => {}, () => {})).find('home-foot')!;
   ok('注上了就在脚上念 v9.9.9，那句联机提示还在', withVersion.find('v')!.raw === 'v9.9.9' && withVersion.children.length === 2, withVersion.children.map((c) => c.raw).join(','));
   delete G.__APP_VERSION__;
+}
+
+// ---------- App 外壳那一屏：桌地址由人敲，读不出来就别去连 ----------
+
+{
+  // 假外壳：Capacitor 起来时就是往全局上注这么个东西，浏览器里它不存在
+  ok('浏览器里没有那个全局：这一屏不该出现，同网列表照旧', inAppShell() === false);
+  G.Capacitor = { isNativePlatform: () => true };
+  ok('原生外壳标着 true 才算 App 里', inAppShell() === true);
+  G.Capacitor = { isNativePlatform: () => false };
+  ok('标着 false 的还是浏览器：别多摆一格用不上的输入框', inAppShell() === false);
+  delete G.Capacitor;
+
+  ok('单机那块的字两头一样（外壳里照样能自己玩）', entryNote('solo', true) === entryNote('solo', false));
+  ok(
+    '联机那块在 App 里不念「在这台机器开一桌」——那颗按钮在那一头不存在',
+    entryNote('room', false).includes('在这台机器开一桌') && !entryNote('room', true).includes('在这台机器开一桌'),
+    `${entryNote('room', true)}`,
+  );
+  const appPanel = F(homePanel(() => {}, () => {}, true));
+  const appEntries = appPanel.findAll('button');
+  ok('首页传了外壳那一档，联机那块的小字跟着换（不是 app.ts 里另写一份）', appEntries[1]!.find('n')!.raw === entryNote('room', true), appEntries[1]!.find('n')!.raw);
+
+  const good: [string, string][] = [
+    ['192.168.1.11:5200', '192.168.1.11:5200'],
+    // 抄终端那一行出来就是带前缀带斜杠的，这一头得收得住
+    ['http://192.168.1.11:5200/', '192.168.1.11:5200'],
+    ['  HTTP://192.168.1.11:5200/?join=1 ', '192.168.1.11:5200'],
+    ['my-host.local:8080', 'my-host.local:8080'],
+  ];
+  const bad = ['', '   ', '192.168.1.11', 'http://192.168.1.11', '192.168.1.11:0', '192.168.1.11:99999', ':5200', '192.168.1.11:abc', 'a b:5200', '[::1]:5200', '-h:5200'];
+  const missGood = good.filter(([raw, want]) => normAddr(raw) !== want);
+  ok('抄来的整条地址收得下：前缀／尾斜杠／空格都不是事儿', missGood.length === 0, missGood.map(([r, w]) => `${r}→${normAddr(r)}≠${w}`).join('｜'));
+  const hitBad = bad.filter((raw) => normAddr(raw) !== null);
+  // 端口必须写：桌开在哪个端口是房主那行 --port 说了算的，猜错的症状是「莫名其妙连不上」
+  ok('读不出一张桌的那些一律回 null（含没写端口、端口出界、IPv6、带空格的）', hitBad.length === 0, hitBad.join('｜'));
+
+  const body = new FEl('div');
+  const foot = new FEl('div');
+  const went: string[] = [];
+  let back = 0;
+  fillAddr(H(body), H(foot), '10.0.0.9:5200', (a) => void went.push(a), () => void back++);
+  const box = body.find('addr')!;
+  ok('格子里预填这台设备上次敲的那串（重连不用再抄一遍）', box.value === '10.0.0.9:5200', box.value);
+  ok('那一格是真 input、type=url（手机键盘把「.」和「:」摆到手边）、不查拼写', box.tag === 'input' && box.type === 'url' && box.attrs.spellcheck === 'false' && box.attrs.autocapitalize === 'off', `${box.tag}｜${box.type}`);
+  ok('一句话写着要抄什么、端口也写在里面', body.find('note')!.raw === ADDR_HINT && ADDR_HINT.includes(':5200'), body.find('note')!.raw);
+  const [go, backBtn] = foot.findAll('button');
+  box.value = 'http://10.0.0.9:5200/';
+  go!.click();
+  ok('按下去递的是规范化那串 host:port，不是原样那行字', went.join(',') === '10.0.0.9:5200', went.join('｜'));
+  box.value = '10.0.0.9';
+  go!.click();
+  ok('没写端口就地换那一行字、一次也不递：一串指不出门的字别去敲门', went.length === 1 && body.find('note')!.raw === ADDR_BAD, `${went.length}｜${body.find('note')!.raw}`);
+  box.value = '10.0.0.9:5201';
+  go!.click();
+  ok('改对了那句提示就收回去（红字不赖在脸上）', went.length === 2 && body.find('note')!.raw === ADDR_HINT, body.find('note')!.raw);
+  backBtn!.click();
+  ok('第二颗念「返回」，点它是回首页那条回调，不是「散桌」', backBtn!.textContent === BACK && back === 1, `${backBtn!.textContent}｜back ${back}`);
+  ok('这一屏不往 HTML 里塞任何一句话（敲进来的字可能带尖括号）', body.countHtml() === 0 && foot.countHtml() === 0, [...body.allHtml, ...foot.allHtml].join('｜'));
 }
 
 // ---------- 寻到的那张桌：一行情况加一条真能点的地址 ----------

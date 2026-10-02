@@ -15,8 +15,8 @@ import { viewFor } from '../core/view.ts';
 import { aliveSeats, deckFor, hydrate, type SeatInfo, type Seats, type TableStatus, type ToClient } from '../net/wire.ts';
 import { LIST_REFRESH_MS, peerNote, JOIN_QUERY, type FoundRoom } from '../net/discover.ts';
 import { ctrlLift, draftShape, handCramped, labelBands, LABEL_W, layout, maxStacks, pieceSize, stackSpots, type Board, type TableView } from './board.ts';
-import { autoSeat, BACK, entryHead, homePanel, hostHanded, hostJump, initialScreen, isLoopback, roomRow, seatOption } from './home.ts';
-import { deviceNick, forget, Link, recall, remember, shouldWake } from './net.ts';
+import { autoSeat, BACK, entryHead, fillAddr, homePanel, hostHanded, hostJump, inAppShell, initialScreen, isLoopback, roomRow, seatOption } from './home.ts';
+import { deviceNick, forget, Link, recall, remember, setTableAddr, shouldWake, tableAddr } from './net.ts';
 import { MOVE_MS, Pieces } from './pieces.ts';
 import { rules } from './rules.ts';
 import { Sound } from './sound.ts';
@@ -218,6 +218,8 @@ export class App {
       homePanel(
         () => this.pickTable(),
         () => this.showList(),
+        // 外壳里那块上第二行字不一样：那一头寻不了同网的桌、也没法在自己这台开一桌
+        inAppShell(),
       ),
     );
   }
@@ -229,8 +231,13 @@ export class App {
    * 浏览器发不了 UDP，寻一圈仍由本机那个宿主代跑（一句 find 递出去）；
    * 它那儿有 SWEEP_MIN_MS 那道闸，所以这一屏五秒一轮不会把这块网刷爆。
    * 底栏那两颗归 foot 钉住：手机上列表长过一屏，「开一桌」跟着滚就等于要人先滚到底再摸黑点。
+   * App 外壳里这一屏换成手填桌地址（showAddr）：那一头既没有本机宿主可让它的 UDP，也没有一张桌可开。
    */
   private showList(): void {
+    if (inAppShell()) {
+      this.showAddr();
+      return;
+    }
     this.closeRoom();
     if (this.list) {
       this.findNow();
@@ -281,6 +288,30 @@ export class App {
     this.findTimer = 0;
     this.list.veil.remove();
     this.list = null;
+  }
+
+  /**
+   * App 外壳里那一屏「本地联机」：版面归 home.ts 的 fillAddr（判断在那儿才有闸），这儿只管挂上、连、走。
+   * 连之前先把上一张桌那条线拆了：地址换了就是另一张桌，旧线留着只会让人对着「正在重连」等一张已经不在了的桌。
+   * 进来落 'invite' 那一档（照扫码那条路走：递一把空椅，不碰房主位）——外壳里开不了桌，房主永远是另一台机器。
+   */
+  private showAddr(): void {
+    this.closeRoom();
+    this.stopList();
+    for (const el of this.root.querySelectorAll('.sheet')) el.remove();
+    const { body, foot } = page(this.root, entryHead('room'));
+    fillAddr(
+      body,
+      foot,
+      tableAddr(),
+      (addr) => {
+        setTableAddr(addr);
+        this.link?.close();
+        this.link = null;
+        this.openRoom('invite');
+      },
+      () => this.showHome(),
+    );
   }
 
   /** 寻回来的桌：一行一条，点那条地址就把浏览器递过去。列表页整块重画（这一层一秒不刷） */

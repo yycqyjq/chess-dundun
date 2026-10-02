@@ -241,6 +241,38 @@ console.log('\n同网桌只摆一处：候场厅里不留第二份');
   );
 }
 
+// ---------- App 外壳那一屏：联机改成手填桌地址，寻呼那条路不跟着进去 ----------
+
+console.log('\nApp 外壳：这一头没有本机宿主，同网寻呼换成手填桌地址');
+{
+  const app = readFileSync(new URL('../web/app.ts', import.meta.url), 'utf8');
+  const home = readFileSync(new URL('../web/home.ts', import.meta.url), 'utf8');
+  // WebView 里 location.host 是设备自己（那儿没有同源的一张桌），UDP 也发不出去，所以联机那一屏整个换掉
+  ok(
+    '联机那一屏第一句就分岔：外壳里走手填地址，浏览器里照旧走同网列表',
+    /if \(inAppShell\(\)\) \{\s*this\.showAddr\(\);\s*return;/.test(app),
+    (app.match(/^\s*private showList\(\): void \{.*$/m) ?? ['‹找不到那一行›'])[0],
+  );
+  // 「读不出地址就别去连」这条判断得有闸，所以版面和判断都住在 home.ts；app.ts 只管挂上、连、走
+  ok(
+    '那一屏的版面和尺子都在 home.ts（没写回 app.ts）',
+    /export function fillAddr/.test(home) && /export function normAddr/.test(home) && /fillAddr\(/.test(app) && !/function normAddr/.test(app),
+  );
+  // 外壳开不了桌（桌是 Node 那张），那颗按钮要是跟着抄进那一屏，人就多看见一颗按了没反应的
+  const fillAt = home.indexOf('export function fillAddr');
+  ok('手填那一屏没有「在这台机器开一桌」（外壳里开不了桌）', fillAt > 0 && !home.slice(fillAt).includes('在这台机器开一桌'), fillAt > 0 ? `‹那一屏的源码 ${home.length - fillAt} 字›` : '‹home.ts 里没有 fillAddr›');
+  const addrAt = app.indexOf('private showAddr()');
+  const addrBody = app.slice(addrAt, app.indexOf('private paintList'));
+  ok('那一屏自己是一段（showAddr 在 paintList 前面），不是截了个空串就当绿', addrAt > 0 && addrBody.length > 200, `‹截了 ${addrBody.length} 字›`);
+  ok('外壳那一屏不发寻呼那一句（没有本机宿主代跑）', !addrBody.includes('findNow()'));
+  // 那是拇指要按、又要看得清的一格：矮过 44px 就成了「热区比操作对象小」的那类毛病
+  ok(
+    '桌地址那一格有拇指的高度（≥44px）',
+    Number((val('.addr', 'min-height') ?? '0').replace('px', '')) >= 44,
+    val('.addr', 'min-height') ?? '‹没写›',
+  );
+}
+
 // ---------- 一屏一层：点入口换的是页面，不是盖在首页上的一张卡（批12） ----------
 
 console.log('\n整屏页：三处出口同一份名字，身后不隔着半透黑底露出另一层');
@@ -249,9 +281,10 @@ console.log('\n整屏页：三处出口同一份名字，身后不隔着半透�
   const home = readFileSync(new URL('../web/home.ts', import.meta.url), 'utf8');
   // 候场厅那一屏整屏盖着牌桌，掀开看见的其实是首页——这颗既然撒过谎就整个摘掉，不留第二种名字
   ok('那颗不再按「身后有没有牌桌」分两种名字', !/this\.shell \? '看牌桌'/.test(app) && /leave\.textContent = BACK;/.test(app));
-  // 同一件事在一条链上换了三个名字（回首页／退出这桌／看牌桌），人就不知道哪一颗会把他从这桌上摘下来
-  const sites = (app.match(/button\(\s*BACK,|textContent = BACK/g) ?? []).length;
-  ok('三处出口念的是同一份 BACK（单机那一屏／本地联机那一屏／候场厅）', sites === 3, `${sites} 处`);
+  // 同一件事在一条链上换了三个名字（回首页／退出这桌／看牌桌），人就不知道哪一颗会把他从这桌上摘下来。
+  // 第四颗住在 home.ts（App 外壳那一屏的版面在那儿），所以这条数的是两份文件：漏掉哪一份都会有一屏自己改名字
+  const backs = (app.match(/button\(\s*BACK,|textContent = BACK/g) ?? []).length + (home.match(/button\(\s*BACK,/g) ?? []).length;
+  ok('每一屏那颗出口念的是同一份 BACK（app.ts 三屏＋home.ts 那一屏）', backs === 4, `${backs} 处`);
   // 标题从 home.ts 那份 ENTRY 拿：入口写的字和点进去那一屏顶上的字是同一份，改一处不会漂成两个名字
   ok(
     '两屏的标题就是首页那两块的字',
@@ -272,10 +305,11 @@ console.log('\n整屏页：三处出口同一份名字，身后不隔着半透�
   );
   // 底栏只剩那一排：这一屏少了一排，主按钮跟着滚的地盘就更小了，别把它又塞回 body
   ok('单机那一屏的底栏就那一排（开桌加返回）', /foot\.append\(go\);/.test(app), (app.match(/^\s*foot\.append\(.*$/gm) ?? ['‹找不到那一行›']).join('｜'));
-  // 三屏全走 page()：裸 card() 是那层半透黑底＋居中卡，也就是「叠在首页上」本身。批12 摘掉的就是它，
+  // 四屏全走 page()：裸 card() 是那层半透黑底＋居中卡，也就是「叠在首页上」本身。批12 摘掉的就是它，
   // 所以这里钉的是「没人再拿它搭常驻的那一层」——一次性的是非题走 popup()，不在这条的范围里。
+  // 第四屏是 App 外壳里那格手填桌地址（home.ts 的 fillAddr 把它挂在 page 上）：它也是「一直待在那一层」的页面。
   const pages = (app.match(/page\(this\.root/g) ?? []).length;
-  ok('牌桌外那一层的三屏全走 page()，一处也没退回裸 card()', pages === 3 && !/[^.\w]card\(/.test(app), `page ${pages} 处｜裸 card ${/[^.\w]card\(/.test(app) ? '有' : '没'}`);
+  ok('牌桌外那一层的四屏全走 page()，一处也没退回裸 card()', pages === 4 && !/[^.\w]card\(/.test(app), `page ${pages} 处｜裸 card ${/[^.\w]card\(/.test(app) ? '有' : '没'}`);
   // 整屏页的遮罩必须是不透明的：半透黑底是把「还有一层在身后」这件事说出来，而这一屏没有身后
   const bg = val('.sheet.as-page', 'background') ?? '‹没写›';
   ok('整屏页那层不透明（跟首页同一份渐变，不是 rgba）', bg.includes('radial-gradient') && !bg.includes('rgba'), bg);

@@ -1,0 +1,63 @@
+# 桌面安装包（Electron）：mac 和 win 都从这台 mac 出。
+# 这里的口径都跟 `desktop/main.ts` 那几行对过，改一边记得看另一边。
+appId: com.qdd.chessdundun.desktop
+productName: 棋墩墩
+
+directories:
+  # 产物落在 release/，不碰 vite 的 dist/（那是网页端出去的界面，也是这包里要带的资源）
+  output: release
+
+# 没有更新服务器：不写这一句，electron-builder 会照样留下 `latest.yml` / `latest-mac.yml`
+# 和包里的 `app-update.yml`——那是一份指向不存在的花名册的更新元数据，留着只会让人以为这包会自己更新
+publish: null
+
+files:
+  # 应用本体只收外壳：src/ 和 dist/ 走下面 extraResources，摆成 main.ts 里 ROOT 认的那个形状
+  - desktop/**/*
+  - package.json
+
+# main.ts 打包后取的是 `<resources>/app`：它要在那底下找到 `src/node/host.ts`，
+# 而 host.ts 自己按 `../..` 回看 `dist/` 和 `rules.json`（跟仓库里同一套相对关系），
+# 所以这三样一起进 `<resources>/app`，一个字都不用改 host.ts。
+extraResources:
+  - from: src
+    to: app/src
+  - from: dist
+    to: app/dist
+  - from: rules.json
+    to: app/rules.json
+
+# 不带 node_modules：runtime 依赖是零，装进去只会长包（也省掉一次没意义的 rebuild）
+npmRebuild: false
+# 主进程入口是 .ts：asar 里跑 ESM+类型剥离这条路还没在这台机器上验过，v1 先不解这个结
+asar: false
+
+mac:
+  icon: public/icon-512.png
+  category: public.app-category.board-games
+  # 不签名：这台机器上没有开发者证书，也不打算碰钥匙串。装完会被 Gatekeeper 拦，README 里写怎么绕
+  identity: null
+  target:
+    - target: dmg
+      arch: [arm64]
+    - target: zip
+      arch: [arm64]
+
+win:
+  icon: public/icon-512.png
+  # 交叉打包：从 mac 出 win 包是 electron-builder 支持的，但「装得上、点得通」只有真 Windows 说了算
+  target:
+    - target: nsis
+      arch: [x64]
+    - target: zip
+      arch: [x64]
+  forceCodeSigning: false
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  shortcutName: 棋墩墩
+
+# 文件名一律 ASCII：包名里带中文在 dmg 卷名和 nsis 那些脚本里都是给自己找事
+artifactName: qdd-desktop-${version}-${arch}-${os}.${ext}

@@ -1,4 +1,4 @@
-import { anchor, button, div } from './ui.ts';
+import { anchor, button, div, input } from './ui.ts';
 import { rulesFor, seatName, type Rules } from '../core/game.ts';
 import { buildPieceSet } from '../core/pieces.ts';
 import { foundLine, roomUrl, type FoundRoom } from '../net/discover.ts';
@@ -44,8 +44,55 @@ export function appVersion(): string {
 
 const ENTRY = {
   solo: { head: '单机模式', note: '2~4 个位子，没坐上人的由电脑补' },
-  room: { head: '本地联机', note: '先看同网有没有桌在等人；没有就在这台机器开一桌' },
+  // note 有两份：浏览器那头能寻同网的桌、也能在自己这台开一桌；App 外壳两头都做不到（原因见 fillAddr）
+  room: {
+    head: '本地联机',
+    note: '先看同网有没有桌在等人；没有就在这台机器开一桌',
+    appNote: '连另一台电脑上开着的那桌：把它的地址抄进来',
+  },
 };
+
+/** 首页那块上第二行字：App 外壳里别念「在这台机器开一桌」，那颗按钮在那一头不存在 */
+export function entryNote(k: 'solo' | 'room', app: boolean): string {
+  return k === 'room' && app ? ENTRY.room.appNote : ENTRY[k].note;
+}
+
+/**
+ * 这页面是不是跑在原生外壳（App）里：Capacitor 起来时往全局上注一个 Capacitor 对象。
+ * 这一个判断管两件都落在同一头的事——外壳里没有同源可抄（桌地址得人敲，见 fillAddr），
+ * 也没有 UDP 广播（同网寻呼那一屏在那儿根本跑不起来）。
+ * 浏览器里永远是 false：没那个全局就别给人多摆一格用不上的输入框。
+ */
+export function inAppShell(): boolean {
+  const c = (globalThis as { Capacitor?: { isNativePlatform?: () => boolean } }).Capacitor;
+  return c?.isNativePlatform?.() === true;
+}
+
+/** 那一屏的两句话：要人给什么、给错了怎么说 */
+export const ADDR_HINT = '桌开在另一台电脑上：那边跑 npm run host，把它打印的 http://192.168.1.11:5200/ 抄进来（端口要一起写）';
+export const ADDR_BAD = '这串读不出一张桌：得写成 192.168.1.11:5200 那样，主机和端口都得有';
+
+/**
+ * 人敲进来的桌地址 → 连接用的 host:port。
+ * 带 http:// 前缀、结尾带斜杠、两头有空格都收（抄终端那一行出来就是这样）；
+ * **端口必须写**：桌开在哪个端口是房主那行 --port 说了算的，这一头猜不得——
+ * 猜错的症状是「莫名其妙连不上」，一句写在脸上的要求比一次猜错好查。
+ * 读不成回 null，由调用方换成那句提示，别拿一串指不出门的字去敲门。
+ */
+export function normAddr(raw: string): string | null {
+  const s = raw.trim().replace(/^https?:\/\//i, '').split('/')[0]!.trim();
+  if (!s || /\s/.test(s)) return null;
+  const at = s.lastIndexOf(':');
+  if (at <= 0) return null;
+  const host = s.slice(0, at);
+  const port = s.slice(at + 1);
+  // 主机只认域名和 IPv4 那两种写法：方括号里的 IPv6、带空格的、带路径的都读不出一张桌
+  if (!/^[a-zA-Z0-9.-]+$/.test(host) || host.startsWith('-') || host.endsWith('-') || host.includes('..')) return null;
+  if (!/^\d+$/.test(port)) return null;
+  const p = Number(port);
+  if (p < 1 || p > 65535) return null;
+  return `${host}:${p}`;
+}
 
 /**
  * 每一屏左上那颗都念这一个词。三处出口（单机模式页／本地联机页／候场厅）共用一份，
@@ -135,10 +182,10 @@ export function seatOption(rules: Rules, n: number): string {
   return `${n} 人 · 每人 ${Math.floor(buildPieceSet(r.ranks).length / n)} 枚`;
 }
 
-export function homePanel(onSolo: () => void, onRoom: () => void): HTMLElement {
+export function homePanel(onSolo: () => void, onRoom: () => void, app = false): HTMLElement {
   const entry = (k: 'solo' | 'room', go: () => void): HTMLButtonElement => {
     const btn = button('', undefined, 'btn home-entry');
-    btn.append(div('e', ENTRY[k].head), div('n', ENTRY[k].note));
+    btn.append(div('e', ENTRY[k].head), div('n', entryNote(k, app)));
     btn.addEventListener('click', go);
     return btn;
   };
@@ -156,4 +203,34 @@ export function homePanel(onSolo: () => void, onRoom: () => void): HTMLElement {
     foot,
   );
   return el;
+}
+
+/**
+ * App 外壳那一屏「本地联机」的版面：一格地址、一句话、底栏两颗。
+ * 住在 home.ts 而不是 app.ts 的理由和首页那块一样——「读不出来就别去连」这条判断得有闸。
+ * 填错了就地换那一行字、不弹层：这就是一串字打错了，不该把人从这一屏摘出去。
+ * `cur` 是这台设备上次敲的那串（tableAddr），进来就摆在格里，重连不用再抄一遍。
+ */
+export function fillAddr(
+  body: HTMLElement,
+  foot: HTMLElement,
+  cur: string,
+  onGo: (addr: string) => void,
+  onBack: () => void,
+): void {
+  const box = input('addr', cur, '192.168.1.11:5200');
+  const note = div('note', ADDR_HINT);
+  body.append(box, note);
+  foot.append(
+    button(
+      '连这张桌',
+      () => {
+        const addr = normAddr(box.value);
+        note.textContent = addr ? ADDR_HINT : ADDR_BAD;
+        if (addr) onGo(addr);
+      },
+      'btn primary',
+    ),
+    button(BACK, onBack, 'btn mini'),
+  );
 }

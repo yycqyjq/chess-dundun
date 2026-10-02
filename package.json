@@ -5,13 +5,14 @@
   "description": "棋墩墩 — 掀棋/打棋摞 的规则引擎与人机对战",
   "license": "MIT",
   "type": "module",
+  "main": "desktop/main.ts",
   "engines": {
     "node": ">=22.6"
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.web.json",
     "check": "node --experimental-strip-types src/cli/main.ts check",
-    "test": "npm run test:rules && npm run test:layout && npm run test:style && npm run test:net && npm run test:link && npm run test:discover && npm run test:ui && npm run test:qr",
+    "test": "npm run test:rules && npm run test:layout && npm run test:style && npm run test:net && npm run test:link && npm run test:discover && npm run test:ui && npm run test:qr && npm run test:desktop",
     "test:rules": "node --experimental-strip-types src/test/rules.test.ts",
     "test:layout": "node --experimental-strip-types src/test/layout.test.ts",
     "test:style": "node --experimental-strip-types src/test/style.test.ts",
@@ -20,6 +21,7 @@
     "test:discover": "node --experimental-strip-types src/test/discover.test.ts",
     "test:ui": "node --experimental-strip-types src/web/ui.test.ts",
     "test:qr": "node --experimental-strip-types src/test/qr.test.ts",
+    "test:desktop": "node --experimental-strip-types src/test/desktop.test.ts",
     "verify": "npm run typecheck && npm run check && npm run test",
     "smoke": "node tools/smoke.mjs",
     "smoke:host": "node tools/smoke.mjs host",
@@ -31,10 +33,21 @@
     "dev": "vite",
     "icon": "sed 's/rx=\"112\"/rx=\"0\"/' public/icon.svg > /tmp/icon-square.svg && qlmanage -t -s 512 -o /tmp /tmp/icon-square.svg >/dev/null 2>&1 && command mv -f /tmp/icon-square.svg.png public/icon-512.png && sips -Z 180 public/icon-512.png --out public/apple-touch-icon.png >/dev/null && sips -Z 32 public/icon-512.png --out public/icon-32.png >/dev/null && echo 已按 public/icon.svg 重画 icon-512 / apple-touch-icon / icon-32",
     "build": "vite build",
+    "apk:debug": "npm run build && cap sync android && cd android && JAVA_HOME=$(/usr/libexec/java_home -v 21) ./gradlew assembleDebug",
+    "desktop:run": "npm run build && electron .",
+    "desktop:selftest": "npm run build && electron . --selftest",
+    "desktop:mac": "npm run build && electron-builder --mac --config.electronDist=node_modules/electron/dist",
+    "desktop:win": "npm run build && electron-builder --win --config.electronDist=vendor/electron-dist/electron-v44.5.1-win32-x64.zip",
+    "desktop:win:net": "npm run build && electron-builder --win",
     "preview": "vite preview"
   },
   "devDependencies": {
+    "@capacitor/android": "^8.5.2",
+    "@capacitor/cli": "^8.5.2",
+    "@capacitor/core": "^8.5.2",
     "@types/node": "^26.6.2",
+    "electron": "^44.5.1",
+    "electron-builder": "^26.15.3",
     "typescript": "^5.9.3",
     "vite": "^8.3.1"
   }

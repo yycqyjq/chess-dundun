@@ -5,7 +5,7 @@
  */
 import { createServer, type Server } from 'node:http';
 import { connect as netConnect, type Socket } from 'node:net';
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { pendingSeats, rulesFor, type Action, type GameState } from '../core/game.ts';
@@ -13,6 +13,7 @@ import { openMatch } from '../core/match.ts';
 import { buildPieceSet } from '../core/pieces.ts';
 import { loadRules } from '../node/load_rules.ts';
 import {
+  canonicalSave,
   claimSave,
   gate,
   hasFlag,
@@ -20,6 +21,7 @@ import {
   lockPathOf,
   lockVerdict,
   openRoom,
+  orphanWatch,
   setupFrom,
   type Room,
   type SaveLock,
@@ -1050,6 +1052,16 @@ const lockBody = (held: Partial<SaveLock>): string => JSON.stringify(held);
   ok('写那条的进程已经没了：让开（前人挨 SIGKILL 走的留条不算闸）', lockVerdict({ pid: 2222, port: 5199, save: here }, mine, dead) === 'free');
 }
 
+console.log('占位条上那份存档路径怎么认到底');
+{
+  // 只干一件事：把那串路径认到那个文件本身。real 是注入的，所以「存档还没落盘」「连目录都没有」这两档都点得着
+  const flat = (p: string): string => p;
+  ok('认不出花活时至少把相对写法摊成绝对', canonicalSave('table.json', flat) === resolve('table.json'));
+  ok('存档已经在硬盘上：认它自己那条到底的（软链那头写的是另一串字）', canonicalSave('/tmp/x/table.json', (p) => (p === '/tmp/x/table.json' ? '/private/tmp/x/table.json' : p)) === '/private/tmp/x/table.json');
+  ok('存档还没落盘（新桌第一局）：认父目录的实底，再把文件名接回去', canonicalSave('/tmp/x/table.json', (p) => { if (p === '/tmp/x') return '/private/tmp/x'; throw new Error('ENOENT'); }) === '/private/tmp/x/table.json');
+  ok('连父目录都不存在：退回摊平那一条，别抛（那句「目录没建」该由起桌的去念，不是这只手）', canonicalSave('/nope/y/table.json', () => { throw new Error('ENOENT'); }) === resolve('/nope/y/table.json'));
+}
+
 {
   const dir = mkdtempSync(join(tmpdir(), 'qdd-lock-'));
   const save = join(dir, 'table.json');
@@ -1058,7 +1070,7 @@ const lockBody = (held: Partial<SaveLock>): string => JSON.stringify(held);
 
   const release = claimSave(save, 5199, () => false);
   const written = asLock(lock);
-  ok('头一张桌占住了：写进去的是自己这个进程、这个端口、还有这一份存档的绝对路径', written?.pid === process.pid && written?.port === 5199 && written?.save === resolve(save), peekLock(lock));
+  ok('头一张桌占住了：写进去的是自己这个进程、这个端口、还有这一份存档认到底那一条路径', written?.pid === process.pid && written?.port === 5199 && written?.save === canonicalSave(save), peekLock(lock));
   ok('同一趟里重起桌不算撞：同 pid 同端口照样占得下来', refuse(() => claimSave(save, 5199, () => false)) === '', refuse(() => claimSave(save, 5199, () => false)));
 
   const clash = refuse(() => claimSave(save, 5200, () => true));
@@ -1072,27 +1084,82 @@ const lockBody = (held: Partial<SaveLock>): string => JSON.stringify(held);
   writeFileSync(lock, lockBody({ pid: 57898, port: 5199, save: join(dir, '别人的那份 table.json') }));
   ok('条上写着另一个进程号、占的却是另一份存档：这一份照开（冒烟在副本里跑就是这一档）', refuse(() => claimSave(save, 5202, () => true)) === '', peekLock(lock));
 
-  writeFileSync(lock, lockBody({ pid: 424242, port: 7000, save: resolve(save) }));
+  writeFileSync(lock, lockBody({ pid: 424242, port: 7000, save: canonicalSave(save) }));
   ok('留条那位早没了：让开，这一张占上并把条换成自己的', refuse(() => claimSave(save, 5200, () => false)) === '' && asLock(lock)?.port === 5200, peekLock(lock));
 
   writeFileSync(lock, '{ 半截字');
   ok('整条读不出 JSON 的也让开（硬盘写满那一下留的半截字，不该把门永远锁上）', refuse(() => claimSave(save, 5201, () => true)) === '', peekLock(lock));
 
-  writeFileSync(lock, lockBody({ pid: process.pid, port: 7777, save: resolve(save) }));
+  writeFileSync(lock, lockBody({ pid: process.pid, port: 7777, save: canonicalSave(save) }));
   const real = refuse(() => claimSave(save, 5199));
   ok('不注入 alive 时也真认得「这个进程还活着」：同进程另一个端口照样拒', real.includes('7777'), real || '放行了');
 
-  writeFileSync(lock, lockBody({ pid: 999999, port: 7777, save: resolve(save) }));
+  writeFileSync(lock, lockBody({ pid: 999999, port: 7777, save: canonicalSave(save) }));
   ok('不注入 alive 也认得死人：那条留条拦不住新桌（真进程号问出来的）', refuse(() => claimSave(save, 5199)) === '', peekLock(lock));
 
   const mineNow = claimSave(save, 5199, () => false);
   ok('收桌摘闸：摘掉之后这份存档空出来了', (mineNow(), !existsSync(lock)), peekLock(lock));
   ok('再摘一次不抛（close 走两趟也不该炸）', refuse(() => mineNow()) === '');
-  const theirs = lockBody({ pid: 888888, port: 6000, save: resolve(save) });
+  const theirs = lockBody({ pid: 888888, port: 6000, save: canonicalSave(save) });
   writeFileSync(lock, theirs);
   mineNow();
   ok('别人的那条不许摘：接管过这张桌的人的闸，拆了等于没闸', peekLock(lock) === theirs, peekLock(lock));
   release();
+}
+
+{
+  // 真软链走一遍：闸比的是那个文件，不是那串字。macOS 的 /tmp、/var 本身就是软链，
+  // 而桌面版交回来的 userData 是认到底那一条、终端上敲的 --save= 是没认的那一条（2026-10-02 就是这么撞上两张桌写同一本账的）
+  const dir = mkdtempSync(join(tmpdir(), 'qdd-symlink-'));
+  const realDir = join(dir, 'real');
+  const linkDir = join(dir, 'link');
+  mkdirSync(realDir);
+  symlinkSync(realDir, linkDir, 'dir');
+  const save = join(realDir, 'table.json');
+  const lock = lockPathOf(save);
+  const release = claimSave(save, 5199, () => true);
+  const viaLink = refuse(() => claimSave(join(linkDir, 'table.json'), 5200, () => true));
+  ok('同一份存档换条软链写法照样撞：两张桌不许写同一本账，哪怕路径串得不一样', viaLink.includes('5199'), viaLink || '居然让它占上了——那张桌正在盖别人的账');
+  ok('被拒那一张也没把闸抢走：条上写的还是头一张的端口', asLock(lock)?.port === 5199, peekLock(lock));
+  release();
+}
+
+{
+  // 桌面外壳挨强退／崩了那一条：那张桌不许赖在端口和占位条上。2026-10-02 真复现的——`kill -9` 掉外壳，
+  // 桌活着、条留着，第二张桌被 claimSave 拒；而从访达点开的那个人没有终端，那句理由他根本看不见，屏幕上什么都不出现。
+  const hook = (argv: string[], ppidSeq: number[]) => {
+    const arms: number[] = [];
+    let gone = 0;
+    let cb = (): void => {};
+    let asked = 0;
+    orphanWatch(
+      argv,
+      () => {
+        gone += 1;
+      },
+      () => ppidSeq[Math.min(asked++, ppidSeq.length - 1)],
+      (ms, fn) => {
+        arms.push(ms);
+        cb = fn;
+      },
+    );
+    return { gone: () => gone, tick: () => cb(), arms };
+  };
+
+  const off = hook([], [100, 1]);
+  ok('不带 --watch-parent 就一个字都不装：npm run host 那条路的爹是终端，掀不得', off.arms.length === 0 && off.gone() === 0, off.arms.join());
+  off.tick();
+  ok('没装就没人问：就算父进程换了也不许自己走（那条路上「父没了」是常态——挂在终端里的人合上 shell 不算收桌）', off.gone() === 0, String(off.gone()));
+
+  const on = hook(['--watch-parent'], [100, 100, 1]);
+  ok('装上就一秒问一次：外壳强退之后这张桌别再多赖一分钟', on.arms.length === 1 && on.arms[0] === 1000, on.arms.join());
+  on.tick();
+  ok('爹还是原来那一位：不走（打到一半的桌不能被一句误判收掉）', on.gone() === 0, String(on.gone()));
+  on.tick();
+  ok('爹换人了（外壳挨 SIGKILL，macOS 把桌交回 launchd）：走 onGone，也就是 host.ts 那句先存档再退的 quit()', on.gone() === 1, String(on.gone()));
+
+  const offVal = hook(['--watch-parent=0'], [100, 1]);
+  ok('--watch-parent=0 是关：跟 --fresh=0 同一套开关口径', offVal.arms.length === 0, offVal.arms.join());
 }
 
 {

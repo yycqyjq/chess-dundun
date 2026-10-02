@@ -134,7 +134,7 @@ export default {
       note: 'Q 候场厅那一屏退回裸 card()：半透黑底＋居中卡又叠回首页上面（批12 摘掉的就是它）',
       from: "const { veil, head, body, foot } = page(this.root, '正连着这桌……', 'room');",
       to: "const { veil, head, body, foot } = card(this.root, '正连着这桌……', 'room');",
-      expect: '牌桌外那一层的三屏全走 page()，一处也没退回裸 card()',
+      expect: '牌桌外那一层的四屏全走 page()，一处也没退回裸 card()',
     },
     {
       rel: 'src/web/style.css',
