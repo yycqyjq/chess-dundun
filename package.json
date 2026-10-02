@@ -1,6 +1,6 @@
 {
   "name": "chess-dundun",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "private": true,
   "description": "棋墩墩 — 掀棋/打棋摞 的规则引擎与人机对战",
   "license": "MIT",
