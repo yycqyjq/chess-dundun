@@ -1,6 +1,5 @@
-import { choose, LEVELS, type Level } from '../ai/agent.ts';
+import { LEVELS, type Level } from '../ai/agent.ts';
 import {
-  apply,
   createGame,
   legalActions,
   pendingSeats,
@@ -9,13 +8,13 @@ import {
   type GameState,
 } from '../core/game.ts';
 import { pieceLabel, type Piece } from '../core/pieces.ts';
-import { nextDrawer, openMatch, recordGame, winners, type MatchBook } from '../core/match.ts';
+import { nextDrawer, openMatch, winners, type MatchBook } from '../core/match.ts';
 import { mulberry32 } from '../core/rng.ts';
-import { viewFor } from '../core/view.ts';
 import { aliveSeats, deckFor, hydrate, type SeatInfo, type Seats, type TableStatus, type ToClient } from '../net/wire.ts';
 import { LIST_REFRESH_MS, peerNote, JOIN_QUERY, type FoundRoom } from '../net/discover.ts';
 import { ctrlLift, draftShape, handCramped, labelBands, LABEL_W, layout, maxStacks, pieceSize, stackSpots, type Board, type TableView } from './board.ts';
 import { autoSeat, BACK, entryHead, fillAddr, homePanel, hostHanded, hostJump, inAppShell, initialScreen, isLoopback, roomRow, seatOption } from './home.ts';
+import { aiActionFor, closedTable, newGameState, reportText, settleMatch, stepAndMask, type OnTable } from './local.ts';
 import { deviceNick, forget, Link, recall, remember, setTableAddr, shouldWake, tableAddr } from './net.ts';
 import { MOVE_MS, Pieces } from './pieces.ts';
 import { rules } from './rules.ts';
@@ -72,14 +71,6 @@ interface Setup {
   mode: 'ming' | 'kou';
   level: Level;
   seed: number;
-}
-
-/** 摊在桌面的这一墩快照。引擎结算完就不给了，动画得自己留着 */
-interface OnTable {
-  seat: number;
-  ids: number[];
-  pledge: boolean;
-  best: boolean;
 }
 
 function keyOf(ids: number[]): string {
@@ -1136,13 +1127,7 @@ export class App {
   }
 
   private newGame(): void {
-    this.state = createGame({
-      rules,
-      players: this.setup.players,
-      mode: this.setup.mode,
-      seed: this.setup.seed + this.gameNo * 7919,
-      ...(this.drawer >= 0 ? { drawer: this.drawer } : {}),
-    });
+    this.state = newGameState(rules, this.setup, this.gameNo, this.drawer);
     this.gameNo++;
     this.view = this.freshView(this.setup.players);
     this.maskFrom = -1;
@@ -1169,7 +1154,7 @@ export class App {
       this.render(true);
       await this.nap(AI_MS);
       // 命令行和网页走同一个 choose：抽签、分牌这类同分选项由它内部随机挑，两边不会各学各的
-      await this.act(seat, choose(viewFor(this.state, seat), legalActions(this.state, seat), this.setup.level, this.rng));
+      await this.act(seat, aiActionFor(this.state, seat, this.setup.level, this.rng));
     }
   }
 
@@ -1180,8 +1165,7 @@ export class App {
     const wonBefore = [...this.state.won];
     const onTable = this.view.freeze;
     const logBefore = this.state.log.length;
-    apply(this.state, seat, action);
-    this.mask(logBefore);
+    this.maskFrom = stepAndMask(this.state, seat, action, logBefore, this.maskFrom);
     await this.frame(seat, action, wonBefore, onTable);
   }
 
@@ -1192,7 +1176,7 @@ export class App {
       this.view.sel.clear();
       this.view.spread = false;
       // 一墩打完引擎就把 trick 清了，最后这一手得自己补进桌面快照，不然它飞不进牌摞
-      const table = this.state.trick ? this.snapshot() : this.closedTable(seat, action, onTable, wonBefore);
+      const table = this.state.trick ? this.snapshot() : closedTable(this.state, seat, action, onTable, wonBefore);
       this.view.freeze = table;
       switch (action.kind) {
         case 'draw': {
@@ -1233,28 +1217,6 @@ export class App {
       ...trick.plays.map((p) => ({ seat: p.player, ids: [...p.pieceIds], pledge: false, best: p === champ })),
       ...trick.discards.map((d) => ({ seat: d.player, ids: [...d.pieceIds], pledge: true, best: false })),
     ];
-  }
-
-  /** 收尾那一手的完整桌面＝之前的快照 + 刚出的这张；赢家那家亮起来，抵押的照常跟着收 */
-  private closedTable(
-    seat: number,
-    action: Action,
-    before: OnTable[] | null,
-    wonBefore: number[],
-  ): OnTable[] | null {
-    if (!before) return null;
-    const ids = 'pieceIds' in action ? [...action.pieceIds] : [];
-    const winner = this.state.won.findIndex((w, i) => w !== wonBefore[i]);
-    return [...before, { seat, ids, pledge: action.kind === 'discard', best: false }].map((e) => ({
-      ...e,
-      best: !e.pledge && e.seat === winner,
-    }));
-  }
-
-  /** 暗棋这一墩没翻开之前，日志里「谁出了什么」那几行不能给看——和命令行同一套口径 */
-  private mask(logBefore: number): void {
-    if (this.state.mode !== 'kou' || !this.state.trick) this.maskFrom = -1;
-    else if (this.maskFrom < 0) this.maskFrom = logBefore;
   }
 
   /** 摸签这八拍就是桌上那套动作：摊开→选中→抽出→亮牌→数点→定人→送回→收拢 */
@@ -1332,8 +1294,7 @@ export class App {
 
   private async askAgain(): Promise<boolean> {
     const state = this.state;
-    recordGame(this.book, state);
-    this.drawer = nextDrawer(state);
+    this.drawer = settleMatch(this.book, state);
     const no = this.gameNo;
     const top = winners(state);
     const title =
@@ -1376,19 +1337,9 @@ export class App {
     });
   }
 
-  /** 结算那份复盘原文：座位名跟屏上口径一致（日志里写的 P1/P2，这儿标出哪一位是你） */
-  private reportText(title: string): string {
-    const state = this.state;
-    const head = `棋墩墩 · ${state.mode === 'ming' ? '明棋' : '扣棋'} · ${state.players} 人（我是 ${seatName(this.me)}）· 种子 ${state.seed}`;
-    const total = `累计 ${this.book.games} 局：${this.book.titles
-      .map((t, seat) => `${this.who(seat)} 冠 ${t}`)
-      .join('　')}｜并列 ${this.book.ties} 局`;
-    return `${head}\n${title}\n\n${state.log.join('\n')}\n\n${total}`;
-  }
-
   /** 剪贴板不给用（非 https、或者浏览器直接拒）就把原文摊在卡里，选中照样能抄 */
   private async copyReport(host: HTMLElement, title: string): Promise<void> {
-    const text = this.reportText(title);
+    const text = reportText(this.state, this.book, this.me, title);
     try {
       await navigator.clipboard.writeText(text);
       toast(this.shell.toast, '战报已复制', 1200);
