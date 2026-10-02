@@ -120,6 +120,11 @@ console.log('判断确实住在 launch.ts');
   ok('main.ts 试端口照 0.0.0.0 的绑法试：host.ts 绑的就是它，拿 127.0.0.1 试会看走眼', code.includes("listen(port, '0.0.0.0')"));
   // 等桌开口那一段：只有 exit 事件算「那桌自己走了」。查 child.killed 是条永远不成立的闸——它只有 stopHost() 调过 kill() 之后才真
   ok('main.ts 等桌开口接的是子进程 exit：它自己走了就立刻收，别对着一台没动静的机器干等满 15 秒', code.includes("once('exit'") && !code.includes('.killed'));
+  // spawn 自己就没成那一种（那条二进制没了／没权限）：Node 发的是 error，`exit` 一声不响（探针量过）。
+  // 认的是「哪一位接的」——`freePort` 里那句 `srv.once('error')` 长得一样，光认 `once('error'` 会被它蒙过去（刀 P 量出来的）
+  ok('main.ts 也接了 spawn 那条 error：那种下场 exit 不响，没人接就是把主进程连那串参数一起崩掉', code.includes("proc.once('error'"));
+  ok('等桌开口有一条不靠请求回应的硬闸：body 卡在半截就是没下场，只靠重试那一排能一直干等', code.includes('setTimeout(() => res(false), READY_MS)'));
+  ok('读页面接了 aborted：header 已回、body 永远不到时 req 那条 error 不会响，不接这句自检就永不收尾', code.includes("r.on('aborted'"));
   const host = readFileSync(new URL('../../src/node/host.ts', import.meta.url), 'utf8');
   ok('host.ts 把那条看门狗拴在开桌之后：拴在前面那一挨就是撞 room 还没定义，桌没存成反倒抛一句', host.includes('orphanWatch(argv, quit)') && host.indexOf('orphanWatch(argv, quit)') > host.indexOf('openTable();'));
 }

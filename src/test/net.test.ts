@@ -9,8 +9,9 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFil
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { pendingSeats, rulesFor, type Action, type GameState } from '../core/game.ts';
-import { openMatch } from '../core/match.ts';
+import { nextDrawer, openMatch } from '../core/match.ts';
 import { buildPieceSet } from '../core/pieces.ts';
+import { mulberry32 } from '../core/rng.ts';
 import { loadRules } from '../node/load_rules.ts';
 import {
   canonicalSave,
@@ -541,6 +542,27 @@ function pilesOf(state: GameState): number[][] {
 }
 
 {
+  // 起抽人往下传这一条，上面那一局说了不算，得连说六局：
+  // 「换牌面前不先结打完那一局」那一刀拆掉的是换牌面那趟里的 settleOver，起抽人没人传，
+  // 就退给 createGame 拿这局自己的种子掷——单看一局撞中上一局赢家是二分之一的运气。
+  // 2026-10-02 椅子令牌改走 node:crypto 之后，那条流少走了两步（入座不再占流位），
+  // 那一局恰好撞中，刀当场磨绿：判据蹭在随机流位上，源码那头一改它就哑。
+  // 每局换一个 setup.seed、每一局都翻一次玩法（走的正是那一趟换牌面），六局全撞中的概率是 1/64。
+  let misses = 0;
+  for (let round = 0; round < 6; round++) {
+    const { table, clock } = makeTable({ mode: 'kou', seed: 101 + round * 37 });
+    table.join(0, '');
+    table.join(1, '');
+    table.start(0);
+    finishDraft(table);
+    const want = nextDrawer(playToEnd(table, clock));
+    table.changeSetup(0, { mode: 'ming' });
+    if (table.state.drawer !== want) misses++;
+  }
+  ok('连翻六局牌面，起抽人局局接的是上一局那一位（不是新牌面上掷出来的）', misses === 0, `六局里 ${misses} 局接错`);
+}
+
+{
   // 换人数是另一码事：那本账本来就要重开，上一局赢家指的也不是那把椅子了
   const { table, clock, logs } = makeTable({ mode: 'ming', players: 4 });
   for (const s of [0, 1, 2, 3]) table.join(s, '');
@@ -787,6 +809,39 @@ function pilesOf(state: GameState): number[][] {
   );
 }
 
+console.log('椅子令牌不许是牌局那条种子的函数');
+{
+  // 2026-10-02 探针撞的：`seed` 随每一份快照发给桌上的人，而旧写法从桌那把 mulberry32(seed^0x5eed)
+  // 上取令牌——外人照那条流往外推，每一把椅子的令牌都算得出来，拿它 join 直接坐上别人的位子。
+  const SEED = 0x51a7;
+  const tokenOf = (t: Table, seat: number) => {
+    const r = t.join(seat, '');
+    return r.msg?.t === 'welcome' ? r.msg.token : '';
+  };
+  const a = makeTable({ seed: SEED }).table;
+  const b = makeTable({ seed: SEED }).table;
+  const a0 = tokenOf(a, 0);
+  const b0 = tokenOf(b, 0);
+  const a1 = tokenOf(a, 1);
+  ok(
+    '同样种子、同样参数的两张桌，第一把椅子的令牌不许一样：一样就等于它是 seed 的函数，而 seed 发给全桌',
+    a0 !== b0 && a0.length > 0 && b0.length > 0,
+    `${a0}｜${b0}`,
+  );
+  // 外人那一头：手里只有那条 seed，照流的起点往外推 4096 位，每位在四把椅子都试一遍
+  const stream = mulberry32(SEED ^ 0x5eed);
+  const guessed = new Set<string>();
+  for (let i = 0; i < 4096; i++) {
+    const n = stream().toString(36).slice(2, 10);
+    for (let s = 0; s < 4; s++) guessed.add(`s${s}-${n}`);
+  }
+  ok(
+    '照那条流算出来的 4096 位撞不中任何一把椅子：撞中就等于谁连得上这条端口谁就能冒充别人',
+    !guessed.has(a0) && !guessed.has(a1) && !guessed.has(b0),
+    `${a0} ${a1}`,
+  );
+}
+
 {
   // 打了一半不散：那一局的账还没落地，这会儿收椅子等于让正在出牌的人白打，还让候场厅丢了牌面
   const { table } = makeTable({ mode: 'kou' });
@@ -917,24 +972,32 @@ function pilesOf(state: GameState): number[][] {
 
 {
   // 存档得接上同一条随机流、同一串快照号：光存牌面，重启后下一副是把老牌重放一遍，
-  // 还开着的那页更会从此一份不演——它只认比手上号新的快照
+  // 还开着的那页更会从此一份不演——它只认比手上号新的快照。
+  // 存之前要打满两局：头一副用的就是 setup.seed，那条流一步都没走，只打一局就存档时
+  // rngSteps 本来就是 0——「存档不写 rngSteps」那一刀拆的是一串 0，谁都看不见（2026-10-02 量到的）。
   const a = makeTable({ mode: 'ming', seed: 11 });
   a.table.join(0, '');
   a.table.join(1, '');
   a.table.start(0);
   finishDraft(a.table);
   playToEnd(a.table, a.clock);
+  a.table.start(0);
+  finishDraft(a.table);
+  playToEnd(a.table, a.clock);
   const seqSaved = a.inbox.last(1).seq;
   const json = a.table.save();
+  // 这一句钉的是上面那个前提本身：流位没走过，后面那两句比对种子就是摆设
+  ok('打到存档这一刻，那条流确实走过几步', (JSON.parse(json).rngSteps as number) > 0, `rngSteps=${JSON.parse(json).rngSteps}`);
   a.table.start(0);
   const nextSeed = a.table.state.seed;
   // 只认流位，一把椅子都不坐：按下开始洗出来的那一副，得和没重启那桌的下一副严丝合缝
   const twin = Table.load(json, () => {}, () => {}, a.clock.now);
   twin.start(0);
   ok('重启后接着开的那局，种子跟没重启时是同一个', twin.state.seed === nextSeed, `${twin.state.seed} 对上 ${nextSeed}`);
-  ok('刚打完那一局不会在重启后补记成两笔', twin.book.games === 1);
+  ok('刚打完那一局不会在重启后补记成两笔', twin.book.games === 2, `账上 ${twin.book.games} 局`);
 
-  // 坐回来每人要发一张令牌，那是在这条流上又走一步，所以这一路只对号、不对种子
+  // 椅子令牌如今走 node:crypto，不在这条流上取（见 join 那一段）：所以重启后哪怕有人坐回来，
+  // 流位也还停在存档那一刻，按下开始洗出来的还是没重启那桌的下一副
   const got: { seat: number; msg: ToClient }[] = [];
   const restored = Table.load(
     json,
@@ -948,6 +1011,12 @@ function pilesOf(state: GameState): number[][] {
     '重启后头一份快照的号接着往上走',
     !!first && first.t === 'state' && first.seq > seqSaved,
     `${first && first.t === 'state' ? first.seq : '-'} 对上 ${seqSaved}`,
+  );
+  restored.start(0);
+  ok(
+    '坐回来发令牌不占流位：接着开的那局还是同一副牌面',
+    restored.state.seed === nextSeed,
+    `${restored.state.seed} 对上 ${nextSeed}`,
   );
 
   // 他磁盘上躺着的那份老存档没这三个字段，账本里也还没记打完的这一局（老代码到按开始才记）：

@@ -14,7 +14,11 @@ export default {
       note: "6 换牌面前不先结打完那一局（账上永远少一局）",
       from: "      const drawer = this.settleOver();",
       to: "      const drawer: number | null = null;",
-      expect: "起抽人照旧往上一局的赢家传",
+      // 2026-10-02 换过这一句：原来钉的是「起抽人照旧往上一局的赢家传」，那是单局比对，
+      // 拆了 settleOver 之后起抽人改由新牌面的种子掷出来，撞中赢家就是二分之一的运气——
+      // 椅子令牌改走 node:crypto、那条流少走了两步，恰好撞中，这把刀当场磨绿。
+      // 现在钉的是连翻六局那一条（net.test.ts 里那一圈），六局全撞中才是 1/64。
+      expect: "连翻六局牌面，起抽人局局接的是上一局那一位（不是新牌面上掷出来的）",
     },
     {
       rel: "src/net/table.ts",

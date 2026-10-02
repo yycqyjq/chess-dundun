@@ -106,9 +106,18 @@ function freePort(): Promise<number | null> {
 function waitReady(proc: ChildProcess, port: number): Promise<boolean> {
   const deadline = Date.now() + READY_MS;
   return new Promise<boolean>((res) => {
+    // 那条桌连拉都没拉起来（那条二进制没了／没权限）：这种下场 Node 发的是 error，`exit` 一声不响（探针量过）。
+    // 这一头没人接就是主进程未捕获异常——外壳带着那串参数一起崩，从访达点开的人屏幕上什么都不出现。
+    proc.once('error', (e) => {
+      console.error(`那张桌没拉起来：${e.message}`);
+      res(false);
+    });
     // 那桌自己走了（占不着存档那条最常见）：它的理由早打在终端上了，别对着一台没动静的机器干等满 15 秒。
     // 桌起来之后这句不会再有事——promise 落定过一次就不改，SIGTERM 收尾那次 exit 正好落空。
     proc.once('exit', () => res(false));
+    // 硬闸：下面那一排重试全指望「每条请求都有个下场」，可 header 已回、body 卡在半截就是没下场（探针量过：promise 永不落定）。
+    // 这一句跟 deadline 那串数字无关，是「等桌开口」这件事最后的收口。
+    setTimeout(() => res(false), READY_MS);
     const tick = (): void => {
       const req = get(whoamiUrl(port), (r) => {
         r.resume();
@@ -139,6 +148,8 @@ function fetchText(url: string): Promise<{ status: number; body: string }> {
       r.setEncoding('utf8');
       r.on('data', (chunk: string) => (body += chunk));
       r.on('end', () => res({ status: r.statusCode ?? 0, body }));
+      // header 已回、body 永远不到：那一条 `req.on('error')` 不会响（探针量过），不接这句 `--selftest` 就永不收尾
+      r.on('aborted', () => res({ status: r.statusCode ?? 0, body }));
     });
     req.on('error', () => res({ status: 0, body: '' }));
     req.setTimeout(3000, () => req.destroy());

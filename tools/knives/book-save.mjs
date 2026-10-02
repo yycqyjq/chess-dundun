@@ -35,6 +35,9 @@ export default {
       note: "7 存档不写 rngSteps（重启把打过的牌面重放一遍）",
       from: "      rngSteps: this.rngSteps,",
       to: "      rngSteps: undefined,",
+      // 2026-10-02 这一把绿过一次：判据本身没错，是那段测试只打了一局就存档，而头一副牌用的就是
+      // setup.seed，那条流一步没走 ⇒ rngSteps 本来等于 0，这一刀拆的是一串 0。现在存之前打满两局，
+      // 并且加了一句「打到存档这一刻，那条流确实走过几步」把这个前提自己钉住。
       expect: "重启后接着开的那局，种子跟没重启时是同一个",
     },
     {

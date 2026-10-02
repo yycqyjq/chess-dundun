@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { choose, type Level } from '../ai/agent.ts';
 import {
   apply,
@@ -51,7 +52,7 @@ export interface TableSetup {
 interface Slot {
   seat: number;
   name: string;
-  /** 空串 = 还没人坐过这张椅子 */
+  /** 空串 = 还没人坐过这张椅子。这把钥匙不许从牌局那把种子流上取：那条流的输出随快照发给全桌（见 `join`） */
   token: string;
   /** 坐上来那台设备自报的短代号，空串 = 没报过（老客户端、或者桌自己补的电脑位） */
   nick: string;
@@ -162,7 +163,11 @@ export class Table {
     // 目标这把坐得下了才动原来那把：坐不下去就别把人原有的椅子一起赔进去
     if (from !== undefined && from !== seat) this.vacate(from);
     const fresh = !slot.token;
-    if (fresh) slot.token = `s${seat}-${this.rng().toString(36).slice(2, 10)}`;
+    // 令牌走的是加密随机数，不跟牌局共用那把种子流：`seed` 会随每一份快照发给桌上的人，
+    // 而 mulberry32 只有 32 位状态、首局那条 seed 就是 setup.seed——照着那条流往外算，
+    // 每一把椅子的令牌都算得出来（2026-10-02 探针量过：外人拿算出的令牌 join 直接坐上，
+    // 那句「这把椅子坐了人」等于没有）。公平性要能复算，身份不能。
+    if (fresh) slot.token = `s${seat}-${randomBytes(8).toString('hex')}`;
     // 代号只认递上来的那句：留空就别把人家原来那个抹掉
     const said = (nick ?? '').trim().slice(0, NICK_MAX);
     if (said) slot.nick = said;
