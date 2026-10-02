@@ -9,6 +9,20 @@
  *   npm run knives -- spread --no-baseline  # 跳过基准（同一份源码刚验过绿才许用，省一轮全闸）
  *   npm run knives -- --drop        # 不跑刀：清掉所有缓存的临时副本，一把收干净
  *   npm run knives -- spread --verbose  # 把每一刀红掉的那几句全打出来（量 expect 用）
+ *   npm run knives -- --affected    # 只跑可能被当前改动波及的刀谱（git diff HEAD ＋ 未跟踪；见下）
+ *   npm run knives -- --affected --list   # 只打印选了哪几张、为什么选，不跑
+ *   npm run knives -- --affected --base=origin/main  # 拿 origin/main 三点 diff 当改动源，再加工作区改动
+ *   npm run knives -- --affected --changed=src/core/pieces.ts  # 显式注入改动路径（测试用）
+ *   npm run knives -- --print-closure=test:net  # 打某套闸入口的传递闭包（抽查闭包实现用，不跑刀）
+ *
+ * --affected 怎么选（四条规则取并集，宁多勿漏；漏刀比多跑严重）：
+ *   A 精确：改的文件 == 某刀 `rel` → 选中那张谱子；
+ *   B 套件闭包：改的文件在某个 `test:*` 入口的传递 import 闭包内（含 readFileSync(new URL(...)) 的资源引用）
+ *     → 选中 suite 命中该套件的全部谱子。入口文件本身改动也算。
+ *     没有它，那 7 个「被闸门依赖却不在任何 rel 里」的源文件（pieces/rng/trick/view/agent/load_rules/qr）会全漏；
+ *   C 全局：package.json／tsconfig*／vite.config.ts／rules.json／tools/**／非入口的 *.test.ts → 全跑；
+ *   D 兜底：改动在 src/** 或 desktop/** 但 A/B 都没认领 → 全跑并打告警（闭包可能没覆盖到，人工看一眼）。
+ * 工作区干净 → 选 0 张、exit 0。--affected 与 --only/--verbose/--no-baseline 取交集（先选谱子再套 only 过滤）。
  *
  * 刀谱格式（`tools/knives/*.mjs` 默认导出一张）：
  *   { id, title, via?: 'smoke', smoke?: 'dev', suite?: 'test:net', knives: [{ rel, from, to, note, expect?, suite?, crash?, belt? }] }
@@ -28,8 +42,8 @@
  * 分批跑不再每调用一次就建删一整份（2026-10-02 前每把 --only 都全仓建删一次，弹窗全是它）——想清用 `--drop`。
  * 刀口（`from`）一律抄源码里现成的那一段，别凭记忆写——凭记忆写的刀全部「刀口没找着」。
  */
-import { readFileSync, writeFileSync, readdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, readFileSync, writeFileSync, readdirSync } from 'node:fs';
+import { join, posix } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { makeScratch, dropAllScratch, run, syncSrc, REPO } from './lib.mjs';
 import { smokeOnce } from './smoke.mjs';
@@ -142,9 +156,165 @@ function parseOnly(raw) {
   return set;
 }
 
+// ---------------- --affected：按当前改动挑刀谱（宁多勿漏） ----------------
+
+/**
+ * `package.json` 里每条 `test:*` 脚本的入口文件（套件名 → 仓库相对路径）。
+ * 陷阱：别按文件名猜——`test:link` 走的是 `src/web/net.test.ts`、`test:ui` 走的是 `src/web/ui.test.ts`，
+ * 两条都不在 `src/test/`。所以从脚本命令里抽末尾那个入口，而不是拼 `src/test/<name>.test.ts`。
+ */
+function suiteEntries() {
+  const pkg = JSON.parse(readFileSync(join(REPO, 'package.json'), 'utf8'));
+  const map = new Map();
+  for (const [name, cmd] of Object.entries(pkg.scripts ?? {})) {
+    if (!name.startsWith('test:')) continue;
+    const m = String(cmd).match(/(\S+\.(?:ts|mts|cts|js|mjs|cjs))\s*$/);
+    if (m) map.set(name, m[1]);
+  }
+  return map;
+}
+
+/**
+ * 从一份源码里抠出它引到的所有路径：`import`/`export ... from '...'`、裸 `import '...'`、
+ * 动态 `import('...')`，以及 `readFileSync(new URL('...', import.meta.url))` 那种资源引用
+ * （style.test.ts 读 style.css／app.ts／home.ts、desktop.test.ts 读 room.ts／launch.ts／main.ts／host.ts 全靠它）。
+ */
+function refsOf(text) {
+  const out = [];
+  for (const re of [
+    /\bfrom\s*['"]([^'"]+)['"]/g,
+    /\bimport\s*['"]([^'"]+)['"]/g,
+    /\bimport\s*\(\s*['"]([^'"]+)['"]\s*\)/g,
+    /\bnew\s+URL\s*\(\s*['"]([^'"]+)['"]\s*,\s*import\.meta\.url\s*\)/g,
+  ])
+    for (const m of text.matchAll(re)) out.push(m[1]);
+  return out;
+}
+
+/** 一条说明符落到仓库内的哪个文件（省后缀时逐个试）；`node:` 前缀与裸包名不进仓库闭包，返回 null */
+function resolveRef(fromFile, spec) {
+  if (!spec.startsWith('.')) return null;
+  const clean = spec.replace(/[?#].*$/, '');
+  const p = posix.normalize(posix.join(posix.dirname(fromFile), clean));
+  const tries = /\.[A-Za-z0-9]+$/.test(p) ? [p] : [p, `${p}.ts`, `${p}.mjs`, `${p}.js`, `${p}/index.ts`];
+  for (const t of tries) if (existsSync(join(REPO, t))) return t;
+  return null;
+}
+
+/** 一个入口文件的传递引用闭包（含入口自身）：递归展开 import，并把资源引用一并纳入 */
+function closureOf(entryRel) {
+  const seen = new Set();
+  const stack = [entryRel];
+  while (stack.length) {
+    const f = stack.pop();
+    if (seen.has(f)) continue;
+    seen.add(f);
+    let text;
+    try {
+      text = readFileSync(join(REPO, f), 'utf8');
+    } catch {
+      continue;
+    }
+    for (const spec of refsOf(text)) {
+      const r = resolveRef(f, spec);
+      if (r && !seen.has(r)) stack.push(r);
+    }
+  }
+  return seen;
+}
+
+/** `git --name-status` 两种列式：普通 M/A/D 是一列路径；R/C 是「旧 新」两列，两个都算 */
+function nameStatus(args) {
+  const set = new Set();
+  for (const line of run('git', args, { cwd: REPO }).out.split('\n')) {
+    if (!line.trim()) continue;
+    const cols = line.split('\t');
+    if ((cols[0].startsWith('R') || cols[0].startsWith('C')) && cols.length >= 3) {
+      set.add(cols[1]);
+      set.add(cols[2]);
+    } else if (cols[1]) set.add(cols[1]);
+  }
+  return set;
+}
+
+/** 当前改动：暂存＋未暂存＋未跟踪；`--changed` 直接给清单（测试用），`--base` 用三点 diff 再加工作区改动 */
+function changedFiles(base, explicit) {
+  if (explicit != null) return [...new Set(explicit.split(',').map((s) => s.trim()).filter(Boolean))];
+  const set = new Set();
+  if (base) for (const f of nameStatus(['diff', '--name-status', '-M', `${base}...HEAD`])) set.add(f);
+  for (const f of nameStatus(['diff', 'HEAD', '--name-status', '-M'])) set.add(f);
+  for (const line of run('git', ['ls-files', '--others', '--exclude-standard'], { cwd: REPO }).out.split('\n'))
+    if (line.trim()) set.add(line.trim());
+  return [...set];
+}
+
+/** 全局触发：构建/配置/工具链一改谁都可能受影响，一律全跑（tools/** 已含刀架自身） */
+function isGlobal(f, entrySet) {
+  if (/^(package\.json|tsconfig[^/]*\.json|vite\.config\.[cm]?ts|rules\.json)$/.test(f)) return true;
+  if (f.startsWith('tools/')) return true;
+  // 套件入口之外的测试文件：没有别的闭包认领它，只好全跑（入口本身由规则 B 认领）
+  if (f.endsWith('.test.ts') && !entrySet.has(f)) return true;
+  return false;
+}
+
+/**
+ * 选刀并给每张谱子记命中理由：
+ * A 精确（改的文件 == 某刀 rel）；B 套件闭包（改的文件在某个 test:* 入口的传递闭包内）；
+ * C 全局（package.json／tsconfig／vite.config／rules.json／tools/**／非入口测试文件）；D 兜底（src/ desktop/ 下但 A/B 都没认领）。
+ * 全部取并集，宁多勿漏。
+ */
+function selectAffected(specs, changed, entries) {
+  const entrySet = new Set(entries.values());
+  const suiteClosure = new Map();
+  for (const [suite, entry] of entries) suiteClosure.set(suite, closureOf(entry));
+
+  const byRel = new Map();
+  const specSuites = new Map();
+  for (const spec of specs) {
+    const suites = new Set();
+    if (spec.suite) suites.add(spec.suite);
+    for (const k of spec.knives) {
+      if (!byRel.has(k.rel)) byRel.set(k.rel, new Set());
+      byRel.get(k.rel).add(spec);
+      if (k.suite) suites.add(k.suite);
+    }
+    specSuites.set(spec, suites);
+  }
+
+  const reasons = new Map();
+  const add = (spec, r) => {
+    if (!reasons.has(spec)) reasons.set(spec, new Set());
+    reasons.get(spec).add(r);
+  };
+
+  let global = false;
+  const fallback = [];
+  for (const f of changed) {
+    if (isGlobal(f, entrySet)) {
+      global = true;
+      continue;
+    }
+    const relHit = byRel.get(f);
+    const suitesWith = [...suiteClosure].filter(([, cl]) => cl.has(f)).map(([s]) => s);
+    if (relHit) for (const spec of relHit) add(spec, `[rel:${f}]`);
+    for (const suite of suitesWith)
+      for (const spec of specs) if (specSuites.get(spec).has(suite)) add(spec, `[suite:${suite}]`);
+    if (!relHit && !suitesWith.length && (f.startsWith('src/') || f.startsWith('desktop/'))) fallback.push(f);
+  }
+
+  // 全局或兜底都退到「全跑」；兜底另打告警让人工看一眼闭包是不是漏了
+  if (global || fallback.length) for (const spec of specs) add(spec, global ? '[global]' : '[fallback]');
+  return { selected: new Set(reasons.keys()), reasons, global, fallback, suiteClosure };
+}
+
 const only = parseOnly(argv.find((a) => a.startsWith('--only='))?.split('=')[1] ?? null);
 const noBaseline = argv.includes('--no-baseline');
 const verbose = argv.includes('--verbose');
+// --affected 主开关；--changed/--base 是注入改动的入口，--list 只选不跑——三者都进这一档
+const listOnly = argv.includes('--list');
+const base = argv.find((a) => a.startsWith('--base='))?.slice('--base='.length) ?? null;
+const changedArg = argv.find((a) => a.startsWith('--changed='))?.slice('--changed='.length) ?? null;
+const affected = argv.includes('--affected') || listOnly || changedArg != null || base != null;
 
 // --drop 是维护动作：不跑刀，把缓存的副本（含老版本 mkdtemp 留下的随机名残骸）一把清掉
 if (argv.includes('--drop')) {
@@ -153,8 +323,22 @@ if (argv.includes('--drop')) {
   process.exit(0);
 }
 
+// --print-closure=test:net：把某套闸入口的传递闭包打出来（抽查闭包实现用，不跑刀）
+const closureArg = argv.find((a) => a.startsWith('--print-closure='))?.slice('--print-closure='.length);
+if (closureArg) {
+  const entries = suiteEntries();
+  if (!entries.has(closureArg)) {
+    console.error(`--print-closure 认的套件名来自 package.json 的 test:*，没有：${closureArg}`);
+    process.exit(2);
+  }
+  const cl = [...closureOf(entries.get(closureArg))].sort();
+  console.log(`${closureArg} 入口 ${entries.get(closureArg)} 的传递闭包（${cl.length} 个文件）：`);
+  for (const f of cl) console.log(`  ${f}`);
+  process.exit(0);
+}
+
 const wanted = argv.filter((a) => !a.startsWith('--'));
-const files = readdirSync(KNIVES_DIR)
+let files = readdirSync(KNIVES_DIR)
   .filter((f) => f.endsWith('.mjs'))
   .filter((f) => !wanted.length || wanted.includes(f.replace(/\.mjs$/, '')))
   .sort();
@@ -163,12 +347,46 @@ if (!files.length) {
   process.exit(2);
 }
 
+// 先把刀谱读进来：--affected 要按每张谱子的 rel/suite 选，选完再决定跑哪几张
+const loaded = [];
+for (const f of files) loaded.push({ file: f, spec: (await import(pathToFileURL(join(KNIVES_DIR, f)).href)).default });
+const allSpecs = loaded.map((x) => x.spec);
+const totalKnives = allSpecs.reduce((n, s) => n + s.knives.length, 0);
+
+// --affected：按当前改动挑出受影响的谱子（--changed/--base/--list 也进这一档）
+if (affected) {
+  const changed = changedFiles(base, changedArg);
+  if (!changed.length) {
+    console.log('工作区干净：没有改动，不用跑刀');
+    process.exit(0);
+  }
+  const pick = selectAffected(allSpecs, changed, suiteEntries());
+  console.log(`改动文件（${changed.length}）：\n  ${changed.join('\n  ')}`);
+  if (pick.fallback.length)
+    console.log(
+      `\n⚠ 兜底：这些改动在 src/ desktop/ 下，但精确（rel）和套件闭包都没认领——闭包分析可能没覆盖到，人工看一眼：\n  ${pick.fallback.join('\n  ')}`,
+    );
+  // 只留被选中的谱子，并按 --only 数出真正会跑的刀数
+  loaded.splice(0, loaded.length, ...loaded.filter((x) => pick.selected.has(x.spec)));
+  files = loaded.map((x) => x.file);
+  let knifeCount = 0;
+  for (const { spec } of loaded) knifeCount += spec.knives.filter((_, i) => !only || only.has(i + 1)).length;
+  if (pick.selected.size) {
+    console.log('\n选中的刀谱：');
+    for (const { file, spec } of loaded)
+      console.log(`  ${file.replace(/\.mjs$/, '')}  ${[...(pick.reasons.get(spec) ?? [])].sort().join(' ')}`);
+  } else {
+    console.log('\n没有刀谱被这次改动波及——rel 和套件闭包都没命中，不用跑');
+  }
+  console.log(`\n选中 ${pick.selected.size}/${allSpecs.length} 张、${knifeCount}/${totalKnives} 把`);
+  if (listOnly || !pick.selected.size) process.exit(0);
+}
+
 // 仓库干净不干净先记一笔：跑完一个字节都不该变（副本在临时目录里，动不到他家）
 const dirtyBefore = run('git', ['status', '--porcelain'], { cwd: REPO }).out;
 let problems = 0;
 let beltReds = 0;
-for (const f of files) {
-  const spec = (await import(pathToFileURL(join(KNIVES_DIR, f)).href)).default;
+for (const { spec } of loaded) {
   const { abort, rows } = await runSpec(spec, only, noBaseline);
   if (abort) {
     console.log(`\n${spec.title}：${abort}`);
