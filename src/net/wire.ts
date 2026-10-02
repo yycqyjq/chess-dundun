@@ -263,8 +263,12 @@ function publicIds(state: GameState): Set<number> {
 
 /**
  * 打码：把权威状态降成「这个座位只配看见的东西」。
- * hands / trick / draft 里的 id 照发——id 本身不携带任何信息，知道「第 17 号在 P3 手里」
- * 也猜不出它是车是卒，这正是记牌本来该有的信息量。
+ * hands / trick / draft 里的 id 照发，没开的牌只剩这一个 id、不带 label/tier/color/point。
+ * 但要说实话：**id 可推牌面**——`buildPieceSet` 按职级顺序连续编号，职级表又在快照的 rules 里，
+ * 一份快照 + 公开规则足够把未开牌逐张还原（架构体检 H1 实测过）；快照还带着原始 `seed`，
+ * 拿它喂 `createGame` 能整副重放。所以这层打码挡的是「手滑看见」，不是「有心人离线算」——
+ * 手牌保密建立在「同桌可信」上（局域网朋友局的既定取舍，README 威胁边界那段记着账）。
+ * 要放进开放网络，这里得连 seed 一起摘，别拿这段注释当安全承诺。
  */
 export function snapshotFor(state: GameState, seat: number, logUpTo: number): WireState {
   const open = publicIds(state);

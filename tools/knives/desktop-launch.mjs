@@ -5,6 +5,7 @@
  * 窗口开哪条地址、自检算不算过。这四件住在 `desktop/launch.ts`（`main.ts` 引 electron，进不了 node 测试）。
  * 2026-10-01 每把跑过 `npm run knives -- desktop-launch --verbose`，`expect` 从实际红字逐字抄回；
  * N（2026-10-02）照同一条路子量：先把闸改成接 `error` 事件，从 `--verbose` 的红字里抄回那句。
+ * T（2026-10-02）钉单实例锁：摘掉 `requestSingleInstanceLock` 那道闸，desktop.test 的对账当场红（双击图标起两次＝两个 Electron 抢同一份 userData 存档）。
  * 跑法：npm run knives -- desktop-launch（全跑就 npm run knives；看每刀全红几句加 --verbose）
  */
 export default {
@@ -145,6 +146,13 @@ export default {
       from: 'const { port, room } = openTable();',
       to: 'orphanWatch(argv, quit);\nconst { port, room } = openTable();',
       expect: 'host.ts 把那条看门狗拴在开桌之后：拴在前面那一挨就是撞 room 还没定义，桌没存成反倒抛一句',
+    },
+    {
+      rel: 'desktop/main.ts',
+      note: 'T 摘掉单实例锁那道闸：双击图标起两次就是两个 Electron 进程，各自起桌抢同一份 userData 存档（claimSave 挡的是跨进程，挡不住第二个实例起得比第一个快）',
+      from: "if (!selftest && !app.requestSingleInstanceLock()) {\n  console.error('棋墩墩已经开着一个窗口了，先用那个（第二个实例已退出）');\n  app.exit(0);\n}",
+      to: '// 这里本来挡的是双击图标起两次：单实例锁，拆刀时摘掉',
+      expect: '双击图标起两次：第二个实例拿不到单实例锁就当场退出，不跟第一个抢同一份存档',
     },
   ],
 };

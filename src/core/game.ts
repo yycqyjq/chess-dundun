@@ -143,9 +143,38 @@ function checkDealt(total: number, draft: { stackSize: number; ways: AllocWay[] 
  * 职级名打错（那一档覆盖就白写）、人数没进 playerCounts（那档桌压根开不起来）、拿法名字写错、
  * 摞大小发不平。宁可开不起来念一句人话，也别抱着一副坏牌组打到中局。
  */
+/**
+ * 换玩法的那几枚开关，写错一个字符就静默走默认分支：改规则的人以为换了玩法，牌桌纹丝不动；
+ * discardCost 填个「很像人话」的 'all' 更狠——Math.min(NaN,…) 让压不过的人凑不出抵押，整桌走到那步再也动不了。
+ * 照这张表既有的红字风格当场拒，跟 checkDraft 同一个脾气：宁可开不起来念一句人话，也别抱着坏表打到中局。
+ */
+const TIE_BREAKS: readonly string[] = ['leader', 'later'];
+const NEXT_LEADERS: readonly string[] = ['clockwise', 'trick-winner'];
+const GROUP_COMPARES: readonly string[] = ['sameSize', 'sizeFirst', 'topTierFirst'];
+
+/** 明暗两版比牌规则逐槽验。mode 在类型上必填，可 raw 是人手写的 JSON、运行时可能整个没写——先认存在性再验值 */
+function checkModes(mode: ModeRules, at: string): void {
+  if (!mode || typeof mode !== 'object')
+    throw new Error(`rules.json：${at} 这一档的比牌规则没写（得是个对象，带 mustBeatIfAble、groupCompare、discardCost 三格）`);
+  if (typeof mode.mustBeatIfAble !== 'boolean')
+    throw new Error(`rules.json：${at}.mustBeatIfAble 得是 true 或 false，写的是 ${JSON.stringify(mode.mustBeatIfAble)}`);
+  if (!GROUP_COMPARES.includes(mode.groupCompare))
+    throw new Error(`rules.json：${at}.groupCompare 只有 ${GROUP_COMPARES.join(' / ')} 这三种，写的是「${mode.groupCompare}」`);
+  if (!(mode.discardCost === 'same' || (Number.isInteger(mode.discardCost) && mode.discardCost >= 0)))
+    throw new Error(
+      `rules.json：${at}.discardCost 得是 'same'（对方几张抵几张）或非负整数（固定弃几张），写的是 ${JSON.stringify(mode.discardCost)}——填错会让压不过的人凑不出抵押那一步，整桌走到那儿就再也动不了`,
+    );
+}
+
 export function parseRules(raw: Omit<Rules, 'ranks'> & { ranks: readonly RankFile[] }): Rules {
   const { ranks, ...rest } = raw;
   const rules: Rules = { ...rest, ranks: buildRanks(ranks) };
+  if (!TIE_BREAKS.includes(rules.tieBreak))
+    throw new Error(`rules.json：tieBreak（一样大算谁赢）只有 ${TIE_BREAKS.join(' / ')} 这两种，写的是「${rules.tieBreak}」`);
+  if (!NEXT_LEADERS.includes(rules.nextLeader))
+    throw new Error(`rules.json：nextLeader（下一墩谁先出）只有 ${NEXT_LEADERS.join(' / ')} 这两种，写的是「${rules.nextLeader}」`);
+  checkModes(rules.mingqi, 'mingqi');
+  checkModes(rules.kouqi, 'kouqi');
   for (const n of rules.playerCounts)
     if (!Number.isInteger(n) || n < 2)
       throw new Error(`rules.json：playerCounts 里的「${n}」不算一档人数（至少 2 人，且得是整数）`);

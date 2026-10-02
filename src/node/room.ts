@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, normalize, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { networkInterfaces } from 'node:os';
@@ -89,6 +89,27 @@ export function lockPathOf(save: string): string {
 }
 
 /**
+ * 落盘的原子那一下：写 `${file}.tmp` 再 rename 换上去。直怼本体的话，写到一半断电／进程被杀
+ * 就留半截 JSON——restore 只能认「读坏了重开一桌」，整桌账目丢掉。同目录 rename 是原子的：
+ * 要么旧的整份在，要么新的整份在，没有中间态。
+ */
+export function atomicPut(file: string, body: string): void {
+  const tmp = `${file}.tmp`;
+  try {
+    writeFileSync(tmp, body);
+    renameSync(tmp, file);
+  } catch (e) {
+    // 写砸／换不上就把中转名抹掉再往上抛：半截字节留在目录里，下回谁看见都以为是份正经存档
+    try {
+      rmSync(tmp, { force: true });
+    } catch {
+      /* 抹不掉也算了，下次写会盖掉它 */
+    }
+    throw e;
+  }
+}
+
+/**
  * 这把存档能不能占。四种「能」：没人写过、那条写的是另一份存档、写那条的进程已经没了
  * （前人挨 SIGKILL 走的留条不算闸）、还有写的就是自己这个进程同一个端口同一份文件（同一趟里重起一次）。
  * 只看 pid 不算数：同进程不同端口也得拒，不然一台机器上两张桌照样各写各的。
@@ -133,6 +154,24 @@ export function claimSave(save: string, port: number, alive: (pid: number) => bo
   const file = lockPathOf(save);
   const mine: SaveLock = { pid: process.pid, port, save: canonicalSave(save) };
   const body = JSON.stringify(mine);
+  const release = (): void => {
+    // 只摘自己写的那条：这张桌被别人接管过之后，前一个人的收桌不该去拆现在这位的闸
+    try {
+      if (readFileSync(file, 'utf8') === body) rmSync(file, { force: true });
+    } catch {
+      /* 读不回就当不是我的 */
+    }
+  };
+  // 抢位这一步必须原子：`wx`＝不存在才创建，同时起的两张桌 OS 只放一张过去。
+  // 旧写法「读→判→写」三步中间有窗口——两张桌同起，双双读到没人占、双双放行，
+  // 后写的条盖掉前一张，然后各写各的 table.json（README 立这道闸挡的就是 2026-09-30 那次双写）。
+  try {
+    writeFileSync(file, body, { flag: 'wx' });
+    return release;
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e;
+  }
+  // 没抢到：条已在——读回来判活，「接管死人留条」和「被活人拒」都从这条走
   let held: SaveLock | null = null;
   try {
     const raw = JSON.parse(readFileSync(file, 'utf8')) as Partial<SaveLock>;
@@ -148,14 +187,7 @@ export function claimSave(save: string, port: number, alive: (pid: number) => bo
   if (lockVerdict(held, mine, alive) === 'taken')
     throw new Error(`这份存档（${save}）已经被 ${held!.port} 端口上那张桌占着（进程 ${held!.pid}）：先关掉那张，或者给这一张另加 --save=另一份文件`);
   writeFileSync(file, body);
-  return () => {
-    // 只摘自己写的那条：这张桌被别人接管过之后，前一个人的收桌不该去拆现在这位的闸
-    try {
-      if (readFileSync(file, 'utf8') === body) rmSync(file, { force: true });
-    } catch {
-      /* 读不回就当不是我的 */
-    }
-  };
+  return release;
 }
 
 /**
@@ -311,17 +343,35 @@ export function openRoom(argv: string[], port: number): Room {
 
   const table = restore() ?? new Table(setup, send, tell);
 
-  /** 真往硬盘上写的那一下 */
-  function write(): void {
-    writeFileSync(savePath, table.save());
-  }
   let due: ReturnType<typeof setTimeout> | null = null;
+  /**
+   * 真往硬盘上写的那一下：先写 `.tmp` 再 rename 换上去——`writeFileSync` 直怼本体，
+   * 写到一半断电就是半截 JSON，restore 认「读坏了重开一桌」，整桌账目没了（能回音，代价是整局）。
+   * 写失败（磁盘满、权限不对）不许抛穿：这颗 write 跑在 300ms 合批的 timer 回调里，
+   * 从 timer 抛出去就是 uncaughtException 带走全桌——对照 serve.ts「读不出来别让整个进程跟着抛」的口径，
+   * 静态服务侧有闸、存档侧不能没有。失败念一句人话，然后停掉本桌的落盘（saveOff），
+   * 牌局照打，只是 Ctrl-C 之后接不回来。
+   */
+  let saveOff = false;
+  function write(): void {
+    if (saveOff) return;
+    try {
+      atomicPut(savePath, table.save());
+    } catch (e) {
+      saveOff = true;
+      if (due) {
+        clearTimeout(due);
+        due = null;
+      }
+      console.log(`存档写不下去（${(e as Error).message}），本桌继续但不落盘：Ctrl-C 后接不回这一段`);
+    }
+  }
   /**
    * 落盘合批：一手牌要写三四回（每人一份快照、每位连接一次进出），
    * 而这份存档只用来在 Ctrl-C 之后接桌——差半秒不碍事，攒一起写就别让硬盘一直响。
    */
   function persist(): void {
-    if (due) return;
+    if (saveOff || due) return;
     due = setTimeout(() => {
       due = null;
       write();
@@ -337,6 +387,8 @@ export function openRoom(argv: string[], port: number): Room {
       due = null;
     }
     rmSync(savePath, { force: true });
+    // 原子写那颗中转名也一起抹：上回写一半没换上去的，不该在散桌之后还躺在硬盘上等人捡
+    rmSync(`${savePath}.tmp`, { force: true });
   }
   // 一开桌就落一次盘：还没人坐过椅子就断掉，重启也接得回这一桌的牌面
   write();

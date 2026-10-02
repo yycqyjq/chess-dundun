@@ -8,7 +8,7 @@ import { connect as netConnect, type Socket } from 'node:net';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
-import { pendingSeats, rulesFor, type Action, type GameState } from '../core/game.ts';
+import { parseRules, pendingSeats, rulesFor, type Action, type GameState } from '../core/game.ts';
 import { nextDrawer, openMatch } from '../core/match.ts';
 import { buildPieceSet } from '../core/pieces.ts';
 import { mulberry32 } from '../core/rng.ts';
@@ -1259,6 +1259,46 @@ console.log('占位条上那份存档路径怎么认到底');
   second.room?.close();
 }
 
+{
+  // 存档写不下去（磁盘满、权限不对、存档路径被占成一个目录）：这颗 write 跑在 300ms 合批的 timer 回调里，
+  // 从 timer 抛出去就是 uncaughtException 带走全桌——对照 serve.ts「读不出来别让整个进程跟着抛」的口径，
+  // 静态服务侧有闸、存档侧不能没有。把存档位建成一个目录：atomicPut 换名那一步必然砸，量四件事：
+  // 起桌不炸、那句人话念得出来、半截中转名不留、桌继续跑。
+  const dir = mkdtempSync(join(tmpdir(), 'qdd-savefail-'));
+  const asFile = join(dir, '存档位');
+  mkdirSync(asFile);
+  const said: string[] = [];
+  const rawLog = console.log;
+  const cap = (into: string[]) => (...a: unknown[]): void => void into.push(a.map(String).join(' '));
+  console.log = cap(said);
+  const first: { room: Room | null; err: string } = { room: null, err: '' };
+  try {
+    first.room = openRoom(['--no-discover', '--fresh', `--save=${asFile}`], 5903);
+  } catch (e) {
+    first.err = String((e as Error).message);
+  } finally {
+    console.log = rawLog;
+  }
+  ok('存档写不下去，起桌不许当场炸（牌局比硬盘金贵）', first.err === '' && first.room !== null, first.err);
+  ok('念得出去哪了：「存档写不下去」那句人话得出来', said.some((l) => l.includes('存档写不下去')), said.join('｜'));
+  ok('失败那一下不留半截中转名（半截字节躺在目录里，下回谁看见都以为是份正经存档）', !existsSync(`${asFile}.tmp`), `${asFile}.tmp 还在`);
+  ok('本桌继续跑：牌桌照常答话', first.room !== null && first.room.table.lobby().status === 'waiting', first.room ? first.room.table.lobby().status : '没起成');
+  // 收桌：write 走 saveOff 早退，不该被上回那次失败卡住；latch 真闩上的话也不该再试写一遍
+  const after: string[] = [];
+  console.log = cap(after);
+  let closed = '';
+  try {
+    first.room?.close();
+  } catch (e) {
+    closed = String((e as Error).message);
+  } finally {
+    console.log = rawLog;
+  }
+  ok('收桌不被写失败卡住（停落盘 ≠ 停收桌）', closed === '', closed);
+  ok('停落盘真闩上了：收桌不再反复试写', !after.some((l) => l.includes('存档写不下去')), after.join('｜'));
+  ok('收桌照样把占位条摘了（闸只管占位，跟落不落盘是两码事）', !existsSync(lockPathOf(asFile)), peekLock(lockPathOf(asFile)));
+}
+
 // ───────────────────────── 一秒一次的表：动了手才要落盘 ─────────────────────────
 
 {
@@ -1337,6 +1377,44 @@ console.log('占位条上那份存档路径怎么认到底');
     rolled = String((e as Error).message);
   }
   ok('线上还原的状态不许掷骰子', rolled.includes('随机数'), rolled);
+}
+
+{
+  // ─── 既定取舍的检测闸（不是防线，是账本）──────────────────────────
+  // 联机暗棋的扣牌保密建立在「同桌可信」上——README「威胁边界」那段签过字的两笔账：
+  // ① 快照带着牌局原始 seed（为的是「按种子复现这一副牌」，状态栏/战报/报错都念它）；
+  // ② 未开牌只剩 id，而 id→牌名是公开规则表的固定函数（pieces.ts 按职级连续编号）。
+  // 合起来：任何连得上这桌的人，拿快照里的公开字段就能把别家扣牌逐张还原。
+  // 这里钉住现状——哪天要放到公网、让陌生人可坐，这两条会红，提醒你
+  // 直接上「服务端权威、增量下发视图」，别做摘 seed 那种半吊子（单做挡不住 ②）。
+  const { table } = openedTable({ mode: 'kou' });
+  const state = table.state;
+  finishDraft(table);
+  const foe = 1;
+  const view = snapshotFor(state, 0, state.log.length);
+
+  ok(
+    '既定取舍①：快照里带着牌局原始 seed（要摘它＝改协议，先读 README 威胁边界那段）',
+    view.seed === state.seed,
+    `view.seed=${view.seed} vs state.seed=${state.seed}`,
+  );
+
+  // ②的重放腿：攻击者只用快照里公开的 rules 就能造出 id→牌名表——不碰 seed、不碰 label
+  const publicRules = parseRules(view.rules);
+  const idName = new Map(buildPieceSet(publicRules.ranks).map((p) => [p.id, p.label]));
+  const foeHand = state.hands[foe]!;
+  const decoded = foeHand.map((id) => idName.get(id));
+  const truth = foeHand.map((id) => state.byId.get(id)!.label);
+  ok(
+    '既定取舍②：对手扣牌的 id 用快照自带的规则表逐张还原成牌名（同桌可信才挡得住）',
+    decoded.length === truth.length && decoded.every((name, i) => name !== undefined && name === truth[i]),
+    `还原前 3 张：${decoded.slice(0, 3).join('/')}｜真值：${truth.slice(0, 3).join('/')}`,
+  );
+  ok(
+    '这条检测闸的前提没变：对手的牌在快照里确实只剩光 id（label 没漏）',
+    foeHand.every((id) => pieceOf(view, id)?.label === undefined),
+    '',
+  );
 }
 
 {

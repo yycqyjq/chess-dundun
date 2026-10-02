@@ -125,6 +125,8 @@ console.log('判断确实住在 launch.ts');
   ok('main.ts 也接了 spawn 那条 error：那种下场 exit 不响，没人接就是把主进程连那串参数一起崩掉', code.includes("proc.once('error'"));
   ok('等桌开口有一条不靠请求回应的硬闸：body 卡在半截就是没下场，只靠重试那一排能一直干等', code.includes('setTimeout(() => res(false), READY_MS)'));
   ok('读页面接了 aborted：header 已回、body 永远不到时 req 那条 error 不会响，不接这句自检就永不收尾', code.includes("r.on('aborted'"));
+  // 一台机器一个实例：双击图标两下就是两个 Electron 进程，各自起桌抢同一份 userData 存档（claimSave 的闸挡的是跨进程，挡不住同机第二个 Electron 起得比它快）
+  ok('双击图标起两次：第二个实例拿不到单实例锁就当场退出，不跟第一个抢同一份存档', code.includes('app.requestSingleInstanceLock()') && code.includes('app.exit(0)'));
   const host = readFileSync(new URL('../../src/node/host.ts', import.meta.url), 'utf8');
   ok('host.ts 把那条看门狗拴在开桌之后：拴在前面那一挨就是撞 room 还没定义，桌没存成反倒抛一句', host.includes('orphanWatch(argv, quit)') && host.indexOf('orphanWatch(argv, quit)') > host.indexOf('openTable();'));
 }

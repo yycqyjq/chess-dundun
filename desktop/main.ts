@@ -28,6 +28,15 @@ const selftest = process.argv.some((a) => a === '--selftest' || a === '--selftes
 
 let child: ChildProcess | null = null;
 
+// 一台机器一个实例：双击图标两下就是两个 Electron 进程，各自起一桌抢同一份 userData 存档——
+// claimSave 那道「读→判→写」之间有窗口，两个都可能读到空条双双放行，两张桌同写一份 table.json。
+// 拿不到单实例锁就当场退出（不 `app.quit()` 走异步退出：那时 whenReady 可能已经排队，还会闪一个窗口）。
+// selftest 不受它管：桌面自测（`desktop:selftest`）本来就是一次性脚本，跟开发时开着的窗口不该互相挤掉。
+if (!selftest && !app.requestSingleInstanceLock()) {
+  console.error('棋墩墩已经开着一个窗口了，先用那个（第二个实例已退出）');
+  app.exit(0);
+}
+
 app.whenReady().then(async () => {
   if (!existsSync(HOST_TS) || !existsSync(join(ROOT, 'dist', 'index.html'))) {
     console.error(`桌面上这桌开不起来：找不到 ${HOST_TS} 或 ${join(ROOT, 'dist', 'index.html')}（先 npm run build）`);

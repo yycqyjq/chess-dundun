@@ -464,6 +464,25 @@ const threeOk = (): Partial<VariantFile> => ({ ranks: { '兵卒': [4, 4] }, draf
 refuses('一摞张数除不尽家数', v3({ ...threeOk(), draft: { stackSize: 4 } }), '多出一截');
 refuses('3 人档加回整摞轮流拿（10 摞分 3 家必然不等张）', v3({ ...threeOk(), draft: { stackSize: 3, ways: badWays('layered', 'stacks-left') } }), '要么改一摞张数，要么 ways 只留 layered');
 
+// 换玩法那几枚开关以前不设闸：写错静默走默认分支，discardCost 填个像人话的 'all' 更会让压不过的人凑不出抵押、整桌死锁。
+const bad = (patch: Record<string, unknown>): RawRules => ({ ...raw(), ...patch }) as unknown as RawRules;
+refuses('tieBreak 写错（以前静默按 leader 跑）', bad({ tieBreak: 'laer' }), 'tieBreak（一样大算谁赢）');
+refuses('nextLeader 多个尾空格（以前静默按 trick-winner 跑）', bad({ nextLeader: 'clockwise ' }), 'nextLeader（下一墩谁先出）');
+refuses('groupCompare 大小写写歪', bad({ mingqi: { ...raw().mingqi, groupCompare: 'samesize' } }), 'groupCompare');
+refuses('mustBeatIfAble 写成字符串 yes', bad({ kouqi: { ...raw().kouqi, mustBeatIfAble: 'yes' } }), 'mustBeatIfAble');
+refuses('discardCost 填个像人话的 all（不拦会让整桌走到死锁那步）', bad({ mingqi: { ...raw().mingqi, discardCost: 'all' } }), '得是');
+refuses('discardCost 填负数', bad({ kouqi: { ...raw().kouqi, discardCost: -1 } }), 'discardCost');
+refuses('mingqi 整档没写', bad({ mingqi: undefined }), '比牌规则没写');
+// 正数固定弃张是合法写法，别把闸拉过头：这一条守住「该放的还得放」
+ok('discardCost 固定 2 张照收', (() => {
+  try {
+    parseRules(bad({ mingqi: { ...raw().mingqi, discardCost: 2 } }));
+    return true;
+  } catch {
+    return false;
+  }
+})());
+
 console.log('\n本墩最大的人领下一墩');
 const spin = toPlay(
   createGame({ rules: base, players: 4, mode: 'ming', seed: 6 }),
