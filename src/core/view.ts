@@ -34,11 +34,33 @@ export interface View {
   piece(id: number): Piece;
 }
 
-export function viewFor(state: GameState, seat: number): View {
+export interface OpenOpts {
+  /** 本座摊在桌上那一墩（plays/discards）也算公开——单机版鼠标压上去能看见自己扣着出的牌，联机快照不能少这一口 */
+  includeOwnTable?: boolean;
+}
+
+/**
+ * 「哪些牌公开」的单一出口：集合口径。
+ * base = revealed（明棋出过的 + 每墩翻开结算的）；摆牌阶段抽出的那张签在 draft 未清空时也算公开；
+ * 自己的手牌永远亮着；`includeOwnTable` 时再加本座在这一墩 plays/discards 里的牌。
+ * 单张判据 isFaceDown 是同一口径的逐张形式，写侧 reveal/maybeCloseTrick 决定谁进 revealed。
+ */
+export function openSet(state: GameState, seat: number, opts: OpenOpts = {}): Set<number> {
   const open = new Set<number>(state.revealed);
   // 签牌只在摆牌这一段算公开，分完牌 draft 清空它就跟着扣进手里——和 isFaceDown 同一口径
   if (state.draft && state.draft.drawn >= 0) open.add(state.draft.drawn);
   for (const id of state.hands[seat]) open.add(id);
+  if (opts.includeOwnTable && state.trick) {
+    for (const p of [...state.trick.plays, ...state.trick.discards]) {
+      if (p.player !== seat) continue;
+      for (const id of p.pieceIds) open.add(id);
+    }
+  }
+  return open;
+}
+
+export function viewFor(state: GameState, seat: number): View {
+  const open = openSet(state, seat);
   const unknownTiers: number[] = [];
   for (const p of state.pieces) {
     if (open.has(p.id)) continue;

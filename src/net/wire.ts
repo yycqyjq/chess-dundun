@@ -1,4 +1,5 @@
 import { countsText, parseRules, type Action, type AllocWay, type GameState, type Rules } from '../core/game.ts';
+import { openSet } from '../core/view.ts';
 import type { MatchBook } from '../core/match.ts';
 import { LEVELS, type Level } from '../ai/agent.ts';
 import type { RankFile } from '../core/pieces.ts';
@@ -254,13 +255,6 @@ export type ToClient =
   | { t: 'rooms'; rooms: FoundRoom[]; why: string }
   | { t: 'pong'; at: number };
 
-/** 一张牌公开了没。口径跟引擎的 isFaceDown 一致，不另起一套 */
-function publicIds(state: GameState): Set<number> {
-  const open = new Set<number>(state.revealed);
-  if (state.draft && state.draft.drawn >= 0) open.add(state.draft.drawn);
-  return open;
-}
-
 /**
  * 打码：把权威状态降成「这个座位只配看见的东西」。
  * hands / trick / draft 里的 id 照发，没开的牌只剩这一个 id、不带 label/tier/color/point。
@@ -271,18 +265,8 @@ function publicIds(state: GameState): Set<number> {
  * 要放进开放网络，这里得连 seed 一起摘，别拿这段注释当安全承诺。
  */
 export function snapshotFor(state: GameState, seat: number, logUpTo: number): WireState {
-  const open = publicIds(state);
-  // 自己的手牌永远亮着
-  for (const id of state.hands[seat]) open.add(id);
-  // 自己这一墩摊在桌上的那套也亮着：单机版里鼠标压上去就能看见自己扣着出的牌，联机不能少这一口
-  const trick = state.trick;
-  if (trick) {
-    for (const p of [...trick.plays, ...trick.discards]) {
-      if (p.player !== seat) continue;
-      for (const id of p.pieceIds) open.add(id);
-    }
-  }
-  return build(state, open, logUpTo);
+  // 自己的手牌永远亮着；本座这一墩摊在桌上的那套也亮着（单机版鼠标压上去就能看见自己扣着出的牌）
+  return build(state, openSet(state, seat, { includeOwnTable: true }), logUpTo);
 }
 
 /** 桌自己存档用的那份：全公开，恢复出来才是一副完整的牌 */

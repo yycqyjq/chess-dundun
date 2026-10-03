@@ -538,7 +538,11 @@ export function layout(state: GameState, view: TableView, board: Board): Map<num
     out.set(id, { x: 0, y: 0, rot: 0, scale: 1, down: false, z: seq++, delay: 0, cls: '', ...p });
   };
 
-  /** 亮不亮：我自己的牌永远亮，别人手里/桌上的牌只有公开过的才亮——公开口径统一问引擎的 isFaceDown */
+  /**
+   * 亮不亮：我自己的牌永远亮，别人手里/桌上的牌只有公开过的才亮。
+   * 单张口径问引擎 isFaceDown，集合口径的单一出口在 core/view.ts 的 openSet（wire 快照与 viewFor 都走它）——
+   * 这里保留 mine || !isFaceDown 的逐张写法（board 性能与 mine 语义另行评估，暂不并入 openSet）。
+   */
   const faceUp = (id: number, mine: boolean): boolean => {
     if (view.holdDown.has(id)) return false;
     return mine || !isFaceDown(state, id);

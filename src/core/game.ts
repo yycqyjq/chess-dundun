@@ -539,7 +539,10 @@ function reveal(state: GameState, pieceIds: number[]): void {
   if (state.mode === 'ming') for (const id of pieceIds) state.revealed.add(id);
 }
 
-/** 亮不亮的唯一口径。签牌只在摆牌那一段公开：draft 一清空它就跟着扣进手里 */
+/**
+ * 亮不亮的唯一口径（逐张形式）。签牌只在摆牌那一段公开：draft 一清空它就跟着扣进手里。
+ * 集合口径的单一出口在 view.ts 的 openSet（wire 快照与 viewFor 都走它）；写侧 reveal/maybeCloseTrick 决定谁进 revealed。
+ */
 export function isFaceDown(state: GameState, id: number): boolean {
   return !state.revealed.has(id) && state.draft?.drawn !== id;
 }
