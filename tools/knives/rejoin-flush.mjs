@@ -12,8 +12,8 @@ export default {
     {
       rel: 'src/web/net.ts',
       note: 'A 断线那几秒的一手又攒进补发队列',
-      from: `    if (msg.t === 'act') return false;`,
-      to: `    // 刀：旧口径，act 照旧排队`,
+      from: `    if (msg.t !== 'act') this.h.onStatus('这句没递上去：和桌断了。');`,
+      to: `    this.outbox.push(text); // 刀：旧口径突变，act 也攒进队列`,
       expect: '断线时按下的那一手压根没排队，回来看不见旧牌面',
     },
     {

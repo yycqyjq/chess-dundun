@@ -146,9 +146,11 @@ export class Link {
   private tries = 0;
   private shut = false;
   /**
-   * 断线期间攒下的「桌边话」（入座、开局、改配置）——握手一成就补发。
-   * 出牌一律不进这个队列：那一手是拿旧牌面算出来的，补回去只会出错子，
-   * 与其让桌默默拒掉，不如当场告诉用户「没递上去」，让他照最新牌面重按。
+   * 断线期间攒下的话——握手一成就补发。只留 join/stand（认座、让座）：这两句跟人绑定、
+   * 幂等，断了也得留住，回来先补上；队列封顶 32 封，满了丢最老的那封，断得久也不会无限涨。
+   * 出牌不进这个队列：那一手是拿旧牌面算出来的，补回去只会出错子，当场作废（调用方那边已有 toast）。
+   * 其余（问座位表、寻桌、开局、改配置、散桌、探活）都是照当下牌面说的话，攒到连回来就过期了，
+   * 不入队，当场回一句「没递上去」，别让人以为按了没反应。
    */
   private outbox: string[] = [];
   /** 最后一次听见桌说话是什么时候：任何一句都算，包括看不懂的 */
@@ -205,8 +207,15 @@ export class Link {
       this.ws!.send(text);
       return true;
     }
-    if (msg.t === 'act') return false;
-    this.outbox.push(text);
+    // 断线了，只有认座/让座这两句留住：它们跟人绑、幂等，回来先补上；队列封顶 32，满了丢最老
+    if (msg.t === 'join' || msg.t === 'stand') {
+      if (this.outbox.length >= 32) this.outbox.shift();
+      this.outbox.push(text);
+      return false;
+    }
+    // act 是拿旧牌面算的一手，补回去只会出错子：调用方（app.ts）那边已经有一句「没递上去」的
+    // toast，这里当场作废、不再重复报。其余都是照当下牌面说的话，攒到回来就过期了——当场回一句。
+    if (msg.t !== 'act') this.h.onStatus('这句没递上去：和桌断了。');
     return false;
   }
 

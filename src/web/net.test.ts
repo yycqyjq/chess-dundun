@@ -132,12 +132,31 @@ function make(now?: () => number): { link: Link; sock: () => FakeSocket; log: st
   ok('一上来就去敲门，路径固定 /ws', s.url === `ws://${host}/ws`, s.url);
   ok('还没连上：递动作回 false', link.send({ t: 'act', action: { kind: 'draw', stackIdx: 0 } }) === false);
   ok('还没连上：问座位表也回 false', link.send({ t: 'lobby' }) === false);
+  ok('还没连上：寻桌那句也回 false', link.send({ t: 'find' }) === false);
+  ok('还没连上：认座那句留住，回来补发', link.send({ t: 'join', seat: -1, token: '', nick: 'AB' }) === false);
   s.raise();
   ok('握手成功那一下先认椅子：onReady 跑的时候一条都还没发', log.includes('ready:0'), log.join('|'));
-  ok('认完椅子才补发攒下的那句', s.sent.length === 1 && JSON.parse(s.sent[0]!).t === 'lobby', s.sent.join());
+  ok('认完椅子才补发攒下的那句', s.sent.length === 1 && JSON.parse(s.sent[0]!).t === 'join', s.sent.join());
   ok('断线时按下的那一手压根没排队，回来看不见旧牌面', !s.sent.some((x) => JSON.parse(x).t === 'act'));
+  ok('断线时问座位表那句不入队，回来收不到', !s.sent.some((x) => JSON.parse(x).t === 'lobby'));
+  ok('断线时寻桌那句也不入队，回来收不到', !s.sent.some((x) => JSON.parse(x).t === 'find'));
+  ok('没攒下的那几类当场回了「没递上去」，人看得见', log.some((x) => x.startsWith('status:') && x.includes('没递上去')), log.join('|'));
   ok('连着的时候递动作：当场就走，回 true', link.send({ t: 'act', action: { kind: 'draw', stackIdx: 1 } }) === true);
   ok('连着时那句动作排在补发之后', JSON.parse(s.sent[1]!).t === 'act');
+  link.close();
+}
+
+// ---------- 断线攒话有上限：只留最近 32 封，最老的丢掉 ----------
+{
+  made.length = 0;
+  const { link, sock } = make();
+  const s = sock();
+  for (let i = 0; i < 40; i++) link.send({ t: 'join', seat: i, token: '', nick: `N${i}` });
+  s.raise();
+  ok('断线攒话封顶 32 封：回来只补最后 32 条', s.sent.length === 32, `补了 ${s.sent.length} 条`);
+  const first = JSON.parse(s.sent[0]!) as { seat: number };
+  const last = JSON.parse(s.sent[s.sent.length - 1]!) as { seat: number };
+  ok('丢的是最老的：留下第 8 到第 39 条', first.seat === 8 && last.seat === 39, `${first.seat}→${last.seat}`);
   link.close();
 }
 
