@@ -13,7 +13,7 @@ import { mulberry32 } from '../core/rng.ts';
 import { aliveSeats, deckFor, hydrate, type SeatInfo, type Seats, type TableStatus, type ToClient } from '../net/wire.ts';
 import { LIST_REFRESH_MS, peerNote, JOIN_QUERY, type FoundRoom } from '../net/discover.ts';
 import { ctrlLift, draftShape, handCramped, labelBands, LABEL_W, layout, maxStacks, pieceSize, stackSpots, type Board, type TableView } from './board.ts';
-import { autoSeat, BACK, entryHead, fillAddr, homePanel, hostHanded, hostJump, inAppShell, initialScreen, isLoopback, roomRow, seatOption } from './home.ts';
+import { autoSeat, BACK, entryHead, fillAddr, homePanel, hostHanded, hostJump, inAppShell, initialScreen, isLoopback, roomRow, seatOption, seatRowText } from './home.ts';
 import { aiActionFor, closedTable, newGameState, reportText, settleMatch, stepAndMask, type OnTable } from './local.ts';
 import { deviceNick, forget, Link, recall, remember, setTableAddr, shouldWake, tableAddr } from './net.ts';
 import { MOVE_MS, Pieces } from './pieces.ts';
@@ -535,48 +535,21 @@ export class App {
         if (!row) return;
         // 自己那把椅子候场时给一条退路：坐错了、或者这桌要减人，都得先让座
         row.classList.toggle('mine', waiting && this.seated && s.seat === this.me);
-        // 房主位标出来：跑命令那位就认得该坐哪把，别人也知道开局那颗在谁手上
-        row.querySelector('.who')!.textContent =
-          seat === l.hostSeat ? `${seatName(s.seat)} · 房主位` : seatName(s.seat);
-        // 一把椅子是谁坐的得看得见：同一台机器开两个标签页，只写「有人」就分不清哪把归谁
-        const own = this.seated && this.me === seat;
-        const back = mine?.seat === seat;
-        const who = s.nick ? ` · ${s.nick}` : '';
-        row.querySelector('.t')!.textContent = s.online
-          ? own
-            ? s.queued
-              ? '你在这儿 · 这一局先由电脑打'
-              : '你在这儿'
-            : s.queued
-              ? `有人${who} · 这一局先由电脑打`
-              : `有人${who}`
-          : s.taken
-            ? own || back
-              ? `掉线了${who}，凭令牌坐得回来`
-              : `掉线了${who}`
-            : s.ai
-              ? '电脑补位'
-              : waiting
-                ? '空着'
-                : '电脑位';
+        // 一行三处字（谁／状态／按钮）整段状态机住在 home.ts，这儿只把结果写进 DOM
+        const txt = seatRowText(s, {
+          waiting,
+          seated: this.seated,
+          me: this.me,
+          hostSeat: l.hostSeat,
+          savedSeat: mine?.seat ?? null,
+        });
+        row.querySelector('.who')!.textContent = txt.who;
+        row.querySelector('.t')!.textContent = txt.tag;
         const btn = row.querySelector('button')!;
-        // 正坐着的那把椅子，那颗按钮永远是灰的「你坐这儿」——按不动的按钮就是噪音，直接撤掉。
-        // 桌那边线掉了、这把椅子还认得你，才给一颗按得动的「坐回这位」
-        const rejoin = !s.online && (own || back);
-        btn.hidden = own && s.online;
-        btn.textContent = rejoin
-          ? '坐回这位'
-          : back
-            ? '回到这位'
-            : s.taken
-              ? '这把有主'
-              : waiting
-                ? seat === l.hostSeat
-                  ? '坐下 · 当房主'
-                  : '坐下'
-                : '坐下 · 等下一局';
-        btn.disabled = s.online || (s.taken && !back);
-        btn.classList.toggle('primary', !btn.disabled);
+        btn.hidden = txt.hidden;
+        btn.textContent = txt.btn;
+        btn.disabled = txt.disabled;
+        btn.classList.toggle('primary', txt.primary);
       });
 
       const urls = inviteUrls(l.lan);

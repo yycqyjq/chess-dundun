@@ -2,7 +2,7 @@ import { anchor, button, div, input } from './ui.ts';
 import { rulesFor, seatName, type Rules } from '../core/game.ts';
 import { buildPieceSet } from '../core/pieces.ts';
 import { foundLine, roomUrl, type FoundRoom } from '../net/discover.ts';
-import type { Lobby } from '../net/wire.ts';
+import type { Lobby, SeatInfo } from '../net/wire.ts';
 import type { Saved } from './net.ts';
 
 /** 本机自己打开页面（127／localhost／[::1）的那几种写法 */
@@ -165,6 +165,90 @@ export function hostHanded(from: number, to: number, seats: { taken: boolean; ni
   return seats[from]?.taken
     ? `房主位刚交给 ${now}，上一把在 ${who(from)} 手上`
     : `房主位刚交给 ${now}，上一把 ${who(from)} 那把空出来了`;
+}
+
+/** 候场厅一行座位的那份上下文：这台设备是谁、坐没坐下、房主位在哪把、存着哪把的令牌 */
+export interface SeatRowCtx {
+  /** 桌还没开局：空椅念「空着」，坐下那颗也按候场那一档给字 */
+  waiting: boolean;
+  /** 这台设备自己坐下了没 */
+  seated: boolean;
+  /** 这台设备坐的是哪把 */
+  me: number;
+  /** 此刻代持房主位的那把 */
+  hostSeat: number;
+  /** 这台设备存着的座位号（令牌还在手里），没存过是 null */
+  savedSeat: number | null;
+}
+
+/** 一行座位要写进 DOM 的那三处字与三个开关，全是这一座这一刻的快照说了算 */
+export interface SeatRowText {
+  who: string;
+  tag: string;
+  btn: string;
+  /** 自己正坐着那把：那颗按钮整个撤掉（按不动的按钮就是噪音） */
+  hidden: boolean;
+  disabled: boolean;
+  primary: boolean;
+}
+
+/**
+ * 候场厅一行座位里「谁／状态／按钮」那三处字。整段状态机从 app.ts 抽出来住在这儿，
+ * 是因为 app.ts 经 `rules.json?raw` 进不了 node 测试——哪把椅子念什么、哪颗按钮按不按得动，
+ * 得有闸盯着。座位号一律取 `s.seat`（座位表按椅子号排，和行号同值）。
+ *
+ * 三处各管一件事，分支顺序都不能换：
+ * - `.who`：房主位那把多缀一句「房主位」，跑命令那位才认得该坐哪；
+ * - `.t`：先看连没连（连着→「有人／你在这儿」），再看坐过没（「掉线了…凭令牌坐得回来」）、
+ *   再是不是电脑补位，最后才分候场中「空着」和开打后「电脑位」；
+ * - 按钮：掉线且这把还认你（自己坐过／令牌还在这台设备）才给一颗按得动的「坐回这位」，
+ *   正坐着的自己那颗直接撤掉，其余按「有没有主／候场没候场」给字。
+ */
+export function seatRowText(s: SeatInfo, ctx: SeatRowCtx): SeatRowText {
+  const seat = s.seat;
+  const own = ctx.seated && ctx.me === seat;
+  const back = ctx.savedSeat === seat;
+  // 同一台机器开两个标签页，只写「有人」就分不清哪把归谁：谁报过代号就把代号缀上
+  const nick = s.nick ? ` · ${s.nick}` : '';
+  const tag = s.online
+    ? own
+      ? s.queued
+        ? '你在这儿 · 这一局先由电脑打'
+        : '你在这儿'
+      : s.queued
+        ? `有人${nick} · 这一局先由电脑打`
+        : `有人${nick}`
+    : s.taken
+      ? own || back
+        ? `掉线了${nick}，凭令牌坐得回来`
+        : `掉线了${nick}`
+      : s.ai
+        ? '电脑补位'
+        : ctx.waiting
+          ? '空着'
+          : '电脑位';
+  // 桌那边线掉了、这把椅子还认得你（正坐着／令牌在手上），才给一颗按得动的「坐回这位」
+  const rejoin = !s.online && (own || back);
+  const btn = rejoin
+    ? '坐回这位'
+    : back
+      ? '回到这位'
+      : s.taken
+        ? '这把有主'
+        : ctx.waiting
+          ? seat === ctx.hostSeat
+            ? '坐下 · 当房主'
+            : '坐下'
+          : '坐下 · 等下一局';
+  const disabled = s.online || (s.taken && !back);
+  return {
+    who: seat === ctx.hostSeat ? `${seatName(seat)} · 房主位` : seatName(seat),
+    tag,
+    btn,
+    hidden: own && s.online,
+    disabled,
+    primary: !disabled,
+  };
 }
 
 /**

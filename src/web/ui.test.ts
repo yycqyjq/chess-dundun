@@ -31,6 +31,8 @@ import {
   normAddr,
   roomRow,
   seatOption,
+  seatRowText,
+  type SeatRowCtx,
   wantsJoin,
 } from './home.ts';
 import type { Rules } from '../core/game.ts';
@@ -700,6 +702,92 @@ function planOf(spotFor: (i: number) => Placed): Map<number, Placed> {
   ok('头一份座位表不补念（上一份记的是 -1，页面刚打开）', hostJump(-1, 2) === false);
   ok('房主位没动不念：不然挂六秒摘掉又重讲一遍', hostJump(2, 2) === false);
   ok('真换了才念，往哪边跳都算（还回「家」那把也是一次交接）', hostJump(2, 0) === true && hostJump(0, 2) === true);
+}
+
+// ---------- 候场厅一行座位：谁／状态／按钮三处字（home.ts 的 seatRowText） ----------
+
+{
+  const slot = (n: number, over: Partial<SeatInfo> = {}): SeatInfo => ({
+    seat: n,
+    name: `P${n + 1}`,
+    online: false,
+    taken: false,
+    ai: false,
+    human: false,
+    queued: false,
+    nick: '',
+    ...over,
+  });
+  const at = (over: Partial<SeatRowCtx> = {}): SeatRowCtx => ({
+    waiting: true,
+    seated: false,
+    me: -1,
+    hostSeat: 0,
+    savedSeat: null,
+    ...over,
+  });
+
+  const empty = seatRowText(slot(1), at());
+  ok(
+    '空座候场中念「空着」，按钮是能按的「坐下」（primary）',
+    empty.who === 'P2' && empty.tag === '空着' && empty.btn === '坐下' && !empty.hidden && !empty.disabled && empty.primary,
+    `${empty.who}｜${empty.tag}｜${empty.btn}`,
+  );
+
+  const host = seatRowText(slot(0), at({ hostSeat: 0 }));
+  ok(
+    '房主位那把缀一句「房主位」，坐下那颗念「坐下 · 当房主」',
+    host.who === 'P1 · 房主位' && host.btn === '坐下 · 当房主',
+    `${host.who}｜${host.btn}`,
+  );
+
+  const other = seatRowText(slot(2, { online: true, taken: true, nick: 'K7' }), at());
+  ok(
+    '别人正坐着那把念代号，按钮灰成按不动的「这把有主」',
+    other.tag === '有人 · K7' && other.btn === '这把有主' && other.disabled && !other.primary && !other.hidden,
+    `${other.tag}｜${other.btn}｜disabled=${other.disabled}`,
+  );
+
+  const mine = seatRowText(slot(1, { online: true, taken: true, nick: 'K7' }), at({ seated: true, me: 1 }));
+  ok(
+    '自己正坐着那把念「你在这儿」，那颗按钮整个撤掉（hidden）',
+    mine.tag === '你在这儿' && mine.hidden && mine.disabled && !mine.primary,
+    `${mine.tag}｜hidden=${mine.hidden}`,
+  );
+
+  const queued = seatRowText(slot(1, { online: true, taken: true, queued: true }), at({ seated: true, me: 1 }));
+  ok('自己候场时坐下的那把：说清这一局先由电脑代打', queued.tag === '你在这儿 · 这一局先由电脑打', queued.tag);
+
+  const back = seatRowText(slot(3, { taken: true, online: false, nick: 'K7' }), at({ savedSeat: 3 }));
+  ok(
+    '令牌还在这台设备的掉线椅：状态说「凭令牌坐得回来」，按钮能按「坐回这位」',
+    back.tag === '掉线了 · K7，凭令牌坐得回来' && back.btn === '坐回这位' && !back.disabled && back.primary,
+    `${back.tag}｜${back.btn}｜disabled=${back.disabled}`,
+  );
+
+  const live = seatRowText(slot(3, { taken: true, online: true, nick: 'K7' }), at({ savedSeat: 3 }));
+  ok(
+    '令牌指着的那把还连着（另个标签页坐着）：按钮念「回到这位」且灰着',
+    live.tag === '有人 · K7' && live.btn === '回到这位' && live.disabled,
+    `${live.tag}｜${live.btn}｜disabled=${live.disabled}`,
+  );
+
+  const dead = seatRowText(slot(2, { taken: true, online: false, nick: 'K7' }), at());
+  ok(
+    '有主又掉线、令牌不在手上：念「掉线了」且按钮「这把有主」按不动',
+    dead.tag === '掉线了 · K7' && dead.btn === '这把有主' && dead.disabled && !dead.primary,
+    `${dead.tag}｜${dead.btn}｜disabled=${dead.disabled}`,
+  );
+
+  const later = seatRowText(slot(1), at({ waiting: false }));
+  ok(
+    '开打后没人那把念「电脑位」，按钮是「坐下 · 等下一局」',
+    later.tag === '电脑位' && later.btn === '坐下 · 等下一局' && !later.disabled,
+    `${later.tag}｜${later.btn}`,
+  );
+
+  const ai = seatRowText(slot(1, { ai: true }), at());
+  ok('电脑补的位念「电脑补位」', ai.tag === '电脑补位', ai.tag);
 }
 
 console.log(failures ? `\n${failures} 条没过` : '\n全部通过');
