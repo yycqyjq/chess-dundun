@@ -247,11 +247,13 @@ let rejects = 0;
 let badPush = '';
 for (let guard = 0; guard < 400; guard++) {
   if (a.view().view.phase === 'over') break;
+  let did = false;
   for (const c of [a, b]) {
     const st = c.view();
     if (st.view.phase === 'over' || st.acts.length === 0) continue;
     const act = st.acts[0];
     c.ask({ t: 'act', action: act });
+    did = true;
     const reply = await c.until(['state', 'reject'], (m) => m.t === 'reject' || m.seq > st.seq);
     if (reply.t === 'reject') {
       rejects++;
@@ -260,6 +262,10 @@ for (let guard = 0; guard < 400; guard++) {
     }
     moves++;
   }
+  // 两名客户端的快照都在途时，这一轮两头都没动作可发——若不 yield 就同步空转 400 轮，
+  // 还没等到快照下发就提前退出（moves 停在 4/5），后面 setup 会被「这一局已经开打了」拒。
+  // 让出一次事件循环，等快照到，再判下一轮。
+  if (!did) await new Promise((r) => setTimeout(r, 5));
 }
 const end = a.view();
 ok('两台设备把整局走完了', end.view.phase === 'over' && moves >= 20, `${moves} 手`);
