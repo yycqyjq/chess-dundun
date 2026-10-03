@@ -53,6 +53,14 @@ export class Sound {
     return this.on;
   }
 
+  /**
+   * 在真手势里把 AudioContext 建起来／唤醒。浏览器只认「用户按的那一下」，
+   * 等动画帧里第一声才建，多半已经被自动播放策略按住——默认开着却一声不响，直到人手动拨一次开关。
+   */
+  warmup(): void {
+    this.context();
+  }
+
   cue(cue: Cue): void {
     if (!this.on || this.broken) return;
     const voice = VOICES[cue];

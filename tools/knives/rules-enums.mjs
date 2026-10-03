@@ -43,14 +43,14 @@ export default {
     {
       rel: 'src/core/game.ts',
       note: 'E 摘掉 discardCost 白名单（最狠的一条）：「all」放行后 Math.min(NaN,…) 让整桌死锁',
-      from: "  if (!(mode.discardCost === 'same' || (Number.isInteger(mode.discardCost) && mode.discardCost >= 0)))\n    throw new Error(\n      `rules.json：${at}.discardCost 得是 'same'（对方几张抵几张）或非负整数（固定弃几张），写的是 ${JSON.stringify(mode.discardCost)}——填错会让压不过的人凑不出抵押那一步，整桌走到那儿就再也动不了`,\n    );\n",
+      from: "  if (!(mode.discardCost === 'same' || (Number.isInteger(mode.discardCost) && mode.discardCost >= 1)))\n    throw new Error(\n      `rules.json：${at}.discardCost 得是 'same'（对方几张抵几张）或正整数（固定弃几张，至少 1），写的是 ${JSON.stringify(mode.discardCost)}——填 0 会让压不过的人凑不出抵押那一步，整桌走到那儿就再也动不了`,\n    );\n",
       to: '',
       expect: '拒掉「discardCost 填个像人话的 all',
     },
     {
       rel: 'src/core/game.ts',
-      note: 'F 摘掉 discardCost 的非负这一半：负数那把刀口只挡住 Integer 检查、放行 -1',
-      from: "  if (!(mode.discardCost === 'same' || (Number.isInteger(mode.discardCost) && mode.discardCost >= 0)))",
+      note: 'F 摘掉 discardCost 的下限（>= 1）：0 和 -1 一起放行——0 那句是「压不过的人无动作、整桌死锁」，与本刀同源（同一处下限），本刀钉 -1 那句',
+      from: "  if (!(mode.discardCost === 'same' || (Number.isInteger(mode.discardCost) && mode.discardCost >= 1)))",
       to: "  if (!(mode.discardCost === 'same' || Number.isInteger(mode.discardCost)))",
       expect: '拒掉「discardCost 填负数',
     },

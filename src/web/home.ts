@@ -1,7 +1,7 @@
 import { anchor, button, div, input } from './ui.ts';
 import { rulesFor, seatName, type Rules } from '../core/game.ts';
 import { buildPieceSet } from '../core/pieces.ts';
-import { foundLine, roomUrl, type FoundRoom } from '../net/discover.ts';
+import { foundLine, roomUrl, JOIN_QUERY, type FoundRoom } from '../net/discover.ts';
 import type { Lobby, SeatInfo } from '../net/wire.ts';
 import type { Saved } from './net.ts';
 
@@ -32,6 +32,18 @@ export function wantsJoin(search: string): boolean {
 /** 进门先落在哪一页：开了入桌那个口的落候场厅，其余一律首页 */
 export function initialScreen(search: string): Screen {
   return wantsJoin(search) ? 'room' : 'home';
+}
+
+/**
+ * 邀请别人用的那串地址，第一个就是二维码的内容，每一条都带着入桌那个标记。
+ * 这台设备自己够得着的 origin 最准——它不是回环就说明这条路真能走；
+ * 房主在本机开页面时 origin 是 127.0.0.1，那份不能给别人扫，才退回房主进程报上来的局域网地址。
+ * `here` 从外面传进来而不是直接读 location：这样这条判断脱离 DOM 也测得动（ui 那节有闸）。
+ */
+export function inviteUrls(lan: string[], here: { hostname: string; protocol: string; origin: string }): string[] {
+  const self =
+    !isLoopback(here.hostname) && (here.protocol === 'http:' || here.protocol === 'https:') ? `${here.origin}/${JOIN_QUERY}` : '';
+  return [...new Set(self ? [self, ...lan] : lan)];
 }
 
 /** 版本由 Vite 的 define 注进来（只注这一个字符串，不把整份 package.json 打进 bundle） */

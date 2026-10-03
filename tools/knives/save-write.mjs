@@ -27,7 +27,7 @@ export default {
       rel: 'src/node/room.ts',
       note: 'B atomicPut 把异常吞在肚子里：write 的 catch 永远不响，saveOff 不闩，用户永远不知道存档一个字没落',
       from:
-        'export function atomicPut(file: string, body: string): void {\n  const tmp = `${file}.tmp`;\n  try {\n    writeFileSync(tmp, body);\n    renameSync(tmp, file);\n  } catch (e) {\n    // 写砸／换不上就把中转名抹掉再往上抛：半截字节留在目录里，下回谁看见都以为是份正经存档\n    try {\n      rmSync(tmp, { force: true });\n    } catch {\n      /* 抹不掉也算了，下次写会盖掉它 */\n    }\n    throw e;\n  }\n}',
+        'export function atomicPut(file: string, body: string): void {\n  const tmp = `${file}.tmp`;\n  try {\n    // 先落 tmp、fsync 再改名：writeFileSync 只写到页缓存，rename 的原子只保证「名字不混」，\n    // 不保证数据已落盘——断电／内核崩在改名之后，可能留下「名字在、内容却是空的」那份文件。\n    const fd = openSync(tmp, \'w\');\n    try {\n      writeSync(fd, body);\n      fsyncSync(fd);\n    } finally {\n      closeSync(fd);\n    }\n    renameSync(tmp, file);\n    // 再把目录项也 fsync 一下（best effort）：改名本身要落了盘才算数\n    try {\n      const dirFd = openSync(dirname(file), \'r\');\n      try {\n        fsyncSync(dirFd);\n      } finally {\n        closeSync(dirFd);\n      }\n    } catch {\n      /* 目录打不开／不让 fsync 就算了，tmp 那一下已经挡住大头 */\n    }\n  } catch (e) {\n    // 写砸／换不上就把中转名抹掉再往上抛：半截字节留在目录里，下回谁看见都以为是份正经存档\n    try {\n      rmSync(tmp, { force: true });\n    } catch {\n      /* 抹不掉也算了，下次写会盖掉它 */\n    }\n    throw e;\n  }\n}',
       to: 'export function atomicPut(file: string, body: string): void {\n  const tmp = `${file}.tmp`;\n  try {\n    writeFileSync(tmp, body);\n    renameSync(tmp, file);\n  } catch {\n    /* 吞掉，谁也不告诉 */\n  }\n}',
       expect: '念得出去哪了：「存档写不下去」那句人话得出来',
     },

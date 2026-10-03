@@ -103,7 +103,7 @@ npm run selfplay -- --players=4 --mode=ming --games=400   # 电脑对电脑出�
 ## 改动怎么验
 
 ```bash
-npm run verify        # 类型检查 + 规则自检 + 九套测试，一条命令
+npm run verify        # 类型检查 + 规则自检 + 十套测试，一条命令
 npm run smoke         # 端到端冒烟：host 和 dev 各起一桌，两条 WebSocket 当两台设备走完一整局
 npm run knives        # 负向验证：一处一处把闸拆掉，看那套测试红不红、红的是不是它该红的那句
 ```

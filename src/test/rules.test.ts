@@ -102,9 +102,9 @@ ok(
   '结算按出牌顺序，同档算先出那家',
   resolveTrick(
     [
-      { player: 0, pieceIds: [id('黑炮')] },
-      { player: 1, pieceIds: [id('黑炮')] },
-      { player: 2, pieceIds: [id('卒')] },
+      { seat: 0, pieceIds: [id('黑炮')] },
+      { seat: 1, pieceIds: [id('黑炮')] },
+      { seat: 2, pieceIds: [id('卒')] },
     ],
     map,
     cfg,
@@ -278,8 +278,8 @@ apply(conc, 2, { kind: 'follow', pieceIds: [pao[1]] });
 ok('一墩没出完之前桌上没有「当前最大」', conc.trick!.championIdx === 0 && viewFor(conc, 1).trick!.championSeat === 0);
 ok(
   '倒着落子也不改判定序：plays 按顺时针排，不是按谁先出',
-  conc.trick!.plays.map((p) => p.player).join() === '0,2,3',
-  conc.trick!.plays.map((p) => p.player).join(),
+  conc.trick!.plays.map((p) => p.seat).join() === '0,2,3',
+  conc.trick!.plays.map((p) => p.seat).join(),
 );
 apply(conc, 1, { kind: 'follow', pieceIds: [pao[0]] });
 ok('两张红炮并列，顺时针靠前那家赢，跟谁先落子无关', conc.won.join() === '0,4,0,0', JSON.stringify(conc.won));
@@ -472,6 +472,7 @@ refuses('groupCompare 大小写写歪', bad({ mingqi: { ...raw().mingqi, groupCo
 refuses('mustBeatIfAble 写成字符串 yes', bad({ kouqi: { ...raw().kouqi, mustBeatIfAble: 'yes' } }), 'mustBeatIfAble');
 refuses('discardCost 填个像人话的 all（不拦会让整桌走到死锁那步）', bad({ mingqi: { ...raw().mingqi, discardCost: 'all' } }), '得是');
 refuses('discardCost 填负数', bad({ kouqi: { ...raw().kouqi, discardCost: -1 } }), 'discardCost');
+refuses('discardCost 填 0（固定弃 0 张＝没有抵押可凑，压不过的人无动作、整桌死锁）', bad({ kouqi: { ...raw().kouqi, discardCost: 0 } }), 'discardCost');
 refuses('mingqi 整档没写', bad({ mingqi: undefined }), '比牌规则没写');
 // 正数固定弃张是合法写法，别把闸拉过头：这一条守住「该放的还得放」
 ok('discardCost 固定 2 张照收', (() => {

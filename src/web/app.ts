@@ -11,9 +11,9 @@ import { pieceLabel, type Piece } from '../core/pieces.ts';
 import { nextDrawer, openMatch, winners, type MatchBook } from '../core/match.ts';
 import { mulberry32 } from '../core/rng.ts';
 import { aliveSeats, deckFor, hydrate, type SeatInfo, type Seats, type TableStatus, type ToClient } from '../net/wire.ts';
-import { LIST_REFRESH_MS, peerNote, JOIN_QUERY, type FoundRoom } from '../net/discover.ts';
+import { LIST_REFRESH_MS, peerNote, type FoundRoom } from '../net/discover.ts';
 import { ctrlLift, draftShape, handCramped, labelBands, LABEL_W, layout, maxStacks, pieceSize, stackSpots, type Board, type TableView } from './board.ts';
-import { autoSeat, BACK, entryHead, fillAddr, homePanel, hostHanded, hostJump, inAppShell, initialScreen, isLoopback, roomRow, seatOption, seatRowText } from './home.ts';
+import { autoSeat, BACK, entryHead, fillAddr, homePanel, hostHanded, hostJump, inAppShell, initialScreen, inviteUrls, roomRow, seatOption, seatRowText } from './home.ts';
 import { aiActionFor, closedTable, newGameState, reportText, settleMatch, stepAndMask, type OnTable } from './local.ts';
 import { deviceNick, forget, Link, recall, remember, setTableAddr, shouldWake, tableAddr } from './net.ts';
 import { MOVE_MS, Pieces } from './pieces.ts';
@@ -88,17 +88,6 @@ function rollSeed(): number {
   return Date.now() % 1_000_000_000;
 }
 
-/**
- * 邀请别人用的那串地址，第一个就是二维码的内容，每一条都带着入桌那个标记。
- * 这台设备自己够得着的 origin 最准——它不是回环就说明这条路真能走；
- * 房主在本机开页面时 origin 是 127.0.0.1，那份不能给别人扫，才退回房主进程报上来的局域网地址。
- */
-function inviteUrls(lan: string[]): string[] {
-  const host = location.hostname;
-  const here = !isLoopback(host) && (location.protocol === 'http:' || location.protocol === 'https:') ? `${location.origin}/${JOIN_QUERY}` : '';
-  return [...new Set(here ? [here, ...lan] : lan)];
-}
-
 export class App {
   private shell!: Shell;
   private pieces!: Pieces;
@@ -116,6 +105,8 @@ export class App {
   private busy = false;
   /** 每摞的领地矩形，跟着桌面尺寸重算；pointermove 只查这张表，不在事件里量 DOM */
   private spots: { x: number; y: number; w: number; h: number }[] = [];
+  /** 桌面在视口里的位置，只随尺寸变化重算（见 measureBoard）：pointermove 里现量 DOM 会把「改 transform → 强制重排」串成每帧一次 */
+  private boardRect = { left: 0, top: 0 };
   /** 这台设备有没有真正的鼠标：没有就没有 hover，摊开/亮牌全改成点一下 */
   private hasHover = window.matchMedia('(hover: hover)').matches;
   private sound = new Sound();
@@ -139,6 +130,8 @@ export class App {
   /** 演到一半时来到的快照先攒在这儿，一份一份按 seq 演 */
   private queue: StatePush[] = [];
   private pull: ((m: StatePush | null) => void) | null = null;
+  /** 单机结算卡那两颗（再来一局／收杆）要回的 Promise；从结算卡上「换桌」走时得给它一个收场，别让 match 那条循环永远吊着 */
+  private againRes: ((v: boolean) => void) | null = null;
   private seqDone = 0;
   /** welcome 到手之前，快照连自己是几号都还不知道，只能先攒着 */
   private seated = false;
@@ -404,7 +397,15 @@ export class App {
     const go = div('sheet-row');
     const out = div('sheet-row');
     // 底栏这几颗一秒问一回，只改字、不拆了重搭：它们现在正对着拇指，重建会吞掉按到一半的那一下
-    const start = button('', () => link.send({ t: 'start' }), 'btn primary');
+    const start = button(
+      '',
+      () => {
+        // 按下就本地置灰：座位表要等下一份快照（≤1s）才回来，这中间连点会重复递 start
+        start.disabled = true;
+        link.send({ t: 'start' });
+      },
+      'btn primary',
+    );
     const leave = button(
       '',
       () => {
@@ -552,7 +553,7 @@ export class App {
         btn.classList.toggle('primary', txt.primary);
       });
 
-      const urls = inviteUrls(l.lan);
+      const urls = inviteUrls(l.lan, location);
       const urlKey = urls.join(' ');
       if (urlKey !== inviteKey) {
         inviteKey = urlKey;
@@ -589,6 +590,7 @@ export class App {
             : `已坐下，等 ${seatName(l.hostSeat)} 开局`;
 
       start.hidden = !(waiting && isHost);
+      start.disabled = false; // 座位表一回来就解掉按下那一下的置灰（置灰只为挡住 ≤1s 里那几下连点）
       // 第 1 局还没开，这本账本来就是空的：这时候给一颗「清账重开」只是多一颗按了没用的
       clear.hidden = !(waiting && isHost && l.gameNo > 1);
       start.textContent = short > 0 ? `开始这一局（${short} 个位子由电脑补）` : '开始这一局';
@@ -653,14 +655,9 @@ export class App {
    * 递一句话就把它摆在明面上（桌不认原来那把椅子时用）；空串是自己让的座，不用解释。
    */
   private standLocal(why: string): void {
-    this.gen++; // 万一那条循环还挂着，让它散
+    this.breakTableLoop(); // 万一那条循环还挂着，让它散（连还吊着的 pull/ask 一起收场）
     this.seated = false;
     this.myToken = '';
-    // 这一局的牌面也不再是我的了：那条循环还等着的下一份快照永远不会来，给它一个收场
-    const pull = this.pull;
-    this.pull = null;
-    pull?.(null);
-    this.queue.length = 0;
     this.liveActs = [];
     // 令牌是桌发的，桌既然不认这把椅子，这份就该跟着还回去，别留着下次再撞
     forget();
@@ -685,13 +682,17 @@ export class App {
   }
 
   private onNet(text: string): void {
+    // 「刚连回来」＝这一句是空的、而上一句不是：得给个正面反馈，别只报断不报回
+    const back = !text && this.netNote !== '';
     this.netNote = text;
     if (this.shell) this.paintMeta();
-    // 候场厅摊着时那块就是唯一的落脚处：那会儿连台面都还没搭，toast 没地方放
-    if (text && this.room) this.room.note.textContent = text;
+    // 候场厅摊着时那块就是唯一的落脚处：那会儿连台面都还没搭，toast 没地方放。
+    // 连回来（text 空）也要擦：不擦那句「和桌断了」会赖在那儿，人以为还断着
+    if (this.room && (text || back)) this.room.note.textContent = text;
     // 站在列表页上同理：那句「和桌断了」得写在列表底下，不然人只看见一屏不动的桌
-    if (text && this.list) this.list.note.textContent = text;
+    if (this.list && (text || back)) this.list.note.textContent = text;
     if (text && this.shell) toast(this.shell.toast, text, 2000);
+    else if (back && this.shell) toast(this.shell.toast, '连上了', 1200);
   }
 
   /** 桌说的一切话都先落这儿：入座前的快照攒着，reject 只有一句话 */
@@ -775,6 +776,25 @@ export class App {
     return new Promise((res) => {
       this.pull = res;
     });
+  }
+
+  /**
+   * 把牌桌那条循环请下场：gen 一老，它下一次回头就该散；还吊着的 pull/ask 也得给个收场，
+   * 不然下一局推来的快照会命中 parked 的 pull、把牌面画到别处去（回候场厅那颗就栽在这儿）。
+   * 回候场厅、离桌、换桌、让座——四处散的是同一件事，口径收在这一处。
+   */
+  private breakTableLoop(): void {
+    this.gen++;
+    const pull = this.pull;
+    this.pull = null;
+    pull?.(null);
+    const ask = this.ask;
+    this.ask = null;
+    ask?.(null);
+    const again = this.againRes;
+    this.againRes = null;
+    again?.(false);
+    this.queue.length = 0;
   }
 
   /** 坐下以后就是这一条路：桌推一份、这儿演一拍，本地不 apply、不算 AI、不掷骰子 */
@@ -933,6 +953,8 @@ export class App {
             () => {
               this.resultClose = null;
               close();
+              // 牌桌那条循环得先散伙：不散的话新一局推来的快照会命中还吊着的 pull、画到候场厅底下，人就卡在候场厅进不去
+              this.breakTableLoop();
               this.openRoom();
             },
             'btn mini',
@@ -954,11 +976,10 @@ export class App {
    */
   private leaveTable(toList = false): void {
     this.resultClose?.();
-    this.gen++; // 占着的那条循环散伙，sitGen 一老，候场厅里再坐下才起得来
+    this.breakTableLoop(); // 占着的那条循环散伙，sitGen 一老，候场厅里再坐下才起得来
     this.link?.close();
     this.link = null;
     this.seated = false;
-    this.queue.length = 0;
     this.seats = null;
     this.liveActs = [];
     this.netNote = '';
@@ -1187,8 +1208,8 @@ export class App {
     // 扣棋是同时暗出，没翻开之前桌上没有「谁最大」，别拿金光提前泄底
     const champ = this.state.mode === 'ming' ? trick.plays[trick.championIdx] : null;
     return [
-      ...trick.plays.map((p) => ({ seat: p.player, ids: [...p.pieceIds], pledge: false, best: p === champ })),
-      ...trick.discards.map((d) => ({ seat: d.player, ids: [...d.pieceIds], pledge: true, best: false })),
+      ...trick.plays.map((p) => ({ seat: p.seat, ids: [...p.pieceIds], pledge: false, best: p === champ })),
+      ...trick.discards.map((d) => ({ seat: d.seat, ids: [...d.pieceIds], pledge: true, best: false })),
     ];
   }
 
@@ -1278,6 +1299,13 @@ export class App {
           : `第 ${no} 局｜谁都没收到牌`;
     this.sound.cue('win');
     return new Promise((res) => {
+      // 把 resolve 存进实例：结算卡开着时从右上角「换桌」走，showHome 只摘 DOM、碰不到这两颗按钮，
+      // 不留这一手那条 match 循环就永远停在 await this.askAgain()（breakTableLoop 会替它收场）
+      const done = (v: boolean): void => {
+        this.againRes = null;
+        res(v);
+      };
+      this.againRes = done;
       popup(
         this.root,
         title,
@@ -1293,11 +1321,11 @@ export class App {
           row.append(
             button('再来一局', () => {
               close();
-              res(true);
+              done(true);
             }, 'btn primary'),
             button('收杆', () => {
               close();
-              res(false);
+              done(false);
             }),
             button('复制战报', () => void this.copyReport(body, title)),
           );
@@ -1337,13 +1365,7 @@ export class App {
   private resign(): void {
     const online = this.link !== null;
     const go = () => {
-      this.gen++;
-      const ask = this.ask;
-      this.ask = null;
-      ask?.(null);
-      const pull = this.pull;
-      this.pull = null;
-      pull?.(null);
+      this.breakTableLoop();
       if (online) this.leaveTable();
       else this.showHome();
     };
@@ -1372,6 +1394,8 @@ export class App {
 
   private wire(): void {
     this.shell.board.addEventListener('click', (ev) => {
+      // 真手势里把 AudioContext 建起来：等动画帧里第一声才建，多半已经被自动播放策略按住、白哑一场
+      this.sound.warmup();
       const piece = (ev.target as HTMLElement).closest<HTMLElement>('.piece');
       // 点空白处＝收回：手牌摊开了就握回扇形，摸签摊开了那摞也合上（动画正在演时不动，别倒带）
       if (!piece) {
@@ -1399,9 +1423,9 @@ export class App {
 
   private hoverAt(ev: PointerEvent): void {
     if (this.state.phase !== 'draft') return;
-    const rect = this.shell.board.getBoundingClientRect();
-    const x = ev.clientX - rect.left;
-    const y = ev.clientY - rect.top;
+    // 用缓存的 boardRect，不现量 DOM：现量会把「上一步改 transform → 这一步读布局」串成每帧一次强制重排
+    const x = ev.clientX - this.boardRect.left;
+    const y = ev.clientY - this.boardRect.top;
     const i = this.spots.findIndex((s) => x >= s.x && x <= s.x + s.w && y >= s.y && y <= s.y + s.h);
     this.hoverStack(i < 0 ? null : i);
   }
@@ -1594,7 +1618,7 @@ export class App {
       } else if (state.trick) {
         ord = ((seat - state.trick.leader + state.players) % state.players) + 1;
         const played =
-          state.trick.plays.some((p) => p.player === seat) || state.trick.discards.some((d) => d.player === seat);
+          state.trick.plays.some((p) => p.seat === seat) || state.trick.discards.some((d) => d.seat === seat);
         tag = played ? '已出' : state.hands[seat]!.length === 0 ? '没牌' : seat === this.me ? '你出' : '在想';
       } else if (state.phase !== 'over') {
         tag = state.leader === seat ? '先出' : '';
@@ -1762,9 +1786,19 @@ export class App {
     this.shell.sound.classList.toggle('mute', !this.sound.enabled);
   }
 
+  /** 桌面在视口里的位置：只随尺寸变化重算（ResizeObserver）。pointermove 里现量 DOM 会把「改 transform → 强制重排」串成每帧一次 */
+  private measureBoard(): void {
+    const r = this.shell.board.getBoundingClientRect();
+    this.boardRect = { left: r.left, top: r.top };
+  }
+
   private watchResize(): void {
     this.rober?.disconnect();
-    this.rober = new ResizeObserver(() => this.render(false));
+    this.measureBoard();
+    this.rober = new ResizeObserver(() => {
+      this.measureBoard();
+      this.render(false);
+    });
     this.rober.observe(this.shell.board);
   }
 

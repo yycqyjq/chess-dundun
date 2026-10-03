@@ -157,12 +157,12 @@ function renderBoard(state: GameState, seat: number): void {
   console.log(`收牌：${state.won.map((w, i) => `${seatName(i)} ${w}`).join('  ')}`);
   if (state.trick) {
     const shown = (id: number) => (isFaceDown(state, id) ? '扣' : pieceLabel(state.byId.get(id)!));
-    const table = state.trick.plays.map((p) => `${seatName(p.player)}:${p.pieceIds.map(shown).join('+')}`).join('  ');
+    const table = state.trick.plays.map((p) => `${seatName(p.seat)}:${p.pieceIds.map(shown).join('+')}`).join('  ');
     // 扣棋是同时暗出，没翻开之前桌上不分大小，别报「当前最大」
     console.log(
       state.mode === 'kou'
         ? `本墩桌面：${table}｜全员出完才翻开比大小`
-        : `本墩桌面：${table}｜当前最大 ${seatName(state.trick.plays[state.trick.championIdx].player)}`,
+        : `本墩桌面：${table}｜当前最大 ${seatName(state.trick.plays[state.trick.championIdx].seat)}`,
     );
   }
 }

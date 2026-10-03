@@ -47,8 +47,8 @@ export interface WireState {
     leader: number;
     waiting: number[];
     championIdx: number;
-    plays: { player: number; pieceIds: number[] }[];
-    discards: { player: number; pieceIds: number[] }[];
+    plays: { seat: number; pieceIds: number[] }[];
+    discards: { seat: number; pieceIds: number[] }[];
   } | null;
   revealed: number[];
   /** 已经能给这个座位看的日志行，暗棋没翻开的那几行压根不上线 */
@@ -295,8 +295,8 @@ function build(state: GameState, open: Set<number>, logUpTo: number): WireState 
           leader: state.trick.leader,
           waiting: [...state.trick.waiting],
           championIdx: state.trick.championIdx,
-          plays: state.trick.plays.map((p) => ({ player: p.player, pieceIds: [...p.pieceIds] })),
-          discards: state.trick.discards.map((p) => ({ player: p.player, pieceIds: [...p.pieceIds] })),
+          plays: state.trick.plays.map((p) => ({ seat: p.seat, pieceIds: [...p.pieceIds] })),
+          discards: state.trick.discards.map((p) => ({ seat: p.seat, pieceIds: [...p.pieceIds] })),
         }
       : null,
     revealed: [...state.revealed],

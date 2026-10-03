@@ -63,8 +63,16 @@ function playCost(view: View, ids: number[]): number {
 }
 
 function breaksAPair(view: View, id: number): boolean {
-  const rank = view.piece(id).rank;
-  return view.hand.filter((other) => view.piece(other).rank === rank).length > 1;
+  const piece = view.piece(id);
+  // 同职不同色凑不成组（groupColors:'any' 那几级除外），跟 groupPlays 的桶键同口径——
+  // 以前只比职级，把一红一黑的两枚兵也当成对子，拆了白心疼
+  const sameColor = !view.groupAny.has(piece.rank);
+  return (
+    view.hand.filter((other) => {
+      const o = view.piece(other);
+      return o.rank === piece.rank && (!sameColor || o.color === piece.color);
+    }).length > 1
+  );
 }
 
 /**
@@ -83,7 +91,12 @@ function holdValue(view: View, ids: number[]): number {
   return strength * trickValue;
 }
 
-/** 我出这一套之后仍是全桌最大的概率。只用明处的牌 + 未公开牌的档位直方图，跟真人记牌看到的一样多 */
+/**
+ * 我出这一套之后仍是全桌最大的概率。只用明处的牌 + 未公开牌的档位直方图，跟真人记牌看到的一样多。
+ * 注意这是**粗估**：各威胁腿（暗棋桌上那几套、各家手里）共用同一份 total/gt、没逐腿扣减，
+ * 桌面上已扣着的那几张也仍留在池里被再算一遍 → odds 系统性偏低、应牌偏保守。
+ * 这是有意留着的启发式（要精确得给每张暗牌定位，View 里根本看不到），不是漏算；要动它先想清扣减口径。
+ */
 function winOdds(view: View, ids: number[]): number {
   const mine = sortedTiers(view, ids);
   const top = mine[0];

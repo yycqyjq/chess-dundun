@@ -55,7 +55,7 @@ export default {
     {
       rel: 'src/node/table.ts',
       note: 'G 散完不重摊牌面：候场厅留着打完那一份等开局',
-      from: '    this.state = createGame({\n      ...this.setup,\n      seed: (this.rng() * 0x100000000) | 0,\n      // 不带 drawer：跟 resetBook 同一个理——账都归零了，「上一局的赢家」指的已经不是任何一个人\n    });',
+      from: '    this.state = createGame({\n      ...this.setup,\n      seed: this.rollSeed(),\n      // 不带 drawer：跟 resetBook 同一个理——账都归零了，「上一局的赢家」指的已经不是任何一个人\n    });',
       to: '',
       expect: '散了也重摊牌面：不再是打完那一份',
     },

@@ -87,8 +87,8 @@ interface TrickState {
   waiting: number[];
   championIdx: number;
   /** 永远按顺时针（从首出者数过去）排；扣棋并发时谁先落子都不改这个次序 */
-  plays: { player: number; pieceIds: number[] }[];
-  discards: { player: number; pieceIds: number[] }[];
+  plays: { seat: number; pieceIds: number[] }[];
+  discards: { seat: number; pieceIds: number[] }[];
 }
 
 export interface GameState {
@@ -160,9 +160,9 @@ function checkModes(mode: ModeRules, at: string): void {
     throw new Error(`rules.json：${at}.mustBeatIfAble 得是 true 或 false，写的是 ${JSON.stringify(mode.mustBeatIfAble)}`);
   if (!GROUP_COMPARES.includes(mode.groupCompare))
     throw new Error(`rules.json：${at}.groupCompare 只有 ${GROUP_COMPARES.join(' / ')} 这三种，写的是「${mode.groupCompare}」`);
-  if (!(mode.discardCost === 'same' || (Number.isInteger(mode.discardCost) && mode.discardCost >= 0)))
+  if (!(mode.discardCost === 'same' || (Number.isInteger(mode.discardCost) && mode.discardCost >= 1)))
     throw new Error(
-      `rules.json：${at}.discardCost 得是 'same'（对方几张抵几张）或非负整数（固定弃几张），写的是 ${JSON.stringify(mode.discardCost)}——填错会让压不过的人凑不出抵押那一步，整桌走到那儿就再也动不了`,
+      `rules.json：${at}.discardCost 得是 'same'（对方几张抵几张）或正整数（固定弃几张，至少 1），写的是 ${JSON.stringify(mode.discardCost)}——填 0 会让压不过的人凑不出抵押那一步，整桌走到那儿就再也动不了`,
     );
 }
 
@@ -486,7 +486,7 @@ function applyLead(state: GameState, seat: number, pieceIds: number[]): GameStat
     leader: seat,
     waiting: responseOrder(state, seat),
     championIdx: 0,
-    plays: [{ player: seat, pieceIds }],
+    plays: [{ seat, pieceIds }],
     discards: [],
   };
   reveal(state, pieceIds);
@@ -507,7 +507,7 @@ function responseOrder(state: GameState, leader: number): number[] {
 function applyFollow(state: GameState, seat: number, pieceIds: number[]): GameState {
   take(state, seat, pieceIds);
   const trick = state.trick!;
-  insertPlay(state, trick, { player: seat, pieceIds });
+  insertPlay(state, trick, { seat, pieceIds });
   trick.waiting = trick.waiting.filter((s) => s !== seat);
   reveal(state, pieceIds);
   // 扣棋是同时暗出：没出完之前桌上没有「当前最大」，判赢留到翻开那一刻一次算完
@@ -519,7 +519,7 @@ function applyFollow(state: GameState, seat: number, pieceIds: number[]): GameSt
 /** plays 永远按顺时针（从首出者数过去）排，谁先落子都不改：并列就该靠前那家赢 */
 function insertPlay(state: GameState, trick: TrickState, play: TrickPlay): void {
   const rank = (seat: number) => (seat - trick.leader + state.players) % state.players;
-  const at = trick.plays.findIndex((p) => rank(p.player) > rank(play.player));
+  const at = trick.plays.findIndex((p) => rank(p.seat) > rank(play.seat));
   if (at < 0) trick.plays.push(play);
   else trick.plays.splice(at, 0, play);
 }
@@ -527,7 +527,7 @@ function insertPlay(state: GameState, trick: TrickState, play: TrickPlay): void 
 function applyDiscard(state: GameState, seat: number, pieceIds: number[]): GameState {
   take(state, seat, pieceIds);
   const trick = state.trick!;
-  trick.discards.push({ player: seat, pieceIds });
+  trick.discards.push({ seat, pieceIds });
   trick.waiting = trick.waiting.filter((s) => s !== seat);
   reveal(state, pieceIds);
   state.log.push(`${seatName(seat)} 大不过，弃 ${labels(state, pieceIds)}`);
@@ -551,7 +551,7 @@ function maybeCloseTrick(state: GameState): GameState {
   const trick = state.trick!;
   if (trick.waiting.length > 0) return state;
   trick.championIdx = resolveTrick(trick.plays, state.byId, trickCfg(state));
-  const winner = trick.plays[trick.championIdx].player;
+  const winner = trick.plays[trick.championIdx].seat;
   let gained = 0;
   for (const play of trick.plays) gained += play.pieceIds.length;
   for (const discard of trick.discards) gained += discard.pieceIds.length;

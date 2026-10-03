@@ -132,6 +132,11 @@ export class Table {
   }
 
   /** 一把新椅子：没坐过人，也不归任何人打。候场期谁都不计时，所以 gone 留 0 */
+  /** 把一把椅子洗回「没人坐过」的样子：保座位号，令牌／昵称／在线／代打标记全清。让座、收掉线椅、换人时都走它 */
+  private resetSlot(slot: Slot): void {
+    Object.assign(slot, this.freshSlots(slot.seat + 1)[slot.seat]!);
+  }
+
   private freshSlots(players: number): Slot[] {
     return Array.from({ length: players }, (_unused, seat) => ({
       seat,
@@ -235,7 +240,7 @@ export class Table {
     if (!slot || !slot.token) return;
     if (this.status === 'playing') this.leave(seat);
     else {
-      Object.assign(slot, this.freshSlots(seat + 1)[seat]!);
+      this.resetSlot(slot);
       this.push();
     }
   }
@@ -330,7 +335,7 @@ export class Table {
       if (sameSeats) this.gameNo += drawer === null ? 0 : 1;
       this.state = createGame({
         ...this.setup,
-        seed: (this.rng() * 0x100000000) | 0,
+        seed: this.rollSeed(),
         // 起抽人只在座位还是那几把时才接得上：换了人数，上一局的赢家指的已经不是那把椅子
         drawer: sameSeats ? (drawer ?? undefined) : undefined,
       });
@@ -380,7 +385,7 @@ export class Table {
       this.setup.hostSeat = home;
       handed = true;
     }
-    Object.assign(slot, this.freshSlots(bySeat + 1)[bySeat]!);
+    this.resetSlot(slot);
     this.log(`${slot.name} 让了座${handed ? `，把房主位还回了 ${seatName(home)}` : ''}`);
     this.push();
     return { ok: true };
@@ -398,7 +403,7 @@ export class Table {
     this.gameNo = 1;
     this.state = createGame({
       ...this.setup,
-      seed: (this.rng() * 0x100000000) | 0,
+      seed: this.rollSeed(),
       // 不带 drawer：账都归零了，「上一局的赢家」指的已经不是任何一个人，起抽重新抽
     });
     this.booked = false;
@@ -427,7 +432,7 @@ export class Table {
     this.gameNo = 1;
     this.state = createGame({
       ...this.setup,
-      seed: (this.rng() * 0x100000000) | 0,
+      seed: this.rollSeed(),
       // 不带 drawer：跟 resetBook 同一个理——账都归零了，「上一局的赢家」指的已经不是任何一个人
     });
     this.booked = false;
@@ -436,6 +441,11 @@ export class Table {
     this.log('这桌散了：局号回 1、账清零、椅子一把不剩（存档那头由宿主抹掉，重启接不回来）');
     this.push();
     return { ok: true };
+  }
+
+  /** 抽下一副牌面的种子：同一条流上掷一个 32 位整数。四处开新局都走它，别再各写一遍算式 */
+  private rollSeed(): number {
+    return (this.rng() * 0x100000000) | 0;
   }
 
   /**
@@ -456,7 +466,7 @@ export class Table {
   private newGame(): void {
     const drawer = this.settleOver();
     this.gameNo++;
-    this.state = createGame({ ...this.setup, seed: (this.rng() * 0x100000000) | 0, drawer: drawer ?? undefined });
+    this.state = createGame({ ...this.setup, seed: this.rollSeed(), drawer: drawer ?? undefined });
     this.booked = false;
     this.maskFrom = -1;
   }
@@ -498,7 +508,7 @@ export class Table {
     for (const slot of this.slots) {
       if (!slot.token || slot.online || !slot.gone || t - slot.gone < IDLE_MS) continue;
       this.log(`${slot.name} 两分钟没回来，那把椅子已经还给这桌——要坐重新挑一把就行`);
-      Object.assign(slot, this.freshSlots(slot.seat + 1)[slot.seat]!);
+      this.resetSlot(slot);
       swept++;
     }
     if (!swept) return false;

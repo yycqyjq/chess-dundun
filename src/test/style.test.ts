@@ -8,6 +8,9 @@
  */
 import { readFileSync } from 'node:fs';
 
+/** 读 src/web 下的一份源码：下面几节都是「app.ts／home.ts 里写了什么」的守卫，路径收在这一处 */
+const web = (file: string): string => readFileSync(new URL(`../web/${file}`, import.meta.url), 'utf8');
+
 let failures = 0;
 function ok(name: string, condition: boolean, detail = ''): void {
   if (condition) console.log(`  ✓ ${name}`);
@@ -24,7 +27,7 @@ interface Rule {
   media: string;
 }
 
-const raw = readFileSync(new URL('../web/style.css', import.meta.url), 'utf8');
+const raw = web('style.css');
 // 注释里那些「上一版是 min-width」之类的话是给读的人看的，别让它们混进断言
 const css = raw.replace(/\/\*[\s\S]*?\*\//g, '');
 
@@ -197,7 +200,7 @@ console.log('\n首页：盖住屏幕的一层，两条入口竖着排，宽屏�
 console.log('\n同网桌只摆一处：候场厅里不留第二份');
 {
   // 还是这一套路：app.ts 经 `rules.json?raw` 进不了 node 测试，那就测这份文件自己写了什么
-  const app = readFileSync(new URL('../web/app.ts', import.meta.url), 'utf8');
+  const app = web('app.ts');
   ok(
     '椅子那一列只收座位表和邀请，不挂同网桌容器',
     !/seatCol\.append\([^)]*peer/.test(app),
@@ -245,8 +248,8 @@ console.log('\n同网桌只摆一处：候场厅里不留第二份');
 
 console.log('\nApp 外壳：这一头没有本机宿主，同网寻呼换成手填桌地址');
 {
-  const app = readFileSync(new URL('../web/app.ts', import.meta.url), 'utf8');
-  const home = readFileSync(new URL('../web/home.ts', import.meta.url), 'utf8');
+  const app = web('app.ts');
+  const home = web('home.ts');
   // WebView 里 location.host 是设备自己（那儿没有同源的一张桌），UDP 也发不出去，所以联机那一屏整个换掉
   ok(
     '联机那一屏第一句就分岔：外壳里走手填地址，浏览器里照旧走同网列表',
@@ -277,8 +280,8 @@ console.log('\nApp 外壳：这一头没有本机宿主，同网寻呼换成手�
 
 console.log('\n整屏页：三处出口同一份名字，身后不隔着半透黑底露出另一层');
 {
-  const app = readFileSync(new URL('../web/app.ts', import.meta.url), 'utf8');
-  const home = readFileSync(new URL('../web/home.ts', import.meta.url), 'utf8');
+  const app = web('app.ts');
+  const home = web('home.ts');
   // 候场厅那一屏整屏盖着牌桌，掀开看见的其实是首页——这颗既然撒过谎就整个摘掉，不留第二种名字
   ok('那颗不再按「身后有没有牌桌」分两种名字', !/this\.shell \? '看牌桌'/.test(app) && /leave\.textContent = BACK;/.test(app));
   // 同一件事在一条链上换了三个名字（回首页／退出这桌／看牌桌），人就不知道哪一颗会把他从这桌上摘下来。

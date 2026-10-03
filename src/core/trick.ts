@@ -44,7 +44,7 @@ export function beats(candidate: PlayPower, champion: PlayPower, cfg: TrickConfi
 }
 
 export interface TrickPlay {
-  player: number;
+  seat: number;
   pieceIds: number[];
 }
 

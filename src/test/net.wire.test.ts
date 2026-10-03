@@ -294,9 +294,9 @@ function sweepLayout(mode: 'ming' | 'kou', players = 2): void {
         view.piles = pilesOf(back);
         const trick = back.trick;
         if (trick) {
-          view.freeze = trick.plays.map((p) => ({ seat: p.player, ids: [...p.pieceIds], pledge: false, best: false }));
+          view.freeze = trick.plays.map((p) => ({ seat: p.seat, ids: [...p.pieceIds], pledge: false, best: false }));
           // 网页里鼠标压上来，自己那一套扣着的牌就亮给自己看——快照要是不带牌名，这儿就成空白牌了
-          const own = [...trick.plays, ...trick.discards].find((p) => p.player === seat);
+          const own = [...trick.plays, ...trick.discards].find((p) => p.seat === seat);
           if (own) view.peek = new Set(own.pieceIds);
         }
         for (const [id, placed] of layout(back, view, board)) {

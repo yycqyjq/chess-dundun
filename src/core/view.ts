@@ -29,6 +29,8 @@ export interface View {
   topTier: number;
   /** 当前模式那套比牌规则。同档算谁赢、张数怎么比对两家都是公开的，判赢面要用 */
   cfg: TrickConfig;
+  /** 哪些职级放开了同职跨色凑组（rules.json 里 groupColors: 'any' 的那几级）——AI 判「拆没拆对子」得跟 groupPlays 同口径 */
+  groupAny: Set<number>;
   trick: TrickView | null;
   /** 查看不见的牌直接抛错——AI 伸手拿别人的牌就当场崩，不作弊是硬约束 */
   piece(id: number): Piece;
@@ -52,7 +54,7 @@ export function openSet(state: GameState, seat: number, opts: OpenOpts = {}): Se
   for (const id of state.hands[seat]) open.add(id);
   if (opts.includeOwnTable && state.trick) {
     for (const p of [...state.trick.plays, ...state.trick.discards]) {
-      if (p.player !== seat) continue;
+      if (p.seat !== seat) continue;
       for (const id of p.pieceIds) open.add(id);
     }
   }
@@ -79,13 +81,14 @@ export function viewFor(state: GameState, seat: number): View {
     unknownTiers,
     topTier: state.pieces.reduce((max, p) => Math.max(max, p.tier), 0),
     cfg: { tieBreak: state.rules.tieBreak, groupCompare: modeRules(state).groupCompare },
+    groupAny: new Set(state.rules.ranks.flatMap((r, i) => (r.groupColors === 'any' ? [i] : []))),
     trick: trick
       ? {
           leader: trick.leader,
           waiting: [...trick.waiting],
-          plays: trick.plays.map((p) => ({ seat: p.player, size: p.pieceIds.length, pieceIds: shown(p.pieceIds) })),
-          discarded: trick.discards.map((d) => ({ seat: d.player, size: d.pieceIds.length, pieceIds: shown(d.pieceIds) })),
-          championSeat: trick.plays[trick.championIdx].player,
+          plays: trick.plays.map((p) => ({ seat: p.seat, size: p.pieceIds.length, pieceIds: shown(p.pieceIds) })),
+          discarded: trick.discards.map((d) => ({ seat: d.seat, size: d.pieceIds.length, pieceIds: shown(d.pieceIds) })),
+          championSeat: trick.plays[trick.championIdx].seat,
         }
       : null,
     piece(id: number): Piece {

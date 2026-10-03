@@ -30,7 +30,7 @@ export default {
       note: 'D vacate 不分候场还是开打，一律只算掉线（旧椅子还挂在人名下）',
       from: `    if (this.status === 'playing') this.leave(seat);
     else {
-      Object.assign(slot, this.freshSlots(seat + 1)[seat]!);
+      this.resetSlot(slot);
       this.push();
     }`,
       to: `    this.leave(seat);`,

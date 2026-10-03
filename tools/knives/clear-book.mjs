@@ -47,7 +47,7 @@ export default {
       rel: 'src/node/table.ts',
       note: '牌面不重摊（还停在打完那一份）',
       from:
-        '    this.state = createGame({\n      ...this.setup,\n      seed: (this.rng() * 0x100000000) | 0,\n      // 不带 drawer：账都归零了，「上一局的赢家」指的已经不是任何一个人，起抽重新抽\n    });',
+        '    this.state = createGame({\n      ...this.setup,\n      seed: this.rollSeed(),\n      // 不带 drawer：账都归零了，「上一局的赢家」指的已经不是任何一个人，起抽重新抽\n    });',
       to: '    // 拆了：老牌面留着',
       expect: '牌面重摊了',
     },

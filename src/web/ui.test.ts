@@ -27,6 +27,7 @@ import {
   hostJump,
   inAppShell,
   initialScreen,
+  inviteUrls,
   isLoopback,
   normAddr,
   roomRow,
@@ -702,6 +703,24 @@ function planOf(spotFor: (i: number) => Placed): Map<number, Placed> {
   ok('头一份座位表不补念（上一份记的是 -1，页面刚打开）', hostJump(-1, 2) === false);
   ok('房主位没动不念：不然挂六秒摘掉又重讲一遍', hostJump(2, 2) === false);
   ok('真换了才念，往哪边跳都算（还回「家」那把也是一次交接）', hostJump(2, 0) === true && hostJump(0, 2) === true);
+}
+
+// ---------- 邀请地址：本机 origin 不算数，退回局域网那串（home.ts 的 inviteUrls） ----------
+
+{
+  const lan = ['http://192.168.1.11:5200/?join=1'];
+  const loop = inviteUrls(lan, { hostname: '127.0.0.1', protocol: 'http:', origin: 'http://127.0.0.1:5200' });
+  ok('本机 origin 是回环：不能拿去给别人扫，只剩局域网那串', loop.length === 1 && loop[0] === lan[0], loop.join('｜'));
+  const real = inviteUrls(lan, { hostname: '192.168.1.41', protocol: 'http:', origin: 'http://192.168.1.41:5200' });
+  ok('这台设备自己的 origin 够得着：排在最前（二维码画的就是它）', real[0] === 'http://192.168.1.41:5200/?join=1', real.join('｜'));
+  const dup = inviteUrls(['http://192.168.1.41:5200/?join=1'], {
+    hostname: '192.168.1.41',
+    protocol: 'http:',
+    origin: 'http://192.168.1.41:5200',
+  });
+  ok('自己那串和局域网那串重了只留一条', dup.length === 1, dup.join('｜'));
+  const weird = inviteUrls(lan, { hostname: '192.168.1.41', protocol: 'capacitor:', origin: 'capacitor://localhost' });
+  ok('协议不是 http/https：那一串 origin 不摆上去，退回局域网那串', weird.length === 1 && weird[0] === lan[0], weird.join('｜'));
 }
 
 // ---------- 候场厅一行座位：谁／状态／按钮三处字（home.ts 的 seatRowText） ----------

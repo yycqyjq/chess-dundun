@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, fsyncSync, openSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync, writeSync } from 'node:fs';
 import { basename, dirname, join, normalize, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { networkInterfaces } from 'node:os';
@@ -96,8 +96,27 @@ export function lockPathOf(save: string): string {
 export function atomicPut(file: string, body: string): void {
   const tmp = `${file}.tmp`;
   try {
-    writeFileSync(tmp, body);
+    // 先落 tmp、fsync 再改名：writeFileSync 只写到页缓存，rename 的原子只保证「名字不混」，
+    // 不保证数据已落盘——断电／内核崩在改名之后，可能留下「名字在、内容却是空的」那份文件。
+    const fd = openSync(tmp, 'w');
+    try {
+      writeSync(fd, body);
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
     renameSync(tmp, file);
+    // 再把目录项也 fsync 一下（best effort）：改名本身要落了盘才算数
+    try {
+      const dirFd = openSync(dirname(file), 'r');
+      try {
+        fsyncSync(dirFd);
+      } finally {
+        closeSync(dirFd);
+      }
+    } catch {
+      /* 目录打不开／不让 fsync 就算了，tmp 那一下已经挡住大头 */
+    }
   } catch (e) {
     // 写砸／换不上就把中转名抹掉再往上抛：半截字节留在目录里，下回谁看见都以为是份正经存档
     try {
@@ -149,6 +168,17 @@ export function canonicalSave(save: string, real: (p: string) => string = realpa
   }
 }
 
+/** 原子创建占位条：不存在才创建（`wx`），抢不到回 false，别的错照抛。抢位与回收两处都走它，口径只此一份。 */
+function claimLockFile(file: string, body: string): boolean {
+  try {
+    writeFileSync(file, body, { flag: 'wx' });
+    return true;
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e;
+    return false;
+  }
+}
+
 /** 占住这份存档，回一句「收桌时把它摘了」；被另一张活着的桌占着就抛人话（两个宿主都念这一句） */
 export function claimSave(save: string, port: number, alive: (pid: number) => boolean = pidAlive): () => void {
   const file = lockPathOf(save);
@@ -165,12 +195,7 @@ export function claimSave(save: string, port: number, alive: (pid: number) => bo
   // 抢位这一步必须原子：`wx`＝不存在才创建，同时起的两张桌 OS 只放一张过去。
   // 旧写法「读→判→写」三步中间有窗口——两张桌同起，双双读到没人占、双双放行，
   // 后写的条盖掉前一张，然后各写各的 table.json（README 立这道闸挡的就是 2026-09-30 那次双写）。
-  try {
-    writeFileSync(file, body, { flag: 'wx' });
-    return release;
-  } catch (e) {
-    if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e;
-  }
+  if (claimLockFile(file, body)) return release;
   // 没抢到：条已在——读回来判活，「接管死人留条」和「被活人拒」都从这条走
   let held: SaveLock | null = null;
   try {
@@ -186,8 +211,16 @@ export function claimSave(save: string, port: number, alive: (pid: number) => bo
   // 宁可让桌开起来，也别拿一条烂字节把门锁死
   if (lockVerdict(held, mine, alive) === 'taken')
     throw new Error(`这份存档（${save}）已经被 ${held!.port} 端口上那张桌占着（进程 ${held!.pid}）：先关掉那张，或者给这一张另加 --save=另一份文件`);
-  writeFileSync(file, body);
-  return release;
+  // 该回收这条（死人的留条／读不懂的残条）：摘掉再原子抢一次，不许退回裸写。
+  // 裸写＝又回到「读→判→写」三步：两个进程同抢一条死条，双双判 free、双双写，后写的盖前一张，两张桌同写一份账。
+  try {
+    rmSync(file, { force: true });
+  } catch {
+    /* 摘不掉也接着抢，下面 wx 会如实报 EEXIST */
+  }
+  if (claimLockFile(file, body)) return release;
+  // 摘与抢之间被第三张桌插进来占了：活人就该让它，死条下回再走一遍判活——这一趟先让开，别硬写
+  throw new Error(`这份存档（${save}）的占位条刚被别的进程接管，这一趟没抢上——稍后重试，或给这一张另加 --save=另一份文件`);
 }
 
 /**
