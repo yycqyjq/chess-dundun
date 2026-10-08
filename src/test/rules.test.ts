@@ -542,8 +542,8 @@ ok(
 const leadKou = toPlay(createGame({ rules: base, players: 2, mode: 'kou', seed: 54 }), [[id('红车'), id('卒')], [id('黑士'), id('黑炮')]], 0);
 const leadHard = choose(viewFor(leadKou, 0), legalActions(leadKou, 0), 'hard', mulberry32(3));
 ok(
-  '自己领出时桌面是空的，抢赢也只值一枚：hard 不砸红车，先丢卒',
-  leadHard.kind === 'lead' && picked(leadHard) === '卒',
+  '自己领出也按摊牌赢面算账：红车压得住大半未见牌，抢两枚的墩是笔合算的买卖，hard 敢领',
+  leadHard.kind === 'lead' && picked(leadHard) === '红车',
   `${leadHard.kind}:${picked(leadHard)}`,
 );
 const bigPot = toPlay(createGame({ rules: base, players: 4, mode: 'kou', seed: 55 }), [[id('红车')], [id('黑士')], [id('卒')], [id('黑炮')]], 1);
@@ -564,6 +564,35 @@ ok(
   '明棋里它看得见那是一张黑炮，压不过就弃最小的',
   mingDiscard.kind === 'discard' && picked(mingDiscard) === '卒',
   `${mingDiscard.kind}:${picked(mingDiscard)}`,
+);
+
+console.log('\n常手：认得活牌——压过所有未见牌的，白捡的墩当场捡');
+const liveHand = toPlay(createGame({ rules: base, players: 2, mode: 'kou', seed: 56 }), [[id('黑炮'), id('黑车')], [id('红帅'), id('卒')]], 0);
+apply(liveHand, 0, { kind: 'lead', pieceIds: [id('黑炮')] });
+const liveGrab = choose(viewFor(liveHand, 1), legalActions(liveHand, 1), 'greedy', mulberry32(3));
+ok(
+  '手里的红帅压过所有没见过的牌：跟出去白捡一墩，不再是喂最小的',
+  liveGrab.kind === 'follow' && picked(liveGrab) === '红帅',
+  `${liveGrab.kind}:${picked(liveGrab)}`,
+);
+const liveLeadState = toPlay(createGame({ rules: base, players: 2, mode: 'kou', seed: 57 }), [[id('红车'), id('卒')], [id('黑士'), id('黑炮')]], 0);
+for (const p of liveLeadState.pieces) if (p.tier > 5) liveLeadState.revealed.add(p.id);
+const liveLead = choose(viewFor(liveLeadState, 0), legalActions(liveLeadState, 0), 'greedy', mulberry32(3));
+ok(
+  '大过它的牌全都亮过了：常手领红车出去稳稳收一墩，不再丢卒',
+  liveLead.kind === 'lead' && picked(liveLead) === '红车',
+  `${liveLead.kind}:${picked(liveLead)}`,
+);
+
+console.log('\n残局深搜：剩牌不多时把整局推完再选（老手）');
+const endgame = toPlay(createGame({ rules: base, players: 2, mode: 'ming', seed: 58 }), [[id('红炮'), id('红炮'), id('红车')], [id('黑车'), id('黑车'), id('卒')]], 0);
+const endPick = choose(viewFor(endgame, 0), legalActions(endgame, 0), 'hard', mulberry32(3));
+const endCarry =
+  endPick.kind === 'lead' && endPick.pieceIds.length === 1 && endgame.byId.get(endPick.pieceIds[0]!)!.label === '红炮';
+ok(
+  '残局（剩 6 张）整局推演：领红车逼他弃卒，尾墩再捡一枚——比整对砸出去被黑车对吃掉多收一枚',
+  endCarry,
+  JSON.stringify(endPick),
 );
 
 console.log('\nAI 不许有固定套路：同分的走法要随机挑（网页的电脑座位走的就是这个 choose）');

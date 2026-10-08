@@ -69,9 +69,11 @@ console.log('\nAI 选座：喂给它的着法一定在 legalActions 里');
     const rng = mulberry32(99);
     const seat = pendingSeats(state)[0]!;
     const legal = legalActions(state, seat);
+    const pickedDbg = aiActionFor(state, seat, level, rng);
     ok(
       `摸签阶段（${level}）：AI 那一手在 legalActions 里`,
-      legal.some((a) => key(a) === key(aiActionFor(state, seat, level, rng))),
+      legal.some((a) => key(a) === key(pickedDbg)),
+      `picked ${key(pickedDbg)} 不在 ${legal.map(key).join('｜')}`,
     );
   }
   const state = newGameState(rules, { players: 2, mode: 'ming', seed: 21 }, 0, -1);
