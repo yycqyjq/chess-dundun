@@ -37,19 +37,20 @@ mac:
   category: public.app-category.board-games
   # 不签名：这台机器上没有开发者证书，也不打算碰钥匙串。装完会被 Gatekeeper 拦，README 里写怎么绕
   identity: null
+  # zip 是给自动更新用的（mac 的 updater 只认 zip）：publish: null 之下不会自更新，留着只是白出一百多兆
   target:
     - target: dmg
       arch: [arm64]
-    - target: zip
-      arch: [arm64]
+
+# dmg 的 .blockmap 只服务增量更新（delta 对账），没有更新服务器就没有对账的意义
+dmg:
+  writeUpdateInfo: false
 
 win:
   icon: public/icon-512.png
   # 交叉打包：从 mac 出 win 包是 electron-builder 支持的，但「装得上、点得通」只有真 Windows 说了算
   target:
     - target: nsis
-      arch: [x64]
-    - target: zip
       arch: [x64]
   forceCodeSigning: false
 
@@ -58,6 +59,8 @@ nsis:
   perMachine: false
   allowToChangeInstallationDirectory: true
   shortcutName: 棋墩墩
+  # exe 的 .blockmap 同理：增量更新的对账文件，这包不会自更新，不出
+  differentialPackage: false
 
 # 文件名一律 ASCII：包名里带中文在 dmg 卷名和 nsis 那些脚本里都是给自己找事
 artifactName: qdd-desktop-${version}-${arch}-${os}.${ext}

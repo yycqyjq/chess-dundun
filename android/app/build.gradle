@@ -1,5 +1,10 @@
 apply plugin: 'com.android.application'
 
+// 版本号只养一份：桌面、网页都在 package.json 上涨，安卓包照它念，别自己再养一个 1.0
+def qddVersion = new groovy.json.JsonSlurper().parseText(file('../../package.json').text).version
+// versionCode 得是整数且逐版递增：按 semver 摊开（0.3.2 → 3002），从手写的 1 也能一路升上去
+def (qddMaj, qddMin, qddPat) = qddVersion.tokenize('.').collect { it.toInteger() }
+
 android {
     namespace = "com.qdd.chessdundun"
     compileSdk = rootProject.ext.compileSdkVersion
@@ -7,8 +12,8 @@ android {
         applicationId "com.qdd.chessdundun"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "1.0"
+        versionCode qddMaj * 1000000 + qddMin * 1000 + qddPat
+        versionName qddVersion
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
