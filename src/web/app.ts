@@ -909,36 +909,59 @@ export class App {
     });
   }
 
-  /** 结算卡：联机不拦循环，房主按了下一局自己会推来新的一帧 */
-  private showResult(): void {
-    const state = this.state;
-    const host = this.me === this.hostSeat;
-    const top = winners(state);
-    const no = this.gameNo;
-    const next = nextDrawer(state);
-    const title =
-      top.length === 1
-        ? `第 ${no} 局｜${this.who(top[0]!)} 夺冠`
-        : top.length > 1
-          ? `第 ${no} 局｜${top.map((s) => this.who(s)).join('、')} 并列`
-          : `第 ${no} 局｜谁都没收到牌`;
-    this.sound.cue('win');
-    this.resultClose?.();
+  /** 结算卡标题：夺冠／并列／无人收牌三分支，单机联机念的是同一份 */
+  private resultTitle(no: number): string {
+    const top = winners(this.state);
+    if (top.length === 1) return `第 ${no} 局｜${this.who(top[0]!)} 夺冠`;
+    if (top.length > 1) return `第 ${no} 局｜${top.map((s) => this.who(s)).join('、')} 并列`;
+    return `第 ${no} 局｜谁都没收到牌`;
+  }
+
+  /**
+   * 结算卡的公共骨架：标题、名次、跨局总账、复制战报一条路，单机联机两张卡只差
+   * 中间那句话和那排按钮。原来两处各写一遍，文案改一处漏一处就是这个口子。
+   * 复制战报统一钉在按钮排末尾（单机那份原来没带 mini，跟着联机那份收口）。
+   */
+  private resultCard(
+    title: string,
+    drawer: number,
+    note: string,
+    paint: (row: HTMLElement, close: () => void) => void,
+    onOpen?: (close: () => void) => void,
+  ): void {
     popup(
       this.root,
       title,
       (body, close, foot) => {
-        this.resultClose = () => {
-          this.resultClose = null;
-          close();
-        };
-        this.rankRows(body, next);
-        const note = div('note');
-        note.textContent = host
-          ? `你是房主 ${seatName(this.me)}，下一局在候场厅里由你按开始。`
-          : `等 ${this.who(this.hostSeat)} 开下一局；想挑椅子、看谁坐哪儿，去候场厅。`;
-        body.append(note);
+        onOpen?.(close);
+        this.rankRows(body, drawer);
+        const line = div('note');
+        line.textContent = note;
+        body.append(line);
         const row = div('sheet-row');
+        paint(row, close);
+        row.append(button('复制战报', () => void this.copyReport(body, title), 'btn mini'));
+        // 这一样是被名次撑长的一屏：主按钮那排不能跟着滚走
+        foot.append(row);
+        this.bookRows(body);
+      },
+      true,
+    );
+  }
+
+  /** 结算卡：联机不拦循环，房主按了下一局自己会推来新的一帧 */
+  private showResult(): void {
+    const host = this.me === this.hostSeat;
+    const next = nextDrawer(this.state);
+    this.sound.cue('win');
+    this.resultClose?.();
+    this.resultCard(
+      this.resultTitle(this.gameNo),
+      next,
+      host
+        ? `你是房主 ${seatName(this.me)}，下一局在候场厅里由你按开始。`
+        : `等 ${this.who(this.hostSeat)} 开下一局；想挑椅子、看谁坐哪儿，去候场厅。`,
+      (row, close) => {
         if (host)
           row.append(
             button('开始下一局', () => {
@@ -959,13 +982,14 @@ export class App {
             },
             'btn mini',
           ),
-          button('复制战报', () => void this.copyReport(body, title), 'btn mini'),
         );
-        // 这一样是被名次撑长的一屏：开始下一局那颗不能跟着滚走
-        foot.append(row);
-        this.bookRows(body);
       },
-      true,
+      (close) => {
+        this.resultClose = () => {
+          this.resultClose = null;
+          close();
+        };
+      },
     );
   }
 
@@ -1287,16 +1311,8 @@ export class App {
   }
 
   private async askAgain(): Promise<boolean> {
-    const state = this.state;
-    this.drawer = settleMatch(this.book, state);
-    const no = this.gameNo;
-    const top = winners(state);
-    const title =
-      top.length === 1
-        ? `第 ${no} 局｜${this.who(top[0]!)} 夺冠`
-        : top.length > 1
-          ? `第 ${no} 局｜${top.map((s) => this.who(s)).join('、')} 并列`
-          : `第 ${no} 局｜谁都没收到牌`;
+    this.drawer = settleMatch(this.book, this.state);
+    const top = winners(this.state);
     this.sound.cue('win');
     return new Promise((res) => {
       // 把 resolve 存进实例：结算卡开着时从右上角「换桌」走，showHome 只摘 DOM、碰不到这两颗按钮，
@@ -1306,18 +1322,13 @@ export class App {
         res(v);
       };
       this.againRes = done;
-      popup(
-        this.root,
-        title,
-        (body, close, foot) => {
-          this.rankRows(body, this.drawer);
-          const note = div('note');
-          note.textContent =
-            top.length === 1
-              ? `下一局由 ${this.who(this.drawer)} 起抽`
-              : `这局并列，下一局仍由 ${this.who(this.drawer)} 起抽`;
-          body.append(note);
-          const row = div('sheet-row');
+      this.resultCard(
+        this.resultTitle(this.gameNo),
+        this.drawer,
+        top.length === 1
+          ? `下一局由 ${this.who(this.drawer)} 起抽`
+          : `这局并列，下一局仍由 ${this.who(this.drawer)} 起抽`,
+        (row, close) => {
           row.append(
             button('再来一局', () => {
               close();
@@ -1327,13 +1338,8 @@ export class App {
               close();
               done(false);
             }),
-            button('复制战报', () => void this.copyReport(body, title)),
           );
-          // 名次那几行加长、战报还能摊开，这一屏随时被撑得一屏装不下：那三颗钉在卡底
-          foot.append(row);
-          this.bookRows(body);
         },
-        true,
       );
     });
   }
@@ -1393,20 +1399,16 @@ export class App {
   // ---------- 交互 ----------
 
   private wire(): void {
-    this.shell.board.addEventListener('click', (ev) => {
-      // 真手势里把 AudioContext 建起来：等动画帧里第一声才建，多半已经被自动播放策略按住、白哑一场
-      this.sound.warmup();
-      const piece = (ev.target as HTMLElement).closest<HTMLElement>('.piece');
-      // 点空白处＝收回：手牌摊开了就握回扇形，摸签摊开了那摞也合上（动画正在演时不动，别倒带）
-      if (!piece) {
-        if (this.busy || !this.view) return;
-        if (this.view.spread) this.view.spread = false;
-        else if (this.state.phase === 'draft' && this.view.hover !== null) this.view.hover = null;
-        else return;
-        this.render(true);
-        return;
-      }
-      this.tapPiece(Number(piece.dataset.id));
+    this.shell.board.addEventListener('click', (ev) => this.tapFrom(ev.target));
+    // 键盘那条路：牌是能聚焦的（tabindex 在 pieces.ts），Enter／空格走与鼠标同一段「点牌」逻辑。
+    // 焦点不在牌上就不接——按钮条那几颗就在桌面里，它们有自己的原生 Enter 语义
+    this.shell.board.addEventListener('keydown', (ev) => {
+      if (ev.repeat) return;
+      if (ev.key !== 'Enter' && ev.key !== ' ') return;
+      const piece = ev.target instanceof Element ? ev.target.closest<HTMLElement>('.piece') : null;
+      if (!piece) return;
+      ev.preventDefault();
+      this.tapFrom(ev.target);
     });
     // 触屏没有 hover，一按就是抽牌，所以只在真有鼠标的设备上挂展开
     if (this.hasHover) {
@@ -1419,6 +1421,23 @@ export class App {
       this.shell.board.addEventListener('pointerout', (ev) => this.peekPlay(ev.target as HTMLElement, false));
     }
     this.watchResize();
+  }
+
+  /** 点牌／键盘按牌共用的那一段：点空白处＝收回，点到牌就走 tapPiece */
+  private tapFrom(target: EventTarget | null): void {
+    // 真手势里把 AudioContext 建起来：等动画帧里第一声才建，多半已经被自动播放策略按住、白哑一场
+    this.sound.warmup();
+    const piece = target instanceof Element ? target.closest<HTMLElement>('.piece') : null;
+    // 点空白处＝收回：手牌摊开了就握回扇形，摸签摊开了那摞也合上（动画正在演时不动，别倒带）
+    if (!piece) {
+      if (this.busy || !this.view) return;
+      if (this.view.spread) this.view.spread = false;
+      else if (this.state.phase === 'draft' && this.view.hover !== null) this.view.hover = null;
+      else return;
+      this.render(true);
+      return;
+    }
+    this.tapPiece(Number(piece.dataset.id));
   }
 
   private hoverAt(ev: PointerEvent): void {

@@ -299,6 +299,12 @@ body {
   perspective: 640px;
 }
 
+/* 键盘焦点：Enter／空格按牌那条路（app.ts）落焦点时的金描边，跟选中态一脉 */
+.piece:focus-visible {
+  outline: 2px solid var(--gold);
+  outline-offset: 2px;
+}
+
 .turn {
   position: relative;
   width: 100%;

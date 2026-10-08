@@ -91,6 +91,16 @@ import {
   ok('null 不是话', why(null).length > 0);
   ok('一个字不是话', why('x').length > 0);
   ok('一个数不是话', why(42).length > 0);
+  ok('令牌 64 字认（上限之内）', held({ t: 'join', seat: 0, token: 'x'.repeat(64) })?.t === 'join');
+  ok('令牌 65 字坐不下（一封 1MB 的字别想住进椅子）', why({ t: 'join', seat: 0, token: 'x'.repeat(65) }).length > 0);
+  ok(
+    '一手 64 个 id 形上认（合法张数归桌判）',
+    held({ t: 'act', action: { kind: 'lead', pieceIds: Array.from({ length: 64 }, (_, i) => i) } })?.t === 'act',
+  );
+  ok(
+    '一手 65 个 id 不收（超大数组别想喂进比对）',
+    why({ t: 'act', action: { kind: 'lead', pieceIds: Array.from({ length: 65 }, (_, i) => i) } }).length > 0,
+  );
 }
 
 // ───────────────────────── 线上来的字节过那道门：三种下场 ─────────────────────────

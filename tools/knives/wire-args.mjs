@@ -32,9 +32,9 @@ export default {
     },
     {
       rel: "src/net/wire.ts",
-      note: "4 出零张也算一手（sameAction 里那圈循环又空了）",
-      from: "  return Array.isArray(v) && v.length > 0 && v.every(isInt);",
-      to: "  return Array.isArray(v) && v.every(isInt);",
+      note: "4 出零张也算一手（sameAction 里那圈循环又空了）｜2026-10-08 isIds 加了量上限（IDS_MAX），刀口跟着那一行一起磨",
+      from: "  return Array.isArray(v) && v.length > 0 && v.length <= IDS_MAX && v.every(isInt);",
+      to: "  return Array.isArray(v) && v.length <= IDS_MAX && v.every(isInt);",
       expect: "出零张不收",
     },
     {

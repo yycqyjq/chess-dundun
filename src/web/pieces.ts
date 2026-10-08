@@ -23,6 +23,9 @@ export class Pieces {
       el.className = 'piece';
       el.dataset.id = String(p.id);
       el.dataset.color = p.color;
+      // 牌面进键盘的 Tab 序：Enter／空格的「按」在 app.ts 与鼠标共用同一段逻辑。
+      // 不在桌上的牌是 hidden 的，天然不可聚焦，Tab 序跟着桌面走
+      el.tabIndex = 0;
       const turn = document.createElement('div');
       turn.className = 'turn';
       const face = document.createElement('div');

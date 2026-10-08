@@ -134,6 +134,12 @@ export type ToHost =
 /** 这几张清单照着引擎里的联合类型列：多写一个合法值都不许，`check` 盯得住漏、盯得住多 */
 const KINDS: readonly Action['kind'][] = ['draw', 'allocate', 'lead', 'follow', 'discard', 'noop'];
 const WAYS: readonly AllocWay[] = ['layered', 'stacks-left', 'stacks-right'];
+/** 令牌上限：真令牌形如 `s0-`＋16 位 hex（20 字），64 绰绰有余。没有这一格，一封 1MB 的 join
+ *  会把同样长的字存进椅子，随后随每份 welcome、每份快照、每次落盘反复携带。 */
+const TOKEN_MAX = 64;
+/** 一手最多递多少个 id：这儿管的是量（别拿十万级的数组喂比对），合法张数归桌按 legalActions 判。
+ *  一副 32 枚、2 人局一人最多 16 张，64 给自定义规则表留了余量——比这更大的一手只可能不合法。 */
+const IDS_MAX = 64;
 
 function isObj(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -148,9 +154,9 @@ function oneOf<T extends string>(list: readonly T[], v: unknown): v is T {
   return typeof v === 'string' && (list as readonly string[]).includes(v);
 }
 
-/** 出牌那一伙：张数得是真的有，空着的意思「不出一张」引擎压根不认 */
+/** 出牌那一伙：张数得是真的有、也不许一把超过上限（IDS_MAX），空着的意思「不出一张」引擎压根不认 */
 function isIds(v: unknown): v is number[] {
-  return Array.isArray(v) && v.length > 0 && v.every(isInt);
+  return Array.isArray(v) && v.length > 0 && v.length <= IDS_MAX && v.every(isInt);
 }
 
 /**
@@ -183,6 +189,7 @@ export function checkHost(raw: unknown, seats: number, rules: Pick<Rules, 'modes
       // -1 是「随便给把空椅」：扫码进来的人不该先被问一遍坐哪把，挑哪一把归桌定（见 Table.freeSeat）
       if (!isInt(raw.seat) || raw.seat < -1 || raw.seat >= seats) return `没这个座位：这桌只 ${seats} 把椅子`;
       if (typeof raw.token !== 'string') return '令牌得是一串字';
+      if (raw.token.length > TOKEN_MAX) return '这串令牌长得不像话，认不了';
       if (raw.nick !== undefined && typeof raw.nick !== 'string') return '代号得是一串字';
       return { t: 'join', seat: raw.seat, token: raw.token, nick: raw.nick };
     }

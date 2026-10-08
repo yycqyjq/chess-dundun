@@ -349,6 +349,8 @@ export function openRoom(argv: string[], port: number): Room {
   /** 谁连着坐哪个位子：一条连接进来先没位子，join 成功才绑上 */
   const seatOf = new Map<Conn, number>();
   const connOf = new Map<number, Conn>();
+  /** 每条连接上一回问座位表的时刻：正常客户端最密也是一秒一问，比这密的就是在白吃 inviteUrls 那趟网卡遍历 */
+  const lobbyAt = new Map<Conn, number>();
 
   const send = (seat: number, msg: ToClient): void => {
     connOf.get(seat)?.send(JSON.stringify(msg));
@@ -478,6 +480,7 @@ export function openRoom(argv: string[], port: number): Room {
       }
     },
     onClose(conn) {
+      lobbyAt.delete(conn);
       const seat = seatOf.get(conn);
       if (seat === undefined) return;
       seatOf.delete(conn);
@@ -492,9 +495,15 @@ export function openRoom(argv: string[], port: number): Room {
   function handle(conn: Conn, msg: ToHost): void {
     const seat = seatOf.get(conn);
     switch (msg.t) {
-      case 'lobby':
-        conn.send(JSON.stringify({ t: 'seats', ...table.lobby(), lan: inviteUrls() } satisfies ToClient));
+      case 'lobby': {
+        // 200ms 一道下限：节流的那几条不回话——正常客户端下一秒还会再问，用不着为它撒一句谎
+        const now = Date.now();
+        if (now - (lobbyAt.get(conn) ?? 0) >= 200) {
+          lobbyAt.set(conn, now);
+          conn.send(JSON.stringify({ t: 'seats', ...table.lobby(), lan: inviteUrls() } satisfies ToClient));
+        }
         return;
+      }
       case 'join': {
         // seat -1＝「给我挑一把空椅」：扫码进来的人进门就落座，挑哪一把归桌定。
         // 这条连接已经站着了就不另挪椅子——一个标签页占两把，屏幕上就分不清谁是谁；
