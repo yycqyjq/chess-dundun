@@ -245,7 +245,7 @@ export function setupFrom(argv: string[], rules: Rules): TableSetup {
   const said = flag(argv, 'mode', 'kou');
   const mode = rules.modes.find((m) => m === said);
   if (!mode) throw new Error(`--mode 只有 ${rules.modes.join('、')} 这几种玩法，你给的是「${said}」`);
-  const level = flag(argv, 'level', 'hard');
+  const level = flag(argv, 'level', 'easy');
   const picked = LEVELS.find((l) => l === level);
   if (!picked) throw new Error(`--level 只有 ${LEVELS.join('/')} 这几档，你给的是「${level}」`);
   return {

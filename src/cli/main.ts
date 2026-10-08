@@ -366,7 +366,7 @@ function selfplay(opts: {
   }
 }
 
-/** 难度名收在 --level / --levels 两处；不认识就直接停，别默默退回 greedy */
+/** 难度名收在 --level / --levels 两处；不认识就直接停，别默默退回默认档 */
 function toLevel(raw: string): Level {
   if ((LEVELS as string[]).includes(raw)) return raw as Level;
   console.log(`未知难度：${raw}（可选 ${LEVELS.join('|')}，--levels 用逗号按座位分隔）`);
@@ -403,7 +403,7 @@ if (cmd === 'selfplay') {
   process.exit(0);
 }
 if (cmd === 'play') {
-  await play({ players, mode, seed, chain, level: toLevel(flag(rest, 'level', 'greedy')) });
+  await play({ players, mode, seed, chain, level: toLevel(flag(rest, 'level', 'easy')) });
   process.exit(0);
 }
 console.log(

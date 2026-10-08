@@ -561,8 +561,8 @@ console.log('椅子令牌不许是牌局那条种子的函数');
   };
   const quiet = setupFrom([], rules);
   ok(
-    '一行参数不给：默认两人、扣棋、hard、房主坐 P1',
-    quiet.players === 2 && quiet.mode === 'kou' && quiet.level === 'hard' && quiet.hostSeat === 0 && Number.isInteger(quiet.seed),
+    '一行参数不给：默认两人、扣棋、easy、房主坐 P1',
+    quiet.players === 2 && quiet.mode === 'kou' && quiet.level === 'easy' && quiet.hostSeat === 0 && Number.isInteger(quiet.seed),
   );
   const given = setupFrom(['--players', '4', '--mode=ming', '--level=easy', '--seed=7', '--host-seat', '3'], rules);
   ok('--名 值 和 --名=值 两种写法都认', given.players === 4 && given.mode === 'ming' && given.level === 'easy' && given.seed === 7 && given.hostSeat === 3);

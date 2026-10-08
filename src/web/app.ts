@@ -36,7 +36,7 @@ import {
 /** 联机那头的桌推过来的每一份快照 */
 type StatePush = Extract<ToClient, { t: 'state' }>;
 
-const LEVEL_CN: Record<Level, string> = { easy: '随手出', greedy: '挑省的', hard: '算赢面' };
+const LEVEL_CN: Record<Level, string> = { easy: '入门', greedy: '常手', hard: '老手' };
 /** 电脑想想再出：太即时看着不像人，太长磨叽 */
 const AI_MS = 620;
 /** 扣棋里一墩出完，全桌扣着停这么久再一起翻——现实里就是大家把牌摁住掀开的那一下，短到一拍就够，别让人干等 */
@@ -94,7 +94,7 @@ export class App {
   private state!: GameState;
   private view!: TableView;
   private book!: MatchBook;
-  private setup: Setup = { players: 2, mode: 'kou', level: 'greedy', seed: 0 };
+  private setup: Setup = { players: 2, mode: 'kou', level: 'easy', seed: 0 };
   private rng = mulberry32(1);
   private gen = 0;
   private gameNo = 0;
@@ -335,7 +335,7 @@ export class App {
       ),
       segment(
         '电脑水平',
-        LEVELS.map((l) => ({ text: `${l === 'greedy' ? '默认 · ' : ''}${LEVEL_CN[l]}`, value: l })),
+        LEVELS.map((l) => ({ text: `${l === 'easy' ? '默认 · ' : ''}${LEVEL_CN[l]}`, value: l })),
         chosen.level,
         (v) => (chosen.level = v),
       ),
