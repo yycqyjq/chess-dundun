@@ -199,6 +199,8 @@ function makeDeals(view: View, rng: () => number, samples: number): Deal[] {
     .map((n, seat) => ({ seat, n }))
     .filter((s) => s.seat !== view.seat && s.n > 0);
 
+  // 各摊位份量加起来正好是活牌数：明棋垫牌反扣后，垫掉的死牌留在池尾不参与摊位——
+  // 摊牌只从活牌里抽，账是平的（死牌的档位没人知道，留在池尾即是正确边际）
   const deals: Deal[] = [];
   for (let s = 0; s < samples; s++) {
     for (let i = pool.length - 1; i > 0; i--) {

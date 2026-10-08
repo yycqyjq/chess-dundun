@@ -623,7 +623,9 @@ export function layout(state: GameState, view: TableView, board: Board): Map<num
         y: g.y + (g.alongX ? g.si * inward : g.sa * along) - cw / 2 + u / 2,
         scale: u / cw,
         z: 100 + seat * 40 + group * 4 + depth,
-        down: !faceUp(id, seat === view.mine),
+        // 收牌摞里没有「我的牌」可言：明棋垫牌反扣后，摞里的垫牌连收墩的这家也没见过——
+        // 只按公开口径翻，谁的摞都不放行（faceUp 的 mine 旁路只服务手牌和桌面那份）
+        down: isFaceDown(state, id),
         delay: view.justWon.has(id) ? 140 : 0,
         cls: view.justWon.has(id) ? 'won' : 'pile',
       });

@@ -16,7 +16,7 @@ import {
 } from '../core/game.ts';
 import { loadRules } from '../node/load_rules.ts';
 import { buildPieceSet, pieceLabel } from '../core/pieces.ts';
-import { viewFor } from '../core/view.ts';
+import { openSet, viewFor } from '../core/view.ts';
 import { choose, type Level } from '../ai/agent.ts';
 import { beats, comparePower, powerOf, resolveTrick } from '../core/trick.ts';
 import { mulberry32 } from '../core/rng.ts';
@@ -564,6 +564,42 @@ ok(
   '明棋里它看得见那是一张黑炮，压不过就弃最小的',
   mingDiscard.kind === 'discard' && picked(mingDiscard) === '卒',
   `${mingDiscard.kind}:${picked(mingDiscard)}`,
+);
+console.log('\n明棋垫牌反扣：垫出去的牌谁也不知道，结算也不翻');
+const fdState = toPlay(createGame({ rules: base, players: 3, mode: 'ming', seed: 60 }), [
+  [id('黑炮'), id('黑士')],
+  [idsOf('卒')[0]!, id('兵')],
+  [id('红车'), idsOf('红车')[1]!],
+], 0);
+apply(fdState, 0, { kind: 'lead', pieceIds: [id('黑炮')] });
+const fdPick = choose(viewFor(fdState, 1), legalActions(fdState, 1), 'greedy', mulberry32(3));
+apply(fdState, 1, fdPick);
+const pledgedId = (fdPick as { pieceIds: number[] }).pieceIds[0]!;
+ok(
+  '明棋垫牌反扣：垫出去的不进公开集，谁也不知道垫了什么',
+  !fdState.revealed.has(pledgedId) && pledgedId === idsOf('卒')[0],
+);
+ok(
+  '垫牌的人自己心里有数：带上自己桌面那份，open 集里看得到',
+  openSet(fdState, 1, { includeOwnTable: true }).has(pledgedId),
+);
+const oppDiscardView = viewFor(fdState, 0).trick!.discarded[0]!;
+ok(
+  '对手的 View 只看得见张数，牌面是空的',
+  oppDiscardView.pieceIds.length === 0 && oppDiscardView.size === 1,
+);
+ok(
+  '公开日志只写张数不写牌名（日志全场可见，写了就穿帮）',
+  fdState.log.at(-1)!.includes('垫 1 张（扣）') && !fdState.log.at(-1)!.includes('卒'),
+);
+apply(fdState, 2, { kind: 'follow', pieceIds: [id('红车')] });
+ok(
+  '结算也不翻：垫的牌到收尾依旧没人知道，赢家的墩里只数张数',
+  fdState.trick === null && !fdState.revealed.has(pledgedId) && fdState.won[2] === 3,
+);
+ok(
+  '明棋的出牌照旧全亮：赢的那份红车在公开集里',
+  fdState.revealed.has(id('红车')),
 );
 
 console.log('\n常手：认得活牌——压过所有未见牌的，白捡的墩当场捡');

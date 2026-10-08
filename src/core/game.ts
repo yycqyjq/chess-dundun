@@ -529,12 +529,17 @@ function applyDiscard(state: GameState, seat: number, pieceIds: number[]): GameS
   const trick = state.trick!;
   trick.discards.push({ seat, pieceIds });
   trick.waiting = trick.waiting.filter((s) => s !== seat);
-  reveal(state, pieceIds);
-  state.log.push(`${seatName(seat)} 大不过，弃 ${labels(state, pieceIds)}`);
+  // 垫牌反扣：垫了什么不进公开集、收尾也不翻——明棋的悬念就搁在这儿。
+  // 日志全场可见，只写张数不写牌名，写了就穿帮；暗棋的垫牌本来扣到结算才翻，日志跟着口径走
+  state.log.push(
+    state.mode === 'ming'
+      ? `${seatName(seat)} 大不过，垫 ${pieceIds.length} 张（扣）`
+      : `${seatName(seat)} 大不过，弃 ${labels(state, pieceIds)}`,
+  );
   return maybeCloseTrick(state);
 }
 
-/** 明棋出牌即亮；暗棋扣着出，整墩打完才翻开 */
+/** 明棋出牌即亮（垫牌除外：垫牌反扣，谁也不知道垫了什么，收尾也不翻）；暗棋扣着出，整墩打完才翻开 */
 function reveal(state: GameState, pieceIds: number[]): void {
   if (state.mode === 'ming') for (const id of pieceIds) state.revealed.add(id);
 }
@@ -556,8 +561,11 @@ function maybeCloseTrick(state: GameState): GameState {
   for (const play of trick.plays) gained += play.pieceIds.length;
   for (const discard of trick.discards) gained += discard.pieceIds.length;
   state.won[winner] += gained;
-  for (const p of [...trick.plays, ...trick.discards]) {
-    for (const id of p.pieceIds) state.revealed.add(id);
+  // 结算翻牌：暗棋整墩一起亮（出牌垫牌都翻）；明棋的牌出牌时就亮了，垫牌按规矩永不翻
+  if (state.mode === 'kou') {
+    for (const p of [...trick.plays, ...trick.discards]) {
+      for (const id of p.pieceIds) state.revealed.add(id);
+    }
   }
   state.log.push(
     `${state.mode === 'kou' ? '翻开：' : ''}本墩归 ${seatName(winner)}（${labels(state, trick.plays[trick.championIdx].pieceIds)}），收 ${gained} 枚`,
