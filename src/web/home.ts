@@ -278,7 +278,7 @@ export function seatOption(rules: Rules, n: number): string {
   return `${n} 人 · 每人 ${Math.floor(buildPieceSet(r.ranks).length / n)} 枚`;
 }
 
-export function homePanel(onSolo: () => void, onRoom: () => void, app = false): HTMLElement {
+export function homePanel(onSolo: () => void, onRoom: () => void, app = false, onAbout?: () => void): HTMLElement {
   const entry = (k: 'solo' | 'room', go: () => void): HTMLButtonElement => {
     const btn = button('', undefined, 'btn home-entry');
     btn.append(div('e', ENTRY[k].head), div('n', entryNote(k, app)));
@@ -291,6 +291,8 @@ export function homePanel(onSolo: () => void, onRoom: () => void, app = false): 
   foot.append(div('n', '联机那台机器得和你在同一个网络'));
   const version = appVersion();
   if (version) foot.append(div('v', `v${version}`));
+  // 关于那颗是脚注里的小字链接，不是第三个大热区：入口层保持两块，玩法速览／声音／版本收进那一页
+  if (onAbout) foot.append(button('关于 · 玩法与版本', onAbout, 'home-about'));
   const el = div('home');
   el.append(
     div('home-title', '棋墩墩'),

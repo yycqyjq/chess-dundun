@@ -782,6 +782,24 @@ body {
   image-rendering: pixelated;
 }
 
+/* 关于页：小标题走金色（与品牌同源），那颗脚注小链接不走 .btn 的壳——它是文字，不是又一颗按钮 */
+.about-h {
+  font-weight: 600;
+  color: var(--gold);
+  letter-spacing: 1px;
+  margin: 16px 2px 4px;
+}
+
+.home-about {
+  background: none;
+  border: none;
+  padding: 2px 2px;
+  font-size: 12px;
+  color: rgba(243, 231, 211, 0.55);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
 .invite-col {
   flex: 1;
   min-width: 0;

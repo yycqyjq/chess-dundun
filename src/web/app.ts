@@ -12,8 +12,9 @@ import { nextDrawer, openMatch, winners, type MatchBook } from '../core/match.ts
 import { mulberry32 } from '../core/rng.ts';
 import { aliveSeats, deckFor, hydrate, type SeatInfo, type Seats, type TableStatus, type ToClient } from '../net/wire.ts';
 import { LIST_REFRESH_MS, peerNote, type FoundRoom } from '../net/discover.ts';
+import { ABOUT_RULES, aboutMeta } from './aboutText.ts';
 import { ctrlLift, draftShape, handCramped, labelBands, LABEL_W, layout, maxStacks, pieceSize, stackSpots, type Board, type TableView } from './board.ts';
-import { autoSeat, BACK, entryHead, fillAddr, homePanel, hostHanded, hostJump, inAppShell, initialScreen, inviteUrls, roomRow, seatOption, seatRowText } from './home.ts';
+import { appVersion, autoSeat, BACK, entryHead, fillAddr, homePanel, hostHanded, hostJump, inAppShell, initialScreen, inviteUrls, roomRow, seatOption, seatRowText } from './home.ts';
 import { aiActionFor, closedTable, newGameState, reportText, settleMatch, stepAndMask, type OnTable } from './local.ts';
 import { deviceNick, forget, Link, recall, remember, setTableAddr, shouldWake, tableAddr } from './net.ts';
 import { MOVE_MS, Pieces } from './pieces.ts';
@@ -204,8 +205,41 @@ export class App {
         () => this.showList(),
         // 外壳里那块上第二行字不一样：那一头寻不了同网的桌、也没法在自己这台开一桌
         inAppShell(),
+        () => this.showAbout(),
       ),
     );
+  }
+
+  /**
+   * 关于 · 玩法与版本：规则速览（文案住在 aboutText.ts，跟引擎现状同源）＋声音开关＋版本许可。
+   * 首页脚注那颗小链接开的一整屏页——跟「一屏一层」同一条链路，出口照旧念「返回」回首页。
+   */
+  private showAbout(): void {
+    for (const el of this.root.querySelectorAll('.sheet')) el.remove();
+    const { body, foot } = page(this.root, '关于 · 棋墩墩', 'about');
+    for (const sec of ABOUT_RULES) {
+      body.append(div('about-h', sec.h));
+      for (const line of sec.p) body.append(div('note', line));
+    }
+    body.append(div('about-h', '版本'), div('note', aboutMeta(appVersion())));
+    body.append(
+      div('about-h', '声音'),
+      segment(
+        '声音',
+        [
+          { text: '开', value: true },
+          { text: '关', value: false },
+        ],
+        this.sound.enabled,
+        // Sound 只有一颗 toggle：翻到目标态才按，已经是目标态就不动（也别让它白响一声）
+        (on) => {
+          if (on !== this.sound.enabled) this.sound.toggle();
+        },
+      ),
+    );
+    const out = div('sheet-row');
+    out.append(button(BACK, () => this.showHome(), 'btn mini'));
+    foot.append(out);
   }
 
   // ---------- 同网桌列表 ----------

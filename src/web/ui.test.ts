@@ -12,6 +12,7 @@
  * 放 src/web 是有原因的：tsconfig.json 不带 DOM 库。
  * 全文件（连假元素自己）都不许用构造器参数属性——`--experimental-strip-types` 只抹类型，不改写赋值。
  */
+import { ABOUT_RULES, aboutMeta } from './aboutText.ts';
 import { anchor, buildShell, button, card, page, paintChip, popup, rich, segment, toast, type Shell } from './ui.ts';
 import {
   ADDR_BAD,
@@ -539,12 +540,40 @@ function planOf(spotFor: (i: number) => Placed): Map<number, Placed> {
 
   const foot = panel.find('home-foot')!;
   ok('没注上版本时宁可少那一行，也不念一个 undefined', !foot.find('v') && appVersion() === '', foot.children.map((c) => c.raw).join(','));
+  // 关于那颗（2026-10-09）：只有传了回调才出现——脚注的小字链接，不是第三个大热区
+  let about = 0;
+  const withAbout = F(homePanel(() => {}, () => {}, false, () => about++));
+  const aboutBtn = withAbout.find('home-foot')!.findAll('button').find((b) => [...b.names].includes('home-about'));
+  ok(
+    '传了 onAbout 就在脚注那颗：文字级小链接，点一下走一次',
+    aboutBtn !== undefined && aboutBtn.raw === '关于 · 玩法与版本' && (() => { aboutBtn.click(); return about === 1; })(),
+    aboutBtn ? aboutBtn.raw : '‹那颗没出现›',
+  );
+  ok(
+    '没传就不多那一颗（入口层还是两块，测试里那批旧面板不受影响）',
+    panel.find('home-foot')!.findAll('button').every((b) => ![...b.names].includes('home-about')),
+  );
   // 这一格注的是**编出来的**版本号，不是 package.json 那一个（真数由 vite 的 define 带进来）：
   // 写成正经的 0.1.0 会让人以为测试把界面钉死在当前版本上，改天升版本还以为要跟着改这里。
   G.__APP_VERSION__ = '9.9.9';
   const withVersion = F(homePanel(() => {}, () => {})).find('home-foot')!;
   ok('注上了就在脚上念 v9.9.9，那句联机提示还在', withVersion.find('v')!.raw === 'v9.9.9' && withVersion.children.length === 2, withVersion.children.map((c) => c.raw).join(','));
   delete G.__APP_VERSION__;
+}
+
+// ---------- 关于页的玩法速览：文案跟引擎现状同源 ----------
+
+{
+  const all = ABOUT_RULES.map((sec) => sec.p.join('\n')).join('\n');
+  ok('明棋垫牌反扣那条在（2026-10-09 的规则，漏了这条就是旧文案）', all.includes('垫的牌反扣'));
+  ok('14 档强度序念全（黑 < 红，红帅压黑将）', ABOUT_RULES[1]!.p[0]!.includes('黑将 < 红帅'));
+  ok('抽签全局只抽一次、点数与大小无关', all.includes('全局只抽这一次') && all.includes('与大小无关'));
+  ok('3 人局只留层层轮流分那条在', all.includes('3 人局只留层层轮流分'));
+  ok('默认档念入门（和 app.ts 的默认一致，别再写挑省的）', ABOUT_RULES[5]!.p[0]!.includes('默认入门'));
+  ok(
+    '版本号没注上时那句不念 undefined（首页脚注同一条脾气）',
+    aboutMeta('') === 'MIT 许可 · 完整规则以 rules.json 为准，改它不用动代码' && aboutMeta('9.9.9').startsWith('v9.9.9'),
+  );
 }
 
 // ---------- App 外壳那一屏：桌地址由人敲，读不出来就别去连 ----------
