@@ -15,7 +15,7 @@ import { LIST_REFRESH_MS, peerNote, type FoundRoom } from '../net/discover.ts';
 import { ABOUT_RULES, aboutMeta } from './aboutText.ts';
 import { ctrlLift, draftShape, handCramped, labelBands, LABEL_W, layout, maxStacks, pieceSize, stackSpots, type Board, type TableView } from './board.ts';
 import { recallSolo, rememberSolo } from './net.ts';
-import { appVersion, autoSeat, BACK, entryHead, fillAddr, homePanel, hostHanded, hostJump, inAppShell, initialScreen, inviteUrls, lobbyGuide, roomRow, seatOption, seatRowText } from './home.ts';
+import { appVersion, autoSeat, BACK, entryHead, fillAddr, homePanel, hostHanded, hostJump, inAppShell, initialScreen, inviteUrls, lobbyGuide, peerEmpty, roomRow, seatOption, seatRowText } from './home.ts';
 import { aiActionFor, closedTable, newGameState, reportText, settleMatch, stepAndMask, type OnTable } from './local.ts';
 import { deviceNick, forget, Link, recall, remember, setTableAddr, shouldWake, tableAddr } from './net.ts';
 import { MOVE_MS, Pieces } from './pieces.ts';
@@ -348,13 +348,19 @@ export class App {
     );
   }
 
-  /** 寻回来的桌：一行一条，点那条地址就把浏览器递过去。列表页整块重画（这一层一秒不刷） */
+  /** 寻回来的桌：整行是热区，点哪儿都进桌。列表页整块重画（这一层一秒不刷）；一条都没有就摆空状态那一格 */
   private paintList(list: FoundRoom[], why: string): void {
     const page = this.list;
     if (!page) return;
     page.rows.innerHTML = '';
-    for (const f of list) page.rows.append(roomRow(f));
-    page.note.textContent = peerNote(list, why);
+    if (list.length) {
+      for (const f of list) page.rows.append(roomRow(f));
+      page.note.textContent = peerNote(list, why);
+    } else {
+      // 空的时候那句说明不飘在页脚了——它本来就是空状态的第二行字，跟着那一格摆（口径还是 peerNote 现给，不另养一份）
+      page.rows.append(peerEmpty(peerNote([], why)));
+      page.note.textContent = '';
+    }
   }
 
   // ---------- 开桌 ----------

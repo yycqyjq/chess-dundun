@@ -1,7 +1,7 @@
-import { anchor, button, div, input } from './ui.ts';
+import { anchor, button, div, input, span } from './ui.ts';
 import { rulesFor, seatName, type Rules } from '../core/game.ts';
 import { buildPieceSet } from '../core/pieces.ts';
-import { foundLine, roomUrl, JOIN_QUERY, type FoundRoom } from '../net/discover.ts';
+import { foundMeta, foundFree, roomUrl, statusBadge, JOIN_QUERY, type FoundRoom } from '../net/discover.ts';
 import type { Lobby, SeatInfo } from '../net/wire.ts';
 import type { Saved } from './net.ts';
 
@@ -126,14 +126,28 @@ export function entryHead(k: EntryKey): string {
 }
 
 /**
- * 一条同网寻到的桌：一句情况加一条真能点的地址。只有列表页画它（候场厅里不摆别的桌）。
- * 地址一律由 roomUrl 现拼（线上回来的字只留校验过的 ip＋port），也不往 HTML 里写。
+ * 一条同网寻到的桌：整行就是热区（2026-10-09 批3：从「点那条小地址」升成「点哪儿都进桌」）。
+ * 行本体是真 <a>——进桌就是让浏览器自己走一趟，点之前悬上去还看得见去哪儿；
+ * 行内两排：头一排是徽章·情况·空位，第二排是地址（悬着可整条选中拷走）。字和色档全取
+ * discover 那批拆片函数，跟候场厅那句平铺文本同源。坐满了给 .dim：这会儿没人接，
+ * 不该抬起来给小手骗人去点（.btn.dim 那条家族逻辑，见 style.css）。
  */
 export function roomRow(f: FoundRoom): HTMLElement {
   const url = roomUrl(f);
-  const row = div('peer-row');
-  row.append(div('peer-t', foundLine(f)), anchor(url, url, 'btn mini peer-link'));
+  const b = statusBadge(f);
+  const fr = foundFree(f);
+  const row = anchor('', url, f.free > 0 ? 'peer-row btn' : 'peer-row btn dim');
+  const line = span('peer-t');
+  line.append(span(`peer-badge ${b.cls}`, b.text), span('peer-meta', `${foundMeta(f)} · 第 ${f.gameNo} 局`), span(`peer-free ${fr.cls}`, fr.text));
+  row.append(line, span('peer-addr', `${f.ip}:${f.port}`));
   return row;
+}
+
+/** 空清单那格的挡位：一行说「这儿没东西可点」，一行说「下一步怎么办」（那句由 peerNote 现给，不另养一份） */
+export function peerEmpty(why: string): HTMLElement {
+  const box = div('peer-empty');
+  box.append(div('pe-h', '这台网上还没寻到开着的桌'), div('pe-s', why));
+  return box;
 }
 
 /** 自动入座该递哪一把椅子：-1＝「给我挑一把空椅」（哪把归桌定，见 Table.freeSeat），null＝这一步别替人做 */

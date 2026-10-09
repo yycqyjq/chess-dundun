@@ -32,6 +32,7 @@ import {
   isLoopback,
   lobbyGuide,
   normAddr,
+  peerEmpty,
   roomRow,
   seatOption,
   seatRowText,
@@ -39,7 +40,7 @@ import {
   wantsJoin,
 } from './home.ts';
 import type { Rules } from '../core/game.ts';
-import { foundLine, JOIN_QUERY, type FoundRoom } from '../net/discover.ts';
+import { foundFree, foundMeta, JOIN_QUERY, statusBadge, type FoundRoom } from '../net/discover.ts';
 import { recallSolo, rememberSolo } from './net.ts';
 import type { SeatInfo } from '../net/wire.ts';
 import type { Saved } from './net.ts';
@@ -687,35 +688,60 @@ function planOf(spotFor: (i: number) => Placed): Map<number, Placed> {
   ok('这一屏不往 HTML 里塞任何一句话（敲进来的字可能带尖括号）', body.countHtml() === 0 && foot.countHtml() === 0, [...body.allHtml, ...foot.allHtml].join('｜'));
 }
 
-// ---------- 寻到的那张桌：一行情况加一条真能点的地址 ----------
+// ---------- 那条真能点的 <a>：进桌是让浏览器自己走一趟，不拿 JS 拼跳转 ----------
 
 {
-  const url = 'http://192.168.1.41:5200/';
-  const el = F(anchor('2 人 · 扣棋', url, 'btn mini peer-link'));
+  const url = 'http://192.168.1.41:5200/?join=1';
+  const el = F(anchor('192.168.1.41:5200', url, 'btn mini'));
   const read = (k: string) => (el as unknown as Record<string, string>)[k];
-  ok('是一条 <a>：进桌就是让浏览器自己走一趟，不拿 JS 拼跳转', el.tag === 'a' && !(el.listeners.get('click') ?? []).length, `tag=${el.tag} 监听 ${el.listeners.get('click')?.length ?? 0} 个`);
+  ok('是一条 <a>：不挂 click 监听，跳转归 href', el.tag === 'a' && !(el.listeners.get('click') ?? []).length, `tag=${el.tag} 监听 ${el.listeners.get('click')?.length ?? 0} 个`);
   ok('地址挂在 href 上，一个字都没往 HTML 里写', read('href') === url && el.countHtml() === 0, `${read('href')}｜${el.allHtml.join('｜')}`);
-  ok('屏幕上那行字点之前就看得见去哪儿', el.textContent === '2 人 · 扣棋' && read('href') !== el.textContent);
-  ok('名头带着 btn：跟旁边那颗按钮一样是个能点的东西', el.className === 'btn mini peer-link', el.className);
+  ok('屏幕上那行字点之前就看得见去哪儿', el.textContent === '192.168.1.41:5200' && read('href') !== el.textContent);
+  ok('名头带着 btn：跟旁边那颗按钮一样是个能点的东西', el.className === 'btn mini', el.className);
   const plain = F(anchor(url, url));
-  ok('不点名头也是颗按钮的样子（候场厅那条默认值）', plain.className === 'btn', plain.className);
+  ok('不点名头也是颗按钮的样子（默认 btn）', plain.className === 'btn', plain.className);
 }
 
-// ---------- 列表页那一行桌：情况一句话，地址一条真 <a> ----------
+// ---------- 列表页那一行桌：整行是热区，徽章／情况／空位／地址分格排 ----------
 
 {
   const f: FoundRoom = { ip: '192.168.1.41', port: 5200, players: 4, gameNo: 2, mode: 'kou', level: 'hard', status: 'waiting', free: 2 };
   const row = F(roomRow(f));
   const href = (n: FEl) => (n as unknown as Record<string, string>)['href'];
-  ok('一行两块：一句情况挨一条地址，地址本身就是那颗「去」', row.children.length === 2 && row.children[1]!.tag === 'a', row.children.map((c) => `${c.tag}.${c.className}`).join('+'));
-  ok('那句情况走的是 foundLine，列表页和候场厅念的是同一句', row.children[0]!.raw === foundLine(f), row.children[0]!.raw);
-  ok('地址现拼得出来，且带着入桌那个标记', href(row.children[1]!) === `http://192.168.1.41:5200/${JOIN_QUERY}` && row.countHtml() === 0, `${href(row.children[1]!)}｜${row.allHtml.join('｜')}`);
-  // 列表里点一条就是「去入桌」，那条地址必须自己带着这句意图：不带的话，浏览器落到首页，人还得再点一次「本地联机」。
-  // 这儿不写死那串标记，量的是「拼地址那一头」跟「认地址那一头」用的是同一句话——谁改了拼法，两头当场对不上
-  ok('那条地址带着入桌那个标记：点它进去落的就是候场厅', initialScreen(new URL(href(row.children[1]!)).search) === 'room' && href(row.children[1]!).endsWith(JOIN_QUERY), href(row.children[1]!));
-  ok('名头带着 btn mini：跟旁边那颗按钮一样是个能点的东西', row.children[1]!.className === 'btn mini peer-link', row.children[1]!.className);
+  // 批3：从「点那条小地址」升成「整行都是那颗按钮」——行本体就是 <a>，不另挂 JS click（浏览器自己走，悬上去看得见去哪儿）
+  ok('整行是热区：行本体就是 <a class="peer-row btn">，不挂 click 监听', row.tag === 'a' && row.names.has('peer-row') && row.names.has('btn') && !(row.listeners.get('click') ?? []).length, `${row.tag}.${row.className}｜监听 ${row.listeners.get('click')?.length ?? 0}`);
+  ok('地址挂行 href 上，带着入桌那个标记：点哪儿进去落候场厅', href(row) === `http://192.168.1.41:5200/${JOIN_QUERY}` && initialScreen(new URL(href(row)).search) === 'room', href(row));
+  ok('一个字都没往 HTML 里写（ip／端口都可能带脏字）', row.countHtml() === 0, row.allHtml.join('｜'));
+  // 头一排：徽章 + 情况 + 空位；第二排：地址（可整条选中拷走）
+  const line = row.find('peer-t')!;
+  const badge = line.find('peer-badge')!;
+  const meta = line.find('peer-meta')!;
+  const free = line.find('peer-free')!;
+  const addr = row.find('peer-addr')!;
+  ok('两排齐了：peer-t（含徽章·情况·空位）在上、地址在下', !!line && !!badge && !!meta && !!free && !!addr, row.children.map((c) => c.className).join('+'));
+  // 徽章、情况、空位各取 discover 那批拆片函数——改一处字，列表行和候场厅那句平铺文本一起变
+  ok('徽章的字和色档走 statusBadge', badge.raw === statusBadge(f).text && badge.names.has(statusBadge(f).cls) && badge.names.has('peer-badge'), `${badge.className}｜${badge.raw}`);
+  ok('情况那截走 foundMeta（人数·玩法）加局号', meta.raw === `${foundMeta(f)} · 第 ${f.gameNo} 局`, meta.raw);
+  ok('空位那截走 foundFree：有空的亮（open）', free.raw === foundFree(f).text && free.names.has(foundFree(f).cls), `${free.className}｜${free.raw}`);
+  ok('地址那排显示的是校验过的 ip:端口（不是整条 URL）', addr.raw === `${f.ip}:${f.port}`, addr.raw);
+  // 坐满了：整行降成 .dim（这会儿没人接，别抬起来骗小手去点），空位那颗走 full 色档
   const full = F(roomRow({ ...f, free: 0, status: 'playing' }));
-  ok('坐满了、开打中，那一行照样只是把话写出来，不另加一颗灰按钮', full.children.length === 2 && /坐满了/.test(full.children[0]!.raw), full.children[0]!.raw);
+  const fullFree = full.find('peer-t')!.find('peer-free')!;
+  ok('坐满了那行降成 .dim（不骗人去点），空位归 full 档', full.names.has('dim') && fullFree.names.has('full'), `${full.className}｜${fullFree.className}`);
+  // 正在打但还空着（有人掉了线腾出椅子）：给 .btn 热区不给 .dim——还进得去
+  const playingOpen = F(roomRow({ ...f, free: 1, status: 'playing' }));
+  ok('正在打但还有空位：照样是可点热区，不降 dim', !playingOpen.names.has('dim') && playingOpen.names.has('btn'), playingOpen.className);
+}
+
+// ---------- 空清单那一格：「这儿没东西可点」加一句下一步 ----------
+
+{
+  const box = F(peerEmpty('一台都没寻到：多半是这块网不让设备之间互访'));
+  ok('空状态是一格（不是 .btn 热区）：div.peer-empty，两行字', box.tag === 'div' && box.names.has('peer-empty') && box.children.length === 2, `${box.tag}.${box.className}｜${box.children.length} 行`);
+  const head = box.find('pe-h')!;
+  const sub = box.find('pe-s')!;
+  ok('头一行说「没寻到桌」，第二行那句由外面递进来（peerNote 现给，不另养一份口径）', head.raw.includes('还没寻到') && sub.raw === '一台都没寻到：多半是这块网不让设备之间互访', `${head.raw}｜${sub.raw}`);
+  ok('空状态也不往 HTML 里写（那句可能带别人敲进来的脏字）', box.countHtml() === 0, box.allHtml.join('｜'));
 }
 
 // ---------- 进门那一刻落哪把椅子：建房即房主、扫码递 -1、断线认回原来那把 ----------

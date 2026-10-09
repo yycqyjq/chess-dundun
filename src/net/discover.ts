@@ -270,10 +270,26 @@ export function sweepDue(lastAt: number, now: number, min = SWEEP_MIN_MS): boole
 /** 寻呼被 --no-discover 关着时宿主回的那一句：说清为什么寻不到，再说下一步去哪儿 */
 export const NO_DISCOVER = '这台机器的寻呼关着（开了 --no-discover）：只能照上面那条局域网地址手动敲';
 
+/** 状态那颗徽章的字和色档：列表页拿它单独画一枚徽章，候场厅那句平铺文本也从这儿取，改一处两头一起变 */
+export function statusBadge(f: FoundRoom): { text: string; cls: 'wait' | 'play' } {
+  return f.status === 'waiting' ? { text: '等开局', cls: 'wait' } : { text: '正在打', cls: 'play' };
+}
+
+/** 人数·玩法那一小截（徽章和局号之外的部分） */
+export function foundMeta(f: FoundRoom): string {
+  return `${f.players} 人 · ${f.mode === 'ming' ? '明棋' : '扣棋'}`;
+}
+
+/** 空位那一小截的字和色档：还有空＝open（高亮），坐满＝full（压暗） */
+export function foundFree(f: FoundRoom): { text: string; cls: 'open' | 'full' } {
+  return f.free > 0 ? { text: `还空 ${f.free} 把`, cls: 'open' } : { text: '坐满了', cls: 'full' };
+}
+
 /** 候场厅里那一行字。地址不进这句——它单独摆在按钮边上，点之前看得见去哪儿 */
 export function foundLine(f: FoundRoom): string {
-  const game = f.status === 'waiting' ? `等开局 · 第 ${f.gameNo} 局` : `正在打 · 第 ${f.gameNo} 局`;
-  return `${f.players} 人 · ${f.mode === 'ming' ? '明棋' : '扣棋'} · ${game} · ${f.free > 0 ? `还空 ${f.free} 把` : '坐满了'}`;
+  const b = statusBadge(f);
+  const fr = foundFree(f);
+  return `${foundMeta(f)} · ${b.text} · 第 ${f.gameNo} 局 · ${fr.text}`;
 }
 
 /**

@@ -866,27 +866,72 @@ body {
   padding-top: 6px;
 }
 
-/* 一行两排：情况在上、地址那颗在下，两排共用左边缘那一根锚。
+/* 一行两排：头一排（徽章·情况·空位）在上、地址在下，两排共用左边缘那一根锚。
    以前是「情况｜地址」两列：地址那颗被 auto 推到最右、情况那句缩在最左，
-   一行里两个起点隔着一条空缝，读起来就是飘的。 */
+   一行里两个起点隔着一条空缝，读起来就是飘的。
+   批3（2026-10-09）把整行升成一颗 .btn 热区（行本体就是 <a>），底下那三条骨架一个字没动：
+   飘不飘钉的是列数和左锚，不是谁可点。 */
 .peer-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   justify-items: start;
   gap: 4px;
+  text-align: left;
+  text-decoration: none;
 }
 
 .peer-t {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
   font-size: 12px;
 }
 
-.peer-link {
+/* 状态徽章：等开局是金的（这会儿进得去），正在打收成木灰（进不去，别晃人） */
+.peer-badge {
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  padding: 1px 9px;
+}
+.peer-badge.wait {
+  color: var(--gold);
+}
+.peer-badge.play {
+  color: #9a8b74;
+}
+
+/* 空位那一头同档：还空着的高亮，坐满了的压暗——跟徽章一对，一眼分得出哪桌现在进得去 */
+.peer-free.open {
+  color: var(--gold);
+}
+.peer-free.full {
+  color: #9a8b74;
+}
+
+.peer-addr {
   font-size: 12px;
-  text-decoration: none;
+  opacity: 0.65;
   word-break: break-all;
-  text-align: center;
   user-select: all;
   -webkit-user-select: all;
+}
+
+/* 空清单那一格：「这儿没东西可点」加一句下一步。虚线边、不挂 .btn——它是状态，不是热区 */
+.peer-empty {
+  display: grid;
+  gap: 6px;
+  border: 1px dashed #6b5b48;
+  border-radius: 10px;
+  padding: 14px 13px;
+}
+.peer-empty .pe-h {
+  font-size: 13px;
+}
+.peer-empty .pe-s {
+  font-size: 12px;
+  opacity: 0.7;
+  line-height: 1.5;
 }
 
 /* App 外壳里那格手填的桌地址：长得跟 .btn 同一族（同一条边、同一个圆角、同一份字），

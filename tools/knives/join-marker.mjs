@@ -39,14 +39,14 @@ export default {
       note: "D 递给人敲的那条地址干脆不带标记：点列表里一条，浏览器落到首页，人还得再点一次「本地联机」",
       from: '  return `http://${ip}:${port}/${JOIN_QUERY}`;',
       to: '  return `http://${ip}:${port}/`;',
-      expect: '那条地址带着入桌那个标记',
+      expect: '地址挂行 href 上，带着入桌那个标记',
     },
     {
       rel: 'src/net/discover.ts',
       note: 'E roomUrl 绕开 httpUrl 自己拼一份：两处拼法从此各走各的，邀请那头照样带标记、列表这条丢了',
       from: '  return httpUrl(f.ip, f.port);',
       to: '  return `http://${f.ip}:${f.port}/`;',
-      expect: '那条地址带着入桌那个标记',
+      expect: '地址挂行 href 上，带着入桌那个标记',
     },
   ],
 };

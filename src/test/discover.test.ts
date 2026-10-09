@@ -17,7 +17,9 @@ import {
   announcePortOf,
   broadcastOf,
   encodeOffer,
+  foundFree,
   foundLine,
+  foundMeta,
   httpUrl,
   isMine,
   listFound,
@@ -29,6 +31,7 @@ import {
   roomKey,
   roomUrl,
   slotOf,
+  statusBadge,
   sweepDue,
   sweepPorts,
   targetsFor,
@@ -223,6 +226,10 @@ console.log('\n这本账会老：谁报得勤算谁，听不见的抹掉');
   ok('一句情况念得出：人数玩法局号空位', line === '4 人 · 明棋 · 等开局 · 第 2 局 · 还空 1 把', line);
   ok('坐满了说人话', foundLine(mk({ free: 0 })).includes('坐满了'));
   ok('正在打的写在前面', foundLine(mk({ status: 'playing' })).includes('正在打 · 第 1 局'));
+  // 那批拆片是列表行和这句平铺文本共用的同一份来源：字改一处，两头跟着一起变
+  ok('拆片拼回来就是那句：徽章·情况·空位各管一段', `${foundMeta(mk({ players: 4, mode: 'ming' }))} · ${statusBadge(mk({})).text} · 第 ${mk({ gameNo: 1 }).gameNo} 局 · ${foundFree(mk({ free: 1 })).text}` === foundLine(mk({ players: 4, mode: 'ming', gameNo: 1, free: 1 })), `${foundLine(mk({ players: 4, mode: 'ming', gameNo: 1, free: 1 }))}`);
+  ok('徽章认状态：等开局／正在打，还带着色档', statusBadge(mk({})).text === '等开局' && statusBadge(mk({})).cls === 'wait' && statusBadge(mk({ status: 'playing' })).text === '正在打' && statusBadge(mk({ status: 'playing' })).cls === 'play');
+  ok('空位认档位：有空的亮（open），坐满的暗（full）', foundFree(mk({ free: 2 })).text === '还空 2 把' && foundFree(mk({ free: 2 })).cls === 'open' && foundFree(mk({ free: 0 })).text === '坐满了' && foundFree(mk({ free: 0 })).cls === 'full');
   ok('寻到了就不念 AP 隔离那句', peerNote([mk({})], '').includes('同网寻到 1 张桌'));
   ok('空清单有原因，念原因', peerNote([], '这台机器的寻呼关着') === '这台机器的寻呼关着');
   ok('空清单没原因，念下一步', peerNote([], '').includes('AP 隔离'));
