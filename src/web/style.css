@@ -1020,8 +1020,17 @@ body {
 
   .room .sheet-body {
     display: flex;
+    flex-wrap: wrap;
     align-items: flex-start;
+    align-content: flex-start;
     gap: 0 22px;
+  }
+
+  /* 「现在该干什么」置顶那句横跨整行：它是这一屏的第一句话，底下才是配置／椅子两栏。
+     不给它独占一行，它就成了 flex 的第三个孩子、按内容宽占最左一列，把两栏挤成两条
+     （2026-10-09 宽屏实拍：引导句一大块、配置与椅子被压得竖着断行）。 */
+  .room .guide {
+    flex: 0 0 100%;
   }
 
   .room .cfg-col,

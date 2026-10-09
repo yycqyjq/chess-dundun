@@ -116,6 +116,11 @@ console.log('\n手机单列，宽屏才两栏');
   ok('820 那条 media 里才横排', val('.room .sheet-body', 'display', WIDE) === 'flex');
   for (const col of ['.room .cfg-col', '.room .seat-col'])
     ok(`${col}：宽屏各占一半、且允许收缩`, val(col, 'flex', WIDE) === '1 1 0' && val(col, 'min-width', WIDE) === '0', `flex=${val(col, 'flex', WIDE)} min-width=${val(col, 'min-width', WIDE)}`);
+  // 宽屏那个 flex 容器里有三个孩子（置顶那句 ＋ 配置 ＋ 椅子）：置顶那句得独占整行，
+  // 否则它按内容宽占最左一列、把两栏挤成两条（2026-10-09 宽屏实拍：配置与椅子竖着断行）
+  ok('宽屏容器允许换行（置顶那句才能被顶到下一行）', val('.room .sheet-body', 'flex-wrap', WIDE) === 'wrap', val('.room .sheet-body', 'flex-wrap', WIDE) ?? '‹没写›');
+  ok('两行靠上码（换行后多出的高度别被均分到行间，把两栏顶到半空）', val('.room .sheet-body', 'align-content', WIDE) === 'flex-start', val('.room .sheet-body', 'align-content', WIDE) ?? '‹没写›');
+  ok('「置顶那句」宽屏独占整行（flex: 0 0 100%），不当第三列跟两栏抢宽度', val('.room .guide', 'flex', WIDE) === '0 0 100%', val('.room .guide', 'flex', WIDE) ?? '‹没写›');
   // 断点跟复盘那条对齐：两处各写一个数字，早晚会分叉
   const drawerWide = RULES.some((r) => r.media.includes('820px') && r.sel === '.drawer');
   ok('宽屏断点跟复盘那条用的是同一个数（820）', drawerWide && WIDE.includes('820px'), WIDE);
