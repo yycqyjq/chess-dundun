@@ -624,8 +624,10 @@ export function layout(state: GameState, view: TableView, board: Board): Map<num
         scale: u / cw,
         z: 100 + seat * 40 + group * 4 + depth,
         // 收牌摞里没有「我的牌」可言：明棋垫牌反扣后，摞里的垫牌连收墩的这家也没见过——
-        // 只按公开口径翻，谁的摞都不放行（faceUp 的 mine 旁路只服务手牌和桌面那份）
-        down: isFaceDown(state, id),
+        // 只按公开口径翻，谁的摞都不放行（faceUp 的 mine 旁路只服务手牌和桌面那份）。
+        // 扣棋的摞一律扣着：一墩翻开只是当场看一眼谁最大，收进摞就得盖回背面（用户点名：收要「扣着收」），
+        // 不然整局下来每家的摞都亮着面，等于把收牌摞摆成了战绩展板
+        down: state.mode === 'kou' || isFaceDown(state, id),
         delay: view.justWon.has(id) ? 140 : 0,
         cls: view.justWon.has(id) ? 'won' : 'pile',
       });

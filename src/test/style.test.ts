@@ -355,5 +355,28 @@ console.log('\n整屏页：三处出口同一份名字，身后不隔着半透�
     `.drawer ${zDrawer}／.home ${zHome}／.sheet ${zVeil}／.toast ${zToast}`);
 }
 
+// ---------- 收牌扣着收：翻回背面那一拍排在「收进摞」前面（用户点名） ----------
+
+console.log('\n收牌扣着收：翻回背面那一拍在收之前，不跟挪位挤在同一拍');
+{
+  // 还是这一套路：app.ts 经 `rules.json?raw` 进不了 node 测试，那就测这份文件自己写了什么
+  const app = web('app.ts');
+  // 翻开看一眼 → 翻回背面落定 → 再收进摞。少了中间那一拍，翻转就和挪位挤在同一拍里：
+  // 牌在往摞里飞的半路变脸，看得清它落在哪一家（他原话：不是扣着收的，是边扣边收）
+  const cover = app.indexOf('await this.nap(FLIP_COVER_MS)');
+  const collect = app.indexOf('this.view.piles[winner]!.push(...ids)');
+  ok(
+    '翻回背面那一拍排在「收进摞」前面（不是边翻边收）',
+    cover > 0 && collect > 0 && cover < collect && /this\.view\.holdDown = new Set\(ids\);/.test(app),
+    `翻回 ${cover}｜收进摞 ${collect}`,
+  );
+  // 那一拍只该挂在扣棋那一路：明棋出牌即亮，收进摞本来就该亮着，没有「翻回背面」这一回事
+  ok(
+    '那一拍只挂在扣棋那一路（明棋收牌不翻回背面）',
+    /if \(this\.state\.mode === 'kou'\) \{\s*this\.view\.holdDown = new Set\(ids\);/.test(app),
+    (app.match(/^\s*if \(this\.state\.mode === 'kou'\) \{$/m) ?? ['‹没找到那句›'])[0],
+  );
+}
+
 console.log(failures ? `\n${failures} 条没过` : '\n全部通过');
 process.exit(failures ? 1 : 0);

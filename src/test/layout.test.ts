@@ -191,6 +191,34 @@ for (const { name, board: rect } of BOARDS) {
   }
 }
 
+console.log('\n收牌扣着收：扣棋的摞一律背面——翻开的牌收进去也不许亮着（用户点名）');
+for (const { name, board: rect } of BOARDS) {
+  for (const players of [2, 3, 4]) {
+    const board = deskOf(rect, players);
+    for (const [hands, piles] of CASES[players]!) {
+      if (!piles.some((n) => n > 0)) continue;
+      const { state, view } = midGame(players, 24, hands, piles);
+      // 一墩打完引擎把整墩塞进 revealed（就是翻开那一下）；收进摞的正是这一批，
+      // 所以这里必须把摞里的牌全标成「翻开过」——不标的话这条断言量的是空集，绿得没意义
+      for (const id of view.piles.flat()) state.revealed.add(id);
+      const plan = layout(state, view, board);
+      const ids = view.piles.flat();
+      const up = ids.filter((id) => !plan.get(id)!.down);
+      ok(`${name}｜${players} 人 摞 ${piles.join('/')} 全扣着`, up.length === 0, `摞里 ${ids.length} 张、亮着 ${up.length}`);
+    }
+  }
+}
+
+// 反过来量一手：明棋出牌即亮，收进摞本来就该亮着——「扣着收」只该管扣棋那一路，别顺手把明棋也扣了
+{
+  const { state, view } = midGame(2, 24, [2, 2], [14, 14]);
+  state.mode = 'ming';
+  for (const id of view.piles[0]!) state.revealed.add(id);
+  const plan = layout(state, view, deskOf(BOARDS[0]!.board, 2));
+  const dark = view.piles[0]!.filter((id) => plan.get(id)!.down);
+  ok('明棋收牌不跟着翻回背面：翻开过的牌收进摞还是亮着', dark.length === 0, `${dark.length} 张被扣了`);
+}
+
 console.log('\n同一家的组与组：四张一墩算一格（这是显示用的码法，三家四家都一样），超过地盘里那四格就缩牌加排，一张都不许叠在另一组上');
 for (const { name, board: rect } of BOARDS) {
   for (const players of [2, 3, 4]) {

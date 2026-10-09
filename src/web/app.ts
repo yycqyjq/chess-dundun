@@ -46,6 +46,12 @@ const FLIP_HOLD_MS = 600;
 /** 翻开以后留来看清「这一墩谁最大」的那口气，比闷着那段长一点 */
 const FLIP_READ_MS = 800;
 /**
+ * 收牌前那一拍：翻开的牌先在桌面上翻回背面、落定，再整墩收进牌摞（用户点名：收要「扣着收」）。
+ * 省掉这一拍直接收，翻转就和挪位挤在同一拍里——牌在往摞里飞的半路变脸，看得清它落在哪一家。
+ * 250ms 是 CSS 那条翻面的时长（`.turn` 的 transition），留点余量给它跑完。
+ */
+const FLIP_COVER_MS = 320;
+/**
  * 摸签八拍的节奏表，数值只管这一处，要调节奏改这里就行（顺序见 drawShow 的注释）。
  * spread/tuck 是整列补间的落位时间；lift/cover 那张牌在原地放大、缩回，补间一样长。
  */
@@ -1390,11 +1396,19 @@ export class App {
     }
     // 刚翻开，留一眼看清这一墩谁最大
     await this.nap(this.state.mode === 'kou' ? FLIP_READ_MS : 560);
+    // 收牌扣着收：先在桌面上翻回背面、落定这一拍，再整墩收进牌摞。
+    // 明棋不翻——那边出牌即亮，收进摞本来就该亮着，没有「扣」这一回事
+    if (this.state.mode === 'kou') {
+      this.view.holdDown = new Set(ids);
+      this.render(true);
+      await this.nap(FLIP_COVER_MS);
+    }
     if (winner >= 0) {
       this.sound.cue('collect');
       this.view.piles[winner]!.push(...ids);
     }
     this.view.freeze = null;
+    this.view.holdDown = new Set();
     this.view.peek = new Set();
     this.view.justWon = new Set(ids);
     this.render(true);
