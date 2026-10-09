@@ -15,8 +15,9 @@ export default {
     {
       rel: 'src/web/app.ts',
       note: 'A 把那一排整个摆回去',
-      from: "    const go = div('sheet-row');\n    const launch = (setup: Setup): void => {",
-      to: "    const seedNote = div('note', `种子 ${chosen.seed}`);\n    const dice = div('sheet-row');\n    dice.append(seedNote, button('重掷', () => {}, 'btn mini'));\n    const go = div('sheet-row');\n    go.append(\n      button(\n        '开桌',",
+      // 2026-10-09 重锚：launch 摘掉那个没人再传的参数（只剩一颗「开桌」），锚点跟着挪
+      from: "    const go = div('sheet-row');\n    const launch = (): void => {",
+      to: "    const seedNote = div('note', `种子 ${chosen.seed}`);\n    const dice = div('sheet-row');\n    dice.append(seedNote, button('重掷', () => {}, 'btn mini'));\n    const go = div('sheet-row');\n    const launch = (): void => {",
       expect: '单机那一屏没有「种子／重掷」那一排',
     },
     {

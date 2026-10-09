@@ -389,6 +389,9 @@ export class App {
       seed: rollSeed(),
     };
     const { veil, body, foot } = page(this.root, entryHead('solo'));
+    // 上局配置只做「预填」：底下那三排就是上局摆的那三格，进来一眼看见、想改就点。
+    // 说一句让人知道它是从哪儿来的——一句小字，不占一颗按钮
+    if (last) body.append(div('note', '已按上局配置填好'));
     body.append(
       segment(
         '坐几个人',
@@ -410,29 +413,18 @@ export class App {
       ),
     );
     const go = div('sheet-row');
-    const launch = (setup: Setup): void => {
+    const launch = (): void => {
       veil.remove();
-      this.setup = setup;
-      // 开桌即写：下一次进这张卡，三排格子就是这一把的（含快捷那一颗）
-      rememberSolo({ players: setup.players, mode: setup.mode, level: setup.level });
-      void this.match(setup);
+      this.setup = chosen;
+      // 开桌即写：下一次进这张卡，三排格子就是这一把的
+      rememberSolo({ players: chosen.players, mode: chosen.mode, level: chosen.level });
+      void this.match(chosen);
     };
-    if (last) {
-      // 上局怎么摆的记得一清二楚：老玩家一拍就开局；想改，卡上的三排就在眼前
-      go.append(
-        button(
-          '按上局配置开局',
-          () => launch({ players: last.players, mode: last.mode, level: last.level, seed: rollSeed() }),
-          'btn primary',
-        ),
-      );
-    }
+    // 只有一颗「开桌」：不给「按上局配置开局」那种一键绕过这张卡的重按钮——
+    // 人还没看清上局摆的是什么就进去了，按钮本身也压过底下那三排真正的选择
+    //（2026-10-09 用户点名：按钮太重、别直接开局；上局配置预填就够）。
     go.append(
-      button(
-        last ? '按当前选择开局' : '开桌',
-        () => launch(chosen),
-        last ? 'btn' : 'btn primary',
-      ),
+      button('开桌', launch, 'btn primary'),
       button(BACK, () => this.showHome(), 'btn mini'),
     );
     // 主按钮进 foot：这一屏三排选项早超出一屏，开桌那颗跟着滚就等于要人先滚到底再摸黑点

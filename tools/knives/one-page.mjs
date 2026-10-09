@@ -29,9 +29,25 @@ export default {
       rel: 'src/web/app.ts',
       note: 'C 那颗主按钮还留着弹窗那时代的名字（说明这一屏其实还是那张卡）',
       // 2026-10-09 批1 落地后重锚：主按钮改成三元那句，veil.remove() 挪进了 launch
-      from: "        last ? '按当前选择开局' : '开桌',",
-      to: "        '摆一桌',",
+      // 2026-10-09 二次重锚：摘掉「按上局配置开局」那颗后只剩一颗「开桌」，锚点跟着挪到这一行
+      from: "      button('开桌', launch, 'btn primary'),",
+      to: "      button('摆一桌', launch, 'btn primary'),",
       expect: '「摆一桌」那张弹窗卡没了（单机那一屏走整屏）',
+    },
+    {
+      rel: 'src/web/app.ts',
+      note: 'C2 上局配置又变回一颗「按上局配置开局」：一键绕过这张卡直接开局，按钮压过底下那三排选择',
+      // 2026-10-09 新增：用户点名那颗按钮太重、别直接开局，上局配置改成预填进三排
+      from: "      button('开桌', launch, 'btn primary'),",
+      to: "      button('按上局配置开局', launch, 'btn primary'),",
+      expect: '单机那一屏的「上局配置」是预填＋一行小字，不是一颗直接开局的按钮',
+    },
+    {
+      rel: 'src/web/app.ts',
+      note: 'C3 那行小字摘掉：三排是预填的这件事没人交代，人不知道它从哪儿来',
+      from: "    if (last) body.append(div('note', '已按上局配置填好'));",
+      to: "    if (last) body.append(div('note', ''));",
+      expect: '单机那一屏的「上局配置」是预填＋一行小字，不是一颗直接开局的按钮',
     },
     {
       rel: 'src/web/style.css',
