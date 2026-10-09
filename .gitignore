@@ -14,6 +14,8 @@ release/
 # 从 mac 交叉打 win 包要的那份 Electron dist（一份 zip 151 MB，每台机器自己按 README 那句取，不进仓库）
 vendor/
 /android/keystore.properties
+# 会话记忆／工具目录：本机自用，不进仓库，也免得刀跑拿它报「仓库被动过」
+.workbuddy-ai/
 *.jks
 *.keystore
 table.json.tmp

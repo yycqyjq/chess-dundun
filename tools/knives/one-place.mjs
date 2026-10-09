@@ -16,8 +16,9 @@ export default {
     {
       rel: 'src/web/app.ts',
       note: 'A 把同网桌那块容器塞回候场厅那一列（两处入口同一件事，早晚走岔）',
-      from: '    seatCol.append(rows, handed, invite);',
-      to: '    seatCol.append(rows, peers, handed, invite);',
+      // 2026-10-09 批1 落地后重锚：候场厅那一列收成 (rows, handed)，邀请拆成后面单独挂的 inviteWrap
+      from: '    seatCol.append(rows, handed);',
+      to: '    seatCol.append(rows, peers, handed);',
       expect: '椅子那一列只收座位表和邀请，不挂同网桌容器',
     },
     {

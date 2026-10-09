@@ -28,8 +28,9 @@ export default {
     {
       rel: 'src/web/app.ts',
       note: 'C 那颗主按钮还留着弹窗那时代的名字（说明这一屏其实还是那张卡）',
-      from: "        '开桌',\n        () => {\n          veil.remove();",
-      to: "        '摆一桌',\n        () => {\n          veil.remove();",
+      // 2026-10-09 批1 落地后重锚：主按钮改成三元那句，veil.remove() 挪进了 launch
+      from: "        last ? '按当前选择开局' : '开桌',",
+      to: "        '摆一桌',",
       expect: '「摆一桌」那张弹窗卡没了（单机那一屏走整屏）',
     },
     {
@@ -65,7 +66,8 @@ export default {
       rel: 'src/web/home.ts',
       suite: 'test:ui',
       note: 'H 首页那两块的字改掉一份（点进去那一屏顶上还念旧名）',
-      from: "  solo: { head: '单机模式',",
+      // 2026-10-09 批3 文案落地后重锚：solo 那块改成了「自己开一桌」
+      from: "  solo: { head: '自己开一桌',",
       to: "  solo: { head: '自己玩',",
       expect: '两块的字就是那两屏的标题，同一份来源',
     },
@@ -134,7 +136,7 @@ export default {
       note: 'Q 候场厅那一屏退回裸 card()：半透黑底＋居中卡又叠回首页上面（批12 摘掉的就是它）',
       from: "const { veil, head, body, foot } = page(this.root, '正连着这桌……', 'room');",
       to: "const { veil, head, body, foot } = card(this.root, '正连着这桌……', 'room');",
-      expect: '牌桌外那一层的四屏全走 page()，一处也没退回裸 card()',
+      expect: '牌桌外那一层的五屏全走 page()，一处也没退回裸 card()',
     },
     {
       rel: 'src/web/style.css',
