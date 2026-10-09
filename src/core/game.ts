@@ -43,7 +43,7 @@ export interface Rules {
   variants?: PlayerVariant[];
 }
 
-/** 处置人定的三种分牌规则：层层轮流分 / 整摞轮流拿（从左起 / 从右起） */
+/** 处置人定的三种分牌规则：一人一层拿牌 / 整摞轮流拿（从左起 / 从右起） */
 export type AllocWay = 'layered' | 'stacks-left' | 'stacks-right';
 
 /** 三种拿法的全集，规则表里写的 `ways` 只能是它的子集 */
@@ -124,12 +124,12 @@ function checkDraft(draft: { stackSize: number; ways: AllocWay[] }, at: string):
       throw new Error(`rules.json：${at} 写了「${way}」，拿法只有 ${ALL_WAYS.join(' / ')} 这三种`);
 }
 
-/** 发得平才算这套规则跑得起来：枚数除得尽家数、一摞张数除得尽家数（层层轮流分每摞要走完整圈），整摞拿还要求摞数除得尽家数 */
+/** 发得平才算这套规则跑得起来：枚数除得尽家数、一摞张数（＝层数）除得尽家数（一人一层拿牌一层一家，除不尽就有家多一层、有家少一层），整摞拿还要求摞数除得尽家数 */
 function checkDealt(total: number, draft: { stackSize: number; ways: AllocWay[] }, players: number, at: string): void {
   if (total % players !== 0) throw new Error(`rules.json：${at} 一共 ${total} 枚，${players} 人发不平`);
   if (draft.stackSize % players !== 0)
     throw new Error(
-      `rules.json：${at} 一摞 ${draft.stackSize} 张分给 ${players} 家，层层轮流分每摞都要多出一截（一摞张数得是家数的整数倍）`,
+      `rules.json：${at} 一摞 ${draft.stackSize} 张分给 ${players} 家，一人一层拿牌分不匀（一摞张数＝层数，得是家数的整数倍）`,
     );
   if (draft.ways.some((way) => way !== 'layered') && (total / draft.stackSize) % players !== 0)
     throw new Error(
@@ -405,7 +405,7 @@ function draftActions(state: GameState, seat: number): Action[] {
     return draft.drawer === seat ? draft.stacks.map((_, stackIdx) => ({ kind: 'draw', stackIdx })) : [];
   }
   if (draft.decider !== seat) return [];
-  // 能选哪几种拿法归规则表（3 人局那一档只有「层层轮流分」：10 摞分 3 家，整摞拿必然不等张）
+  // 能选哪几种拿法归规则表（3 人局那一档只有「一人一层拿牌」：10 摞分 3 家，整摞拿必然不等张）
   return state.rules.draft.ways.map((way) => ({ kind: 'allocate', way }));
 }
 
@@ -448,15 +448,15 @@ function applyDraw(state: GameState, stackIdx: number, pieceId?: number): GameSt
 function applyAllocate(state: GameState, way: AllocWay): GameState {
   const draft = state.draft!;
   if (way === 'layered') {
-    for (const stack of draft.stacks) {
-      let seat = draft.decider;
-      // 一摞从摞口那张开始，一人一张，每摞都从处置人起数
-      for (const id of [...stack].reverse()) {
-        state.hands[seat].push(id);
-        seat = (seat + 1) % state.players;
-      }
+    // 一人一层：从摊开最上面那层（摞口那一层）起，整层归一家，从处置人开始顺时针一层一家。
+    // 一层＝同一深度上每一摞各一张：先分完一层再动下一层，所以「最上面那层全是他的」看得见、
+    // 也说得清——不是从每摞里各抽一张凑给他（用户点名：最上面那个是第一层的牌）。
+    const layers = draft.stacks[0].length;
+    for (let k = 0; k < layers; k++) {
+      const seat = (draft.decider + k) % state.players;
+      for (const stack of draft.stacks) state.hands[seat].push(stack[stack.length - 1 - k]);
     }
-    state.log.push(`${seatName(draft.decider)} 定：层层轮流分，从自己开始顺时针一人一张`);
+    state.log.push(`${seatName(draft.decider)} 定：一人一层拿牌，从最上面那层起，从自己开始顺时针一层一家`);
   } else {
     const order = way === 'stacks-left' ? draft.stacks.map((_, i) => i) : draft.stacks.map((_, i) => i).reverse();
     order.forEach((stackIdx, step) => {

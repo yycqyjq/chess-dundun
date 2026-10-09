@@ -400,7 +400,7 @@ console.log('椅子令牌不许是牌局那条种子的函数');
 }
 
 {
-  // 三人档进联机这一头：三把椅子、一副少两枚的牌、摆 10 摞 × 每摞 3 张、分牌只认「层层轮流分」那一种
+  // 三人档进联机这一头：三把椅子、一副少两枚的牌、摆 10 摞 × 每摞 3 张、分牌只认「一人一层拿牌」那一种
   const { table, inbox, clock } = makeTable({ mode: 'kou', players: 3 });
   for (const s of [0, 1, 2]) table.join(s, '');
   ok('三人桌只有三把椅子，第四把压根不发', table.seatInfo().length === 3);
@@ -412,7 +412,7 @@ console.log('椅子令牌不许是牌局那条种子的函数');
   // 抽完这一签开口的是「处置人」（draft.decider），不是刚才那位起抽人
   const keeper = table.state.draft!.decider;
   const ways = table.legalFor(keeper).filter((a) => a.kind === 'allocate');
-  ok('处置人能挑的拿法只剩一种：层层轮流分', ways.length === 1 && ways[0]!.kind === 'allocate' && 'way' in ways[0] && ways[0].way === 'layered', JSON.stringify(ways));
+  ok('处置人能挑的拿法只剩一种：一人一层拿牌', ways.length === 1 && ways[0]!.kind === 'allocate' && 'way' in ways[0] && ways[0].way === 'layered', JSON.stringify(ways));
   ok('整摞轮流拿在这一桌不合法（10 摞分 3 家拿成不等张）', !table.legalFor(keeper).some((a) => 'way' in a && a.way !== 'layered'));
   finishDraft(table);
   ok('分完每家 10 枚、一张没漏', table.state.hands.every((h) => h.length === 10), table.state.hands.map((h) => h.length).join('/'));

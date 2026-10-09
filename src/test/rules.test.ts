@@ -362,8 +362,16 @@ function drafted(way: 'layered' | 'stacks-left' | 'stacks-right', players = 4, s
 }
 const perHead = (players: number) => TOTAL / players;
 const lay = drafted('layered');
-ok('层层轮流分：从处置人自己开始，每摞拿最上面那张', lay.stacks.every((s) => lay.state.hands[lay.decider].includes(s[3])));
-ok(`层层轮流分：每人正好 ${perHead(4)} 枚`, lay.state.hands.every((h) => h.length === perHead(4)), lay.state.hands.map((h) => h.length).join(','));
+ok('一人一层拿牌：最上面那层（每摞的摞口）整个归处置人', lay.stacks.every((s) => lay.state.hands[lay.decider].includes(s[3])));
+ok(`一人一层拿牌：每人正好 ${perHead(4)} 枚`, lay.state.hands.every((h) => h.length === perHead(4)), lay.state.hands.map((h) => h.length).join(','));
+// 一层一个家：4 人档 4 层，处置人拿第一层（每摞的摞口），下一家拿第二层，一层一层轮下去。
+// 只量「人手相同」量不出这条——一摞一摞地一人一张也能让每人 8 枚，但拿到手的不是整层。
+const layerOf = (k: number) => lay.stacks.map((s) => s[3 - k]);
+ok(
+  '一人一层拿牌：一层整个归一家（处置人第一层、下一家第二层……）',
+  [0, 1, 2, 3].every((k) => sameSet(lay.state.hands[(lay.decider + k) % 4], layerOf(k))),
+  lay.state.hands.map((h) => h.length).join(','),
+);
 const left = drafted('stacks-left', 4, 32);
 ok(
   '整摞轮流拿·从左：处置人拿第 1 摞，转一圈回来拿第 5 摞',
@@ -378,9 +386,14 @@ ok(
 );
 ok('两种整摞拿法也是人手相同', left.state.hands.every((h) => h.length === perHead(4)) && right.state.hands.every((h) => h.length === perHead(4)));
 const lay2 = drafted('layered', 2, 34);
-ok('2 人局层层分：每人 16 枚', lay2.state.hands.every((h) => h.length === perHead(2)), lay2.state.hands.map((h) => h.length).join(','));
+ok('2 人局一人一层分：4 层轮两圈，每人 16 枚', lay2.state.hands.every((h) => h.length === perHead(2)), lay2.state.hands.map((h) => h.length).join(','));
+ok(
+  '2 人局一人一层：4 层轮两圈，处置人拿第 1、3 层（每摞最上面那张与倒数第二张）',
+  sameSet(lay2.state.hands[lay2.decider], lay2.stacks.flatMap((s) => [s[3], s[1]])) &&
+    sameSet(lay2.state.hands[(lay2.decider + 1) % 2], lay2.stacks.flatMap((s) => [s[2], s[0]])),
+);
 
-console.log('\n3 人局：去掉一枚黑卒一枚红兵，一摞 3 张＝10 摞，拿法只留层层轮流分');
+console.log('\n3 人局：去掉一枚黑卒一枚红兵，一摞 3 张＝10 摞，拿法只留一人一层拿牌');
 const three = rulesFor(base, 3);
 const p3 = buildPieceSet(three.ranks);
 const count3 = (label: string) => p3.filter((p) => p.label === label).length;
@@ -393,7 +406,7 @@ ok('3 人档只改枚数：职级名与顺序一个没动，点数照旧从 7 �
 ok('最低级还是 8 枚、抽到的点数还是 7：3 人局的抽签和 4 人局一样', Math.max(...p3.map((x) => x.point)) === 7 && count3('卒') + count3('兵') === 8);
 ok('2 人档、4 人档不受影响：还是 32 枚、一摞 4 张', buildPieceSet(rulesFor(base, 2).ranks).length === 32 && rulesFor(base, 4).draft.stackSize === 4);
 ok(
-  '拿法表就随档位落定：3 人只层层分，2 与 4 人还是三种',
+  '拿法表就随档位落定：3 人只一人一层，2 与 4 人还是三种',
   three.draft.ways.join() === 'layered' && rulesFor(base, 2).draft.ways.join() === ALL_WAYS.join() && rulesFor(base, 4).draft.ways.join() === ALL_WAYS.join(),
   three.draft.ways.join(),
 );
@@ -419,10 +432,21 @@ ok(
   [0, 1, 2].filter((seat) => legalActions(g3, seat).length > 0).join() === String(dec3),
 );
 apply(g3, dec3, { kind: 'allocate', way: 'layered' });
-ok('10 摞 × 3 张一人一张：三家各 10 枚，发完一张不剩', g3.hands.every((h) => h.length === 10) && g3.hands.reduce((a, h) => a + h.length, 0) === 30, g3.hands.map((h) => h.length).join(','));
+ok('10 摞 × 3 张一人一层：三家各 10 枚，发完一张不剩', g3.hands.every((h) => h.length === 10) && g3.hands.reduce((a, h) => a + h.length, 0) === 30, g3.hands.map((h) => h.length).join(','));
+// 这一档只有一种拿法，最上面那层归谁最容易含混：第一层＝每摞最上面那张（摞口）＝画面上那一排的顶
+ok(
+  '一人一层拿牌：第一层（每摞最上面那张）整个归处置人，第二层归下一家',
+  sameSet(g3.hands[dec3], stacks3.map((s) => s[2])) && sameSet(g3.hands[(dec3 + 1) % 3], stacks3.map((s) => s[1])),
+  g3.hands.map((h) => h.length).join(','),
+);
 ok(
   '3 人局的日志念的是这一档的摞数（不是抄来的 8）',
   g3.log.some((l) => l.includes('这 10 摞')) && !g3.log.some((l) => l.includes('8 摞')),
+  g3.log.join(' | '),
+);
+ok(
+  '分牌那行日志念的是这一档的口径（一人一层拿牌，不是旧那套「一人一张」）',
+  g3.log.some((l) => l.includes('一人一层拿牌，从最上面那层起')),
   g3.log.join(' | '),
 );
 let threeErr = '';
@@ -461,7 +485,7 @@ refuses('覆盖写了一档压根开不起来的人数', { ...raw(), playerCount
 refuses('3 人档枚数发不平', v3({ ranks: { '兵卒': [4, 3] } }), '3 人发不平');
 // 这三条都得把上一行那份「30 枚、一摞 3 张」一起写上：只改一处，会先撞上前面那层校验，量不到这一条自己想量的那一层
 const threeOk = (): Partial<VariantFile> => ({ ranks: { '兵卒': [4, 4] }, draft: { stackSize: 3 } });
-refuses('一摞张数除不尽家数', v3({ ...threeOk(), draft: { stackSize: 4 } }), '多出一截');
+refuses('一摞张数除不尽家数', v3({ ...threeOk(), draft: { stackSize: 4 } }), '分不匀');
 refuses('3 人档加回整摞轮流拿（10 摞分 3 家必然不等张）', v3({ ...threeOk(), draft: { stackSize: 3, ways: badWays('layered', 'stacks-left') } }), '要么改一摞张数，要么 ways 只留 layered');
 
 // 换玩法那几枚开关以前不设闸：写错静默走默认分支，discardCost 填个像人话的 'all' 更会让压不过的人凑不出抵押、整桌死锁。
@@ -661,7 +685,7 @@ for (const level of ['greedy', 'hard'] as Level[]) {
     spread >= 5 && stacks.filter((p) => p === 0).length < stacks.length,
     stacks.join(','),
   );
-  // 处置人那三种拿法也一样：只会被网页的电脑永远选「层层轮流分」，那分牌就成了套路
+  // 处置人那三种拿法也一样：只会被网页的电脑永远选「一人一层拿牌」，那分牌就成了套路
   ok(
     `${level} 分牌三种拿法都选过（${ways.join(',').slice(0, 60)}…）`,
     new Set(ways).size === 3,

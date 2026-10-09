@@ -1666,7 +1666,7 @@ export class App {
         return `抽第 ${action.stackIdx + 1} 摞`;
       case 'allocate':
         return {
-          layered: '层层轮流分',
+          layered: '一人一层拿牌',
           'stacks-left': '整摞轮流拿 · 从左',
           'stacks-right': '整摞轮流拿 · 从右',
         }[action.way];

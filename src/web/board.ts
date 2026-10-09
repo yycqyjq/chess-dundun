@@ -566,9 +566,10 @@ export function layout(state: GameState, view: TableView, board: Board): Map<num
       // 一列的中间那格：4 张是 1.5、3 张是 1，倾斜和偏移都围着它算
       const midSlot = (stack.length - 1) / 2;
       stack.forEach((id, depth) => {
-        // 摞口朝下数：数组末尾那张是摞口（不指定时引擎抽的就是它），所以它落在最下面那格、紧挨那一排，
-        // 摊开和抽牌都是「从摞口揭走一张」的视角，而不是从整列最高点飞下来
-        const slot = stack.length - 1 - depth;
+        // 摞口朝上摊：数组末尾那张是摞口（不指定时引擎抽的就是它），它落在最上面那格，
+        // 往下依次是第二层、第三层……画面上从上到下就是发牌顺序（第一层先发），
+        // 所以「最上面那张归谁」看得见也说得清（用户点名：最上面那个是第一层的牌）
+        const slot = depth;
         const spread = hot ? SPREAD : 0.11;
         const x = x0 + i * gap - cw / 2 - (hot ? 0 : (slot - midSlot) * cw * 0.04);
         const y = y0 - slot * cw * spread - (hot ? cw * 0.16 : 0);
@@ -580,7 +581,7 @@ export function layout(state: GameState, view: TableView, board: Board): Map<num
         ]
           .filter(Boolean)
           .join(' ');
-        // 抽出那一拍就在自己那一格里放大：点的是这张，亮的也必须是这张，别再往下飘回摞口。
+        // 抽出那一拍就在自己那一格里放大：点的是这张，亮的也必须是这张，别再飘回摞口那一格。
         // 唯一能让的是横向——最外两摞放大到 1.3 倍会爬出桌沿，往里让最多 0.07cw（不到 4px），
         // 竖向一格都不动：挪了格子就又成了「我点的那张和翻过来展示的那张不是一个位置」
         if (view.lift === id) {

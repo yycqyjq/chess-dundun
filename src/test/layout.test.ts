@@ -363,18 +363,18 @@ for (const { name, board: rect } of BOARDS) {
         const own = stackSpots(board)[i]!;
         const cx = r.x + r.w / 2;
         const under = cx >= own.x && cx <= own.x + own.w;
-        // 摞口朝下：数组末尾那张必须停在整列最下面那格。
+        // 摞口朝上：数组末尾那张必须停在整列最上面那格，往下才是第二层、第三层。
         // 整列上下是对称的，方向翻回去别的断言一条都不会红，所以这条必须单独守
         view.lift = null;
         view.holdDown = new Set();
         const col = boxes(state, view, board);
         const ids = state.draft!.stacks[i]!;
         const mouthY = col.get(ids[layers - 1])!.y;
-        const lowestY = Math.max(...ids.map((id) => col.get(id)!.y));
+        const highestY = Math.min(...ids.map((id) => col.get(id)!.y));
         ok(
-          `${name}｜${players} 人 第 ${i + 1} 摞第 ${slot + 1} 张抽出 y=${r.y.toFixed(0)}：原地=${still} 只它放大=${only} 摞口朝下=${Math.abs(mouthY - lowestY) < 0.5}`,
-          !out && still && only && top && shown && covered && under && Math.abs(mouthY - lowestY) < 0.5,
-          `出界 ${out} 飘位 dx=${dx.toFixed(1)}/dy=${dy.toFixed(1)} 只有它大 ${only} 最上 ${top} 亮 ${shown} 扣 ${covered} 在本摞横坐标 ${under} 摞口 y=${mouthY.toFixed(0)}/最下 ${lowestY.toFixed(0)}`,
+          `${name}｜${players} 人 第 ${i + 1} 摞第 ${slot + 1} 张抽出 y=${r.y.toFixed(0)}：原地=${still} 只它放大=${only} 摞口朝上=${Math.abs(mouthY - highestY) < 0.5}`,
+          !out && still && only && top && shown && covered && under && Math.abs(mouthY - highestY) < 0.5,
+          `出界 ${out} 飘位 dx=${dx.toFixed(1)}/dy=${dy.toFixed(1)} 只有它大 ${only} 最上 ${top} 亮 ${shown} 扣 ${covered} 在本摞横坐标 ${under} 摞口 y=${mouthY.toFixed(0)}/列头 ${highestY.toFixed(0)}`,
         );
       }
     }

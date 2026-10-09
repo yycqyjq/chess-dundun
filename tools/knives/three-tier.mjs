@@ -38,7 +38,7 @@ export default {
     {
       rel: 'src/core/game.ts',
       suite: 'test:rules',
-      note: '3 一摞张数不查除不尽家数（层层轮流分每摞都要多出一截，也照过）',
+      note: '3 一摞张数（＝层数）不查除不尽家数（一人一层拿牌分不匀，也照过）',
       from: '  if (draft.stackSize % players !== 0)',
       to: '  if (false && draft.stackSize % players !== 0)',
       expect: '一摞张数除不尽家数',

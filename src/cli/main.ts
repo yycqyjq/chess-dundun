@@ -37,14 +37,14 @@ function rulesPath(): string {
 
 /** 三种拿法的短名：报「这一档能选哪几种」时用，一行里塞不下整句解释 */
 const WAY_NAME: Record<AllocWay, string> = {
-  layered: '层层轮流分',
+  layered: '一人一层拿牌',
   'stacks-left': '整摞轮流拿·从左',
   'stacks-right': '整摞轮流拿·从右',
 };
 
 /** 三种拿法念成人话，`check` 报「这一档能选哪几种」和桌上真按某一种分牌时都念这一份 */
 const WAY_TEXT: Record<AllocWay, string> = {
-  layered: '层层轮流分：从自己开始，一人一张',
+  layered: '一人一层拿牌：从最上面那层起，从自己开始一层一家',
   'stacks-left': '整摞轮流拿：从最左边那摞开始',
   'stacks-right': '整摞轮流拿：从最右边那摞开始',
 };

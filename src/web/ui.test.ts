@@ -629,7 +629,7 @@ function planOf(spotFor: (i: number) => Placed): Map<number, Placed> {
   ok('明棋垫牌反扣那条在（2026-10-09 的规则，漏了这条就是旧文案）', all.includes('垫的牌反扣'));
   ok('14 档强度序念全（黑 < 红，红帅压黑将）', ABOUT_RULES[1]!.p[0]!.includes('黑将 < 红帅'));
   ok('抽签全局只抽一次、点数与大小无关', all.includes('全局只抽这一次') && all.includes('与大小无关'));
-  ok('3 人局只留层层轮流分那条在', all.includes('3 人局只留层层轮流分'));
+  ok('3 人局只留一人一层拿牌那条在', all.includes('3 人局只留一人一层拿牌'));
   ok('默认档念入门（和 app.ts 的默认一致，别再写挑省的）', ABOUT_RULES[5]!.p[0]!.includes('默认入门'));
   ok(
     '版本号没注上时那句不念 undefined（首页脚注同一条脾气）',
