@@ -3,7 +3,7 @@
  * 钉五件事：建局种子可复算、AI 选座必从 legalActions 出、落子＋暗棋遮罩与旧口径一致、
  * 收尾桌面赢家账、战报原文格式。搬走的那几段行为不变，全靠这几条盯着。
  */
-import { aiActionFor, closedTable, newGameState, reportText, settleMatch, stepAndMask, type OnTable } from './local.ts';
+import { aiActionFor, bookLine, closedTable, newGameState, reportText, settleMatch, stepAndMask, type OnTable } from './local.ts';
 import { apply, legalActions, pendingSeats, type Action, type GameState, type Rules } from '../core/game.ts';
 import { openMatch } from '../core/match.ts';
 import { buildRanks } from '../core/pieces.ts';
@@ -220,6 +220,28 @@ console.log('\n战报：抬头／标题／日志／总账四段');
     txt.split('\n').slice(-1)[0],
   );
   ok('我坐 P2 时抬头跟着换', reportText(state, book, 1, 't').startsWith('棋墩墩 · 明棋 · 2 人（我是 P2）· 种子 999'));
+}
+
+// ---------- 7. bookLine：系列战绩那一句的单一出处 ----------
+
+console.log('\n系列战绩：顶栏／结算卡／复盘原文念的是同一句');
+{
+  const book = openMatch(3);
+  book.games = 11;
+  book.titles = [6, 1, 3];
+  book.ties = 1;
+  const who = (seat: number) => (seat === 0 ? '你' : `P${seat + 1}`);
+  const line = bookLine(book, who);
+  ok(
+    '局数／各家夺冠／并列都念到了，座位名走调用方那一套',
+    line === '累计 11 局：你 冠 6　P2 冠 1　P3 冠 3｜并列 1 局',
+    line,
+  );
+  // 复盘原文那一段就是这一句——两处各写一遍的话，改个口径就漂成两种说法
+  const state = newGameState(rules, { players: 3, mode: 'kou', seed: 7 }, 0, -1);
+  ok('复盘原文末段就是这一句', reportText(state, book, 0, 't').endsWith(line));
+  // 一局都没打完时念出来的是「累计 0 局」——藏不藏是画那一头的事，这一句只管文案
+  ok('零局也念得出来（藏不藏由顶栏那一头决定）', bookLine(openMatch(2), who) === '累计 0 局：你 冠 0　P2 冠 0｜并列 0 局');
 }
 
 console.log(failures ? `\n${failures} 条没过` : '\n全部通过');

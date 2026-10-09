@@ -70,6 +70,15 @@ body {
   overflow-wrap: anywhere;
 }
 
+/* 系列战绩：结算卡上那条的同源文案，平时只在打完那一屏露脸。basis 100% 逼它独占顶栏一行——
+   不逼的话它会跟右上角那三颗按钮挤同一行，按钮的位置就跟着这行字数忽左忽右。
+   比 .meta 亮一档：那是这桌的配置，这才是「谁领先」。一局没打完时由 app.ts 整条藏掉 */
+.stand {
+  flex: 0 0 100%;
+  font-size: 12px;
+  opacity: 0.75;
+}
+
 .btns {
   display: flex;
   gap: 6px;

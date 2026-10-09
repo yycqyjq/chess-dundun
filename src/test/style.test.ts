@@ -378,5 +378,41 @@ console.log('\n收牌扣着收：翻回背面那一拍在收之前，不跟挪�
   );
 }
 
+// ---------- 系列战绩：顶栏也念一份（用户点名：不是只有打完那一屏才知道） ----------
+
+console.log('\n系列战绩：顶栏那行跟结算卡同源，一局没打完就整条藏掉');
+{
+  const app = web('app.ts');
+  const local = web('local.ts');
+  // 顶栏／结算卡／复盘原文三处念的必须是同一个函数：各抄一遍，改个口径（「冠」改「夺冠」）就漂成三种说法
+  ok(
+    '顶栏那行走的是 bookLine（不是又抄了一遍「累计 N 局」）',
+    /this\.shell\.stand\.textContent = [^;]*bookLine\(/.test(app),
+    (app.match(/^\s*this\.shell\.stand\.textContent = .*$/m) ?? ['‹没找到那句›'])[0],
+  );
+  ok(
+    '结算卡那行也走同一个 bookLine（顶栏与结算卡同源）',
+    /total\.textContent = bookLine\(/.test(app),
+    (app.match(/^\s*total\.textContent = .*$/m) ?? ['‹没找到那句›'])[0],
+  );
+  ok(
+    '那句文案本体只住在 local.ts 一处（app.ts 里没有第二份）',
+    /`累计 \$\{book\.games\} 局/.test(local) && !/`累计 /.test(app),
+    (app.match(/`累计 [^`]*`/) ?? ['‹app.ts 里没有第二份›'])[0],
+  );
+  // 一局都没打完时整条藏掉：宁可少一行，也不念一句「累计 0 局」占着顶栏
+  ok(
+    '一局没打完时整条藏掉（不念「累计 0 局」）',
+    /this\.shell\.stand\.hidden = this\.book\.games === 0/.test(app),
+    (app.match(/^\s*this\.shell\.stand\.hidden = .*$/m) ?? ['‹没找到那句›'])[0],
+  );
+  // 独占一行：不逼它换行就会跟右上角那三颗按钮挤同一行，按钮的位置跟着这行字数忽左忽右
+  ok(
+    '那行在顶栏独占一行（basis 100%，不跟按钮抢那一行）',
+    (val('.stand', 'flex') ?? '').includes('100%'),
+    val('.stand', 'flex') ?? '‹没写›',
+  );
+}
+
 console.log(failures ? `\n${failures} 条没过` : '\n全部通过');
 process.exit(failures ? 1 : 0);

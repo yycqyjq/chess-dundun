@@ -18,6 +18,8 @@ export interface Shell {
   drawer: HTMLElement;
   lines: HTMLElement;
   meta: HTMLElement;
+  /** 系列战绩那行（结算卡上那条的同源文案）。一局都没打完时整条藏掉 */
+  stand: HTMLElement;
   /** 顶栏的声音开关，文字由 app.ts 写（「声音 开」/「声音 关」） */
   sound: HTMLElement;
 }
@@ -49,6 +51,10 @@ export function buildShell(
   const brand = div('brand');
   brand.textContent = '棋墩墩';
   const meta = div('meta');
+  // 系列战绩：整条独占顶栏一行（CSS 里 flex-basis 100%）。排在按钮后面是为了让它在按钮那条下面另起一行，
+  // 不然它会跟按钮挤同一行、把右上角那三颗顶得忽左忽右。文字由 app.ts 写，一局没打完时藏掉
+  const stand = div('stand');
+  stand.hidden = true;
   const btns = div('btns');
   const btnLog = button('复盘');
   const btnSetup = button('换桌');
@@ -57,7 +63,7 @@ export function buildShell(
   btnSetup.addEventListener('click', onSetup);
   btnSound.addEventListener('click', onSound);
   btns.append(btnSound, btnLog, btnSetup);
-  bar.append(brand, meta, btns);
+  bar.append(brand, meta, btns, stand);
 
   const stage = div('stage');
   const board = div('board');
@@ -111,6 +117,7 @@ export function buildShell(
     drawer,
     lines,
     meta,
+    stand,
     sound: btnSound,
   };
 }

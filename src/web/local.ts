@@ -73,12 +73,18 @@ export function settleMatch(book: MatchBook, state: GameState): number {
   return nextDrawer(state);
 }
 
+/**
+ * 系列战绩那一句。结算卡、复盘原文、牌桌顶栏念的都是这一份——
+ * 三处各抄一遍的话，改个口径（「冠」改「夺冠」）就会漂成三种说法。
+ * `who` 由调用方给：单机／联机那套「你／P2」的念法住在 app.ts 的 who()。
+ */
+export function bookLine(book: MatchBook, who: (seat: number) => string): string {
+  return `累计 ${book.games} 局：${book.titles.map((t, seat) => `${who(seat)} 冠 ${t}`).join('　')}｜并列 ${book.ties} 局`;
+}
+
 /** 结算那份复盘原文：座位名跟屏上口径一致（日志里写的 P1/P2，这儿标出哪一位是你） */
 export function reportText(state: GameState, book: MatchBook, me: number, title: string): string {
   const who = (seat: number) => (seat === me ? '你' : seatName(seat));
   const head = `棋墩墩 · ${state.mode === 'ming' ? '明棋' : '扣棋'} · ${state.players} 人（我是 ${seatName(me)}）· 种子 ${state.seed}`;
-  const total = `累计 ${book.games} 局：${book.titles
-    .map((t, seat) => `${who(seat)} 冠 ${t}`)
-    .join('　')}｜并列 ${book.ties} 局`;
-  return `${head}\n${title}\n\n${state.log.join('\n')}\n\n${total}`;
+  return `${head}\n${title}\n\n${state.log.join('\n')}\n\n${bookLine(book, who)}`;
 }

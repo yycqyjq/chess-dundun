@@ -182,6 +182,7 @@ interface Seen {
   ctrl: FEl;
   toast: FEl;
   board: FEl;
+  stand: FEl;
 }
 
 const H = (x: unknown): HTMLElement => x as unknown as HTMLElement;
@@ -223,6 +224,13 @@ G.window = { setTimeout: () => 1 };
   ok(
     '五格都挂在自己那条名字条下面',
     v.chipEls.every((p) => Object.values(p).every((el) => el.parent === v.chips[v.chipEls.indexOf(p)])),
+  );
+  // 系列战绩那行：搭壳子时就留好、默认藏着（一局没打完不占顶栏）；排在按钮后面，靠 CSS 的 basis 100% 独占一行
+  const bar = root.children[0]!;
+  ok(
+    '顶栏给系列战绩留了一行（默认藏着，排在按钮后面独占一行）',
+    v.stand.names.has('stand') && v.stand.hidden && bar.children[bar.children.length - 1] === v.stand,
+    `${v.stand.className}｜hidden=${v.stand.hidden}｜顶栏第 ${bar.children.indexOf(v.stand) + 1}/${bar.children.length} 个`,
   );
   ok(
     '整台壳子里唯一一次 HTML 写入是把 root 清空',

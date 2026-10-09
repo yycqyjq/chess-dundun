@@ -16,7 +16,7 @@ import { ABOUT_RULES, aboutMeta } from './aboutText.ts';
 import { ctrlLift, draftShape, handCramped, labelBands, LABEL_W, layout, maxStacks, pieceSize, stackSpots, type Board, type TableView } from './board.ts';
 import { recallSolo, rememberSolo } from './net.ts';
 import { appVersion, autoSeat, BACK, entryHead, fillAddr, homePanel, hostHanded, hostJump, inAppShell, initialScreen, inviteUrls, lobbyGuide, peerEmpty, roomRow, seatOption, seatRowText } from './home.ts';
-import { aiActionFor, closedTable, newGameState, reportText, settleMatch, stepAndMask, type OnTable } from './local.ts';
+import { aiActionFor, bookLine, closedTable, newGameState, reportText, settleMatch, stepAndMask, type OnTable } from './local.ts';
 import { deviceNick, forget, Link, recall, remember, setTableAddr, shouldWake, tableAddr } from './net.ts';
 import { MOVE_MS, Pieces } from './pieces.ts';
 import { rules } from './rules.ts';
@@ -1219,6 +1219,10 @@ export class App {
           this.netNote ? ` · ${this.netNote}` : ''
         }`
       : `${mode} · ${this.setup.players} 人 · 电脑${LEVEL_CN[this.setup.level]} · 第 ${this.gameNo} 局 · 种子 ${this.state.seed}`;
+    // 系列战绩平时只在结算卡上露脸，打完一局就看不到了——顶栏也念一份，跟结算卡、复盘原文同一句。
+    // 一局都没打完（games 0）时整条藏掉：宁可少一行，也不念一句「累计 0 局」
+    this.shell.stand.hidden = this.book.games === 0;
+    this.shell.stand.textContent = this.book.games === 0 ? '' : bookLine(this.book, (s) => this.who(s));
   }
 
   /** 结算卡里那几行名次，单机联机共用；drawer 是下一局起抽的那位 */
@@ -1237,9 +1241,8 @@ export class App {
 
   private bookRows(body: HTMLElement): void {
     const total = div('note');
-    total.textContent = `累计 ${this.book.games} 局：${this.book.titles
-      .map((t, seat) => `${this.who(seat)} 冠 ${t}`)
-      .join('　')}｜并列 ${this.book.ties} 局`;
+    // 跟顶栏那行、复盘原文同一份（bookLine）——三处各抄一遍，改个口径就会漂成三种说法
+    total.textContent = bookLine(this.book, (s) => this.who(s));
     body.append(total);
   }
 
