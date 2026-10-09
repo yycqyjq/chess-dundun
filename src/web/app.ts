@@ -192,7 +192,7 @@ export class App {
   // ---------- 首页 ----------
 
   /**
-   * 全屏首页：两个入口各占一条大热区，选完才进各自的配置。
+   * 全屏首页：四个入口各占一条大热区（两个玩法 + 关于 + 设置），选完才进各自那一屏。
    * 它是盖在屏幕上的一层，不是排在牌桌下面——单机打完一局退回来时身后还立着那副牌面。
    * 版面住在 home.ts（那儿进得了 node 测试），这儿只管往 root 上摘挂。
    */
@@ -207,13 +207,15 @@ export class App {
         // 外壳里那块上第二行字不一样：那一头寻不了同网的桌、也没法在自己这台开一桌
         inAppShell(),
         () => this.showAbout(),
+        () => this.showSettings(),
       ),
     );
   }
 
   /**
-   * 关于 · 玩法与版本：规则速览（文案住在 aboutText.ts，跟引擎现状同源）＋声音开关＋版本许可。
-   * 首页脚注那颗小链接开的一整屏页——跟「一屏一层」同一条链路，出口照旧念「返回」回首页。
+   * 关于 · 玩法与版本：规则速览（文案住在 aboutText.ts，跟引擎现状同源）＋版本许可。
+   * 声音开关挪去设置那一屏（2026-10-09）：关于只讲「这是什么、哪一版」，可调的都归设置。
+   * 首页那一块开的是整屏页——跟「一屏一层」同一条链路，出口照旧念「返回」回首页。
    */
   private showAbout(): void {
     for (const el of this.root.querySelectorAll('.sheet')) el.remove();
@@ -223,6 +225,19 @@ export class App {
       for (const line of sec.p) body.append(div('note', line));
     }
     body.append(div('about-h', '版本'), div('note', aboutMeta(appVersion())));
+    const out = div('sheet-row');
+    out.append(button(BACK, () => this.showHome(), 'btn mini'));
+    foot.append(out);
+  }
+
+  /**
+   * 设置：目前只有声音开关，但它是「这桌上有哪些可调」那一类东西的家——以后加字号、
+   * 加提示强度都往这儿添，别再往关于那一页塞（关于讲的是「是什么」，设置讲的是「怎么调」）。
+   * 跟关于同一份链路：整屏页、出口念「返回」回首页。
+   */
+  private showSettings(): void {
+    for (const el of this.root.querySelectorAll('.sheet')) el.remove();
+    const { body, foot } = page(this.root, entryHead('settings'), 'about');
     body.append(
       div('about-h', '声音'),
       segment(

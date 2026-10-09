@@ -520,9 +520,9 @@ function planOf(spotFor: (i: number) => Placed): Map<number, Placed> {
 
   const entries = panel.findAll('button');
   ok('两个入口各是一整块按钮，不是 div（键盘 Tab 走得到）', entries.length === 2 && entries.every((e) => e.tag === 'button' && e.type === 'button'));
-  ok('顺序是「自己开一桌」在前、「和朋友连桌」在后', entries[0]!.textContent.includes('自己开一桌') && entries[1]!.textContent.includes('和朋友连桌'), entries.map((e) => e.textContent).join('｜'));
+  ok('顺序是「单机模式」在前、「联机模式」在后', entries[0]!.textContent.includes('单机模式') && entries[1]!.textContent.includes('联机模式'), entries.map((e) => e.textContent).join('｜'));
   // 点进去那一屏的标题从这儿拿（app.ts 调 entryHead）：一处改名两处跟着，不会漂成两个名字
-  ok('两块的字就是那两屏的标题，同一份来源', entryHead('solo') === '自己开一桌' && entryHead('room') === '和朋友连桌');
+  ok('两块的字就是那两屏的标题，同一份来源', entryHead('solo') === '单机模式' && entryHead('room') === '联机模式');
   ok('每一屏那颗出口都念同一个词（不再「回首页」「退出这桌」各叫各的）', BACK === '返回');
   ok(
     '每块里两个格：大字说做什么、小字说谁来补',
@@ -542,18 +542,27 @@ function planOf(spotFor: (i: number) => Placed): Map<number, Placed> {
 
   const foot = panel.find('home-foot')!;
   ok('没注上版本时宁可少那一行，也不念一个 undefined', !foot.find('v') && appVersion() === '', foot.children.map((c) => c.raw).join(','));
-  // 关于那颗（2026-10-09）：只有传了回调才出现——脚注的小字链接，不是第三个大热区
+  // 关于／设置（2026-10-09 升格）：和玩法入口同级的整块热区，不再是脚注里的小字链接；传了回调才摆上
   let about = 0;
-  const withAbout = F(homePanel(() => {}, () => {}, false, () => about++));
-  const aboutBtn = withAbout.find('home-foot')!.findAll('button').find((b) => [...b.names].includes('home-about'));
+  let settings = 0;
+  const withAbout = F(homePanel(() => {}, () => {}, false, () => about++, () => settings++));
+  const fullEntries = withAbout.find('home-entries')!.findAll('button');
+  ok('传了两个回调就多两块：四块同级入口，全在 home-entries 那一列里', fullEntries.length === 4, `${fullEntries.length} 块`);
+  const aboutBtn = fullEntries[2]!;
+  const settingsBtn = fullEntries[3]!;
   ok(
-    '传了 onAbout 就在脚注那颗：文字级小链接，点一下走一次',
-    aboutBtn !== undefined && aboutBtn.raw === '关于 · 玩法与版本' && (() => { aboutBtn.click(); return about === 1; })(),
-    aboutBtn ? aboutBtn.raw : '‹那颗没出现›',
+    '第三块是「关于」：整块热区（.home-entry 里的 e+n 两格，跟玩法那块同结构），点一下走一次',
+    aboutBtn.raw === '' && !!aboutBtn.find('e') && aboutBtn.find('e')!.raw === '关于' && !!aboutBtn.find('n') && (() => { aboutBtn.click(); return about === 1; })(),
+    aboutBtn.raw || '‹那块没出现›',
   );
   ok(
-    '没传就不多那一颗（入口层还是两块，测试里那批旧面板不受影响）',
-    panel.find('home-foot')!.findAll('button').every((b) => ![...b.names].includes('home-about')),
+    '第四块是「设置」，点一下走一次',
+    settingsBtn.find('e')!.raw === '设置' && (() => { settingsBtn.click(); return settings === 1; })(),
+    settingsBtn.find('e') ? settingsBtn.find('e')!.raw : '‹那块没出现›',
+  );
+  ok(
+    '没传就不多那两块（入口层还是两块，测试里那批旧面板不受影响）',
+    panel.find('home-entries')!.findAll('button').length === 2,
   );
   // 这一格注的是**编出来的**版本号，不是 package.json 那一个（真数由 vite 的 define 带进来）：
   // 写成正经的 0.1.0 会让人以为测试把界面钉死在当前版本上，改天升版本还以为要跟着改这里。

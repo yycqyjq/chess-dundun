@@ -55,18 +55,24 @@ export function appVersion(): string {
 }
 
 const ENTRY = {
-  // 入口按目的说，不按结构说：这两块是「我要开始玩」的两条路，不是两种模式的名字
-  solo: { head: '自己开一桌', note: '电脑补位，2~4 人' },
+  // 入口按目的说，不按结构说：这四块都是「进门要做的一件事」的入口，同级同尺寸
+  solo: { head: '单机模式', note: '电脑补位，2~4 人' },
   // note 有两份：浏览器那头能寻同网的桌、也能在自己这台开一桌；App 外壳两头都做不到（原因见 fillAddr）
   room: {
-    head: '和朋友连桌',
+    head: '联机模式',
     note: '同一网络里选桌加入；没有就在这台机器开一桌',
     appNote: '连另一台电脑上开着的那桌：把它的地址抄进来',
   },
+  // 关于／设置是 2026-10-09 从脚注小链接升格上来的第三、四块：和玩法入口同级同尺寸，不再压在页面最底
+  about: { head: '关于', note: '玩法速览与版本' },
+  settings: { head: '设置', note: '声音开关' },
 };
 
+/** 首页入口那一块 key：四块都从这份 ENTRY 取字，标题／点进去那一屏的名字同源 */
+export type EntryKey = keyof typeof ENTRY;
+
 /** 首页那块上第二行字：App 外壳里别念「在这台机器开一桌」，那颗按钮在那一头不存在 */
-export function entryNote(k: 'solo' | 'room', app: boolean): string {
+export function entryNote(k: EntryKey, app: boolean): string {
   return k === 'room' && app ? ENTRY.room.appNote : ENTRY[k].note;
 }
 
@@ -115,7 +121,7 @@ export function normAddr(raw: string): string | null {
 export const BACK = '返回';
 
 /** 入口那块的字，也就是点进去之后那一屏的标题：一处改两处跟着，不会漂 */
-export function entryHead(k: 'solo' | 'room'): string {
+export function entryHead(k: EntryKey): string {
   return ENTRY[k].head;
 }
 
@@ -279,21 +285,29 @@ export function seatOption(rules: Rules, n: number): string {
   return `${n} 人 · 每人 ${Math.floor(buildPieceSet(r.ranks).length / n)} 枚`;
 }
 
-export function homePanel(onSolo: () => void, onRoom: () => void, app = false, onAbout?: () => void): HTMLElement {
-  const entry = (k: 'solo' | 'room', go: () => void): HTMLButtonElement => {
+export function homePanel(
+  onSolo: () => void,
+  onRoom: () => void,
+  app = false,
+  onAbout?: () => void,
+  onSettings?: () => void,
+): HTMLElement {
+  const entry = (k: EntryKey, go: () => void): HTMLButtonElement => {
     const btn = button('', undefined, 'btn home-entry');
     btn.append(div('e', ENTRY[k].head), div('n', entryNote(k, app)));
     btn.addEventListener('click', go);
     return btn;
   };
   const list = div('home-entries');
+  // 四块同级同尺寸：关于／设置不再是脚注里的小字链接，和两个玩法入口一样是整块热区。
+  // 传了回调才摆上（跟旧那颗小链接同一脾气）——没挂回调的入口层不摆按不动的大按钮。
   list.append(entry('solo', onSolo), entry('room', onRoom));
+  if (onAbout) list.append(entry('about', onAbout));
+  if (onSettings) list.append(entry('settings', onSettings));
   const foot = div('home-foot');
   foot.append(div('n', '联机那台机器得和你在同一个网络'));
   const version = appVersion();
   if (version) foot.append(div('v', `v${version}`));
-  // 关于那颗是脚注里的小字链接，不是第三个大热区：入口层保持两块，玩法速览／声音／版本收进那一页
-  if (onAbout) foot.append(button('关于 · 玩法与版本', onAbout, 'home-about'));
   const el = div('home');
   el.append(
     div('home-title', '棋墩墩'),

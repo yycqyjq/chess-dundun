@@ -287,15 +287,15 @@ console.log('\n整屏页：三处出口同一份名字，身后不隔着半透�
   // 同一件事在一条链上换了三个名字（回首页／退出这桌／看牌桌），人就不知道哪一颗会把他从这桌上摘下来。
   // 后两颗分别住在 home.ts（App 外壳那一屏的版面在那儿）与关于页，所以这条数的是两份文件：漏掉哪一份都会有一屏自己改名字
   const backs = (app.match(/button\(\s*BACK,|textContent = BACK/g) ?? []).length + (home.match(/button\(\s*BACK,/g) ?? []).length;
-  // 2026-10-09 关于页是第五屏：出口照旧念同一份「返回」，这颗就在新增的断言里跟着数
-  ok('每一屏那颗出口念的是同一份 BACK（app.ts 四屏＋home.ts 那一屏）', backs === 5, `${backs} 处`);
+  // 2026-10-09 关于页是第五屏、设置页是第六屏：出口照旧念同一份「返回」，两颗都在新增的断言里跟着数
+  ok('每一屏那颗出口念的是同一份 BACK（app.ts 五屏＋home.ts 那一屏）', backs === 6, `${backs} 处`);
   // 标题从 home.ts 那份 ENTRY 拿：入口写的字和点进去那一屏顶上的字是同一份，改一处不会漂成两个名字
   ok(
     '两屏的标题就是首页那两块的字',
     /page\(this\.root, entryHead\('solo'\)\)/.test(app) &&
       /page\(this\.root, entryHead\('room'\)\)/.test(app) &&
-      /head: '自己开一桌'/.test(home) &&
-      /head: '和朋友连桌'/.test(home),
+      /head: '单机模式'/.test(home) &&
+      /head: '联机模式'/.test(home),
   );
   ok('「摆一桌」那张弹窗卡没了（单机那一屏走整屏）', !/'摆一桌'/.test(app), '‹app.ts 里还写着那张卡›');
   // 单机那一屏不收种子那一排：开桌前它只是一个谁摇都摇得出来的随机数，摆在那儿等于多一道没人看得懂的题。
@@ -309,11 +309,12 @@ console.log('\n整屏页：三处出口同一份名字，身后不隔着半透�
   );
   // 底栏只剩那一排：这一屏少了一排，主按钮跟着滚的地盘就更小了，别把它又塞回 body
   ok('单机那一屏的底栏就那一排（开桌加返回）', /foot\.append\(go\);/.test(app), (app.match(/^\s*foot\.append\(.*$/gm) ?? ['‹找不到那一行›']).join('｜'));
-  // 五屏全走 page()：裸 card() 是那层半透黑底＋居中卡，也就是「叠在首页上」本身。批12 摘掉的就是它，
+  // 六屏全走 page()：裸 card() 是那层半透黑底＋居中卡，也就是「叠在首页上」本身。批12 摘掉的就是它，
   // 所以这里钉的是「没人再拿它搭常驻的那一层」——一次性的是非题走 popup()，不在这条的范围里。
-  // 第四屏是 App 外壳里那格手填桌地址（home.ts 的 fillAddr 把它挂在 page 上）；第五屏是 2026-10-09 的关于页。
+  // 第四屏是 App 外壳里那格手填桌地址（home.ts 的 fillAddr 把它挂在 page 上）；第五屏是关于页；
+  // 第六屏是 2026-10-09 从关于里分出来的设置页（声音开关）。
   const pages = (app.match(/page\(this\.root/g) ?? []).length;
-  ok('牌桌外那一层的五屏全走 page()，一处也没退回裸 card()', pages === 5 && !/[^.\w]card\(/.test(app), `page ${pages} 处｜裸 card ${/[^.\w]card\(/.test(app) ? '有' : '没'}`);
+  ok('牌桌外那一层的六屏全走 page()，一处也没退回裸 card()', pages === 6 && !/[^.\w]card\(/.test(app), `page ${pages} 处｜裸 card ${/[^.\w]card\(/.test(app) ? '有' : '没'}`);
   // 整屏页的遮罩必须是不透明的：半透黑底是把「还有一层在身后」这件事说出来，而这一屏没有身后
   const bg = val('.sheet.as-page', 'background') ?? '‹没写›';
   ok('整屏页那层不透明（跟首页同一份渐变，不是 rgba）', bg.includes('radial-gradient') && !bg.includes('rgba'), bg);

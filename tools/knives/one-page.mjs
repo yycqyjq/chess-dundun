@@ -65,9 +65,9 @@ export default {
     {
       rel: 'src/web/home.ts',
       suite: 'test:ui',
-      note: 'H 首页那两块的字改掉一份（点进去那一屏顶上还念旧名）',
-      // 2026-10-09 批3 文案落地后重锚：solo 那块改成了「自己开一桌」
-      from: "  solo: { head: '自己开一桌',",
+      note: 'H 首页那块的字改掉一份（点进去那一屏顶上还念旧名）',
+      // 2026-10-09 入口名改回「单机模式／联机模式」后重锚：solo 那块的字跟着漂，刀口得跟着挪
+      from: "  solo: { head: '单机模式',",
       to: "  solo: { head: '自己玩',",
       expect: '两块的字就是那两屏的标题，同一份来源',
     },
@@ -136,7 +136,7 @@ export default {
       note: 'Q 候场厅那一屏退回裸 card()：半透黑底＋居中卡又叠回首页上面（批12 摘掉的就是它）',
       from: "const { veil, head, body, foot } = page(this.root, '正连着这桌……', 'room');",
       to: "const { veil, head, body, foot } = card(this.root, '正连着这桌……', 'room');",
-      expect: '牌桌外那一层的五屏全走 page()，一处也没退回裸 card()',
+      expect: '牌桌外那一层的六屏全走 page()，一处也没退回裸 card()',
     },
     {
       rel: 'src/web/style.css',
