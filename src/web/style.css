@@ -758,8 +758,51 @@ body {
 
 /* 候场厅：这张卡常驻，翻开来是配置、椅子、邀请码和房主那颗开始。
    手机单列就是 cfg-col → seat-col 的自然顺序；两栏只在宽屏出现（见文末那条 media） */
+/* 候场厅「现在该干什么」：置顶一句，金色左边线跟引导的身份相配；字不用大，它是这一屏的第一句话 */
+.room .guide {
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--wood-ink, inherit);
+  border-left: 3px solid var(--gold);
+  padding: 2px 0 2px 10px;
+  margin-bottom: 10px;
+}
+
 .room .room-cfg {
   margin-bottom: 2px;
+}
+
+/* 主 CTA 贴着配置走（配置完事顺手就按），不再沉底栏跟轻操作挤一排 */
+.room .room-cta {
+  margin: 2px 0 10px;
+}
+
+.room .room-cta .btn {
+  width: 100%;
+}
+
+/* 邀请折叠条：summary 是那条可点的小字标题，details 展开才摆二维码；默认收起保证手机首屏装得下 CTA */
+.room .invite-details {
+  margin-top: 4px;
+}
+
+.room .invite-details > summary {
+  list-style: none;
+  cursor: pointer;
+  font-size: 13px;
+  color: rgba(243, 231, 211, 0.72);
+  padding: 6px 2px;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.room .invite-details > summary::-webkit-details-marker {
+  display: none;
+}
+
+.room .invite-details > summary:focus-visible {
+  outline: 2px solid var(--gold);
+  outline-offset: 2px;
 }
 
 .room .lobby-seats {

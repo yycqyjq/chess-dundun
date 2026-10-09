@@ -20,6 +20,38 @@ export const PROBE_MS = 6_000;
 
 /** 令牌就躺在这台设备的 localStorage 里：换浏览器、清缓存就得重新挑一把空椅子 */
 const KEY = 'chess-dundun.seat';
+/** 单机开桌卡的「上局配置」：三个格子存一处。无痕模式 try/catch 退化内存（sound.ts 的先例） */
+const SOLO_KEY = 'chess-dundun.solo';
+
+export interface SoloSetup {
+  players: number;
+  mode: 'ming' | 'kou';
+  level: 'easy' | 'greedy' | 'hard';
+}
+
+/** 读上局的单机配置：三格齐才算数（老数据或手改的不认），缺格回 null */
+export function recallSolo(): SoloSetup | null {
+  try {
+    const raw = JSON.parse(localStorage.getItem(SOLO_KEY) ?? 'null') as Partial<SoloSetup> | null;
+    const players = raw?.players;
+    const mode = raw?.mode;
+    const level = raw?.level;
+    if (typeof players !== 'number' || (mode !== 'ming' && mode !== 'kou') || (level !== 'easy' && level !== 'greedy' && level !== 'hard')) return null;
+    return { players, mode, level };
+  } catch {
+    return null;
+  }
+}
+
+/** 开桌即写：下一次进开桌卡，这三个格子就是它 */
+export function rememberSolo(setup: SoloSetup): void {
+  try {
+    localStorage.setItem(SOLO_KEY, JSON.stringify(setup));
+  } catch {
+    // 存不进去就这一次管用：开桌卡退回引擎默认，不把人堵在门外
+  }
+}
+
 /** App 外壳里那串手敲的桌地址也躺在这儿：装一次设备不用每次重敲 */
 const ADDR_KEY = 'chess-dundun.addr';
 

@@ -138,7 +138,8 @@ ok(
   lobby.players === 2 &&
     lobby.gameNo === 1 &&
     lobby.mode === 'kou' &&
-    lobby.level === 'hard' &&
+    // 桌的初始难度就是 host 的默认档（2026-10-09 统一成 easy）；这句量的是「没改过时的样子」
+    lobby.level === 'easy' &&
     lobby.status === 'waiting' &&
     lobby.hostSeat === 0 &&
     lobby.seats.every((s) => !s.taken),
@@ -164,7 +165,8 @@ ok(
 );
 ok('没公开的牌在快照里就是个光 id', s0.view.pieces.every((p) => Object.keys(p).join() === 'id'));
 a.ask({ t: 'lobby' });
-const seated = await a.until(['seats']);
+// 等「代号回来了」的那一份：头一份 seats 可能赶在桌记上代号之前，extra 条件替人等下一份；断言本身一字没松
+const seated = await a.until(['seats'], (m) => m.seats[HOST].nick === NICK_A);
 ok(
   '座位表把这台设备的代号带回来了',
   seated.seats[HOST].nick === NICK_A && seated.seats[GUEST].nick === '',
@@ -214,12 +216,13 @@ a.ask({ t: 'setup', mode: 'ming' });
 ok('坐回家那把的那位这会儿不是房主：改不动配置', (await a.until(['reject'])).why === '只有房主能改这桌的配置');
 a.ask({ t: 'start' });
 ok('他也按不动开始', (await a.until(['reject'])).why === '只有房主能开局');
-b.ask({ t: 'setup', level: 'easy' });
+// 默认档改成 easy 之后，这里得往「变」了的方向改（设 easy 等于没设，证明不了改得动）
+b.ask({ t: 'setup', level: 'hard' });
 b.ask({ t: 'lobby' });
-const chosen = await b.until(['seats'], (m) => m.level === 'easy');
+const chosen = await b.until(['seats'], (m) => m.level === 'hard');
 ok(
   '代持那位改得动补位电脑的难度，玩法没被顺手改掉',
-  chosen.level === 'easy' && chosen.mode === 'kou' && chosen.players === 2,
+  chosen.level === 'hard' && chosen.mode === 'kou' && chosen.players === 2,
   JSON.stringify(chosen).slice(0, 120),
 );
 // 还回去只剩一条路：代持那位自己让座。候场厅那句人话由 hostHanded 出，画面归真机，这儿量桌这一头

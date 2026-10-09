@@ -349,8 +349,10 @@ export function openRoom(argv: string[], port: number): Room {
   /** 谁连着坐哪个位子：一条连接进来先没位子，join 成功才绑上 */
   const seatOf = new Map<Conn, number>();
   const connOf = new Map<number, Conn>();
-  /** 每条连接上一回问座位表的时刻：正常客户端最密也是一秒一问，比这密的就是在白吃 inviteUrls 那趟网卡遍历 */
+  /** 每条连接上一回答座位表的时刻：正常客户端最密也是一秒一问，比这密的就是在白吃 inviteUrls 那趟网卡遍历 */
   const lobbyAt = new Map<Conn, number>();
+  /** 节流窗口里积压的那一问：不吞——窗尾补一份最新的（每连接至多一颗钟，防洪上限照旧） */
+  const lobbyLate = new Map<Conn, ReturnType<typeof setTimeout>>();
 
   const send = (seat: number, msg: ToClient): void => {
     connOf.get(seat)?.send(JSON.stringify(msg));
@@ -480,6 +482,9 @@ export function openRoom(argv: string[], port: number): Room {
       }
     },
     onClose(conn) {
+      const late = lobbyLate.get(conn);
+      if (late !== undefined) clearTimeout(late);
+      lobbyLate.delete(conn);
       lobbyAt.delete(conn);
       const seat = seatOf.get(conn);
       if (seat === undefined) return;
@@ -496,11 +501,22 @@ export function openRoom(argv: string[], port: number): Room {
     const seat = seatOf.get(conn);
     switch (msg.t) {
       case 'lobby': {
-        // 200ms 一道下限：节流的那几条不回话——正常客户端下一秒还会再问，用不着为它撒一句谎
+        // 200ms 一道下限管的是「量」不是「应」：窗口里的重复问句并成一句，窗尾补一份最新的——
+        // 一秒一问的正常客户端永远当场答；裸测试客户端连发也不至于问一句死等一份不来的
         const now = Date.now();
-        if (now - (lobbyAt.get(conn) ?? 0) >= 200) {
+        const gap = now - (lobbyAt.get(conn) ?? 0);
+        if (gap >= 200) {
           lobbyAt.set(conn, now);
           conn.send(JSON.stringify({ t: 'seats', ...table.lobby(), lan: inviteUrls() } satisfies ToClient));
+        } else if (!lobbyLate.has(conn)) {
+          lobbyLate.set(
+            conn,
+            setTimeout(() => {
+              lobbyLate.delete(conn);
+              lobbyAt.set(conn, Date.now());
+              conn.send(JSON.stringify({ t: 'seats', ...table.lobby(), lan: inviteUrls() } satisfies ToClient));
+            }, 200 - gap),
+          );
         }
         return;
       }

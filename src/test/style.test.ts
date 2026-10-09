@@ -294,8 +294,8 @@ console.log('\n整屏页：三处出口同一份名字，身后不隔着半透�
     '两屏的标题就是首页那两块的字',
     /page\(this\.root, entryHead\('solo'\)\)/.test(app) &&
       /page\(this\.root, entryHead\('room'\)\)/.test(app) &&
-      /head: '单机模式'/.test(home) &&
-      /head: '本地联机'/.test(home),
+      /head: '自己开一桌'/.test(home) &&
+      /head: '和朋友连桌'/.test(home),
   );
   ok('「摆一桌」那张弹窗卡没了（单机那一屏走整屏）', !/'摆一桌'/.test(app), '‹app.ts 里还写着那张卡›');
   // 单机那一屏不收种子那一排：开桌前它只是一个谁摇都摇得出来的随机数，摆在那儿等于多一道没人看得懂的题。

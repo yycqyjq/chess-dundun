@@ -14,7 +14,8 @@ import { aliveSeats, deckFor, hydrate, type SeatInfo, type Seats, type TableStat
 import { LIST_REFRESH_MS, peerNote, type FoundRoom } from '../net/discover.ts';
 import { ABOUT_RULES, aboutMeta } from './aboutText.ts';
 import { ctrlLift, draftShape, handCramped, labelBands, LABEL_W, layout, maxStacks, pieceSize, stackSpots, type Board, type TableView } from './board.ts';
-import { appVersion, autoSeat, BACK, entryHead, fillAddr, homePanel, hostHanded, hostJump, inAppShell, initialScreen, inviteUrls, roomRow, seatOption, seatRowText } from './home.ts';
+import { recallSolo, rememberSolo } from './net.ts';
+import { appVersion, autoSeat, BACK, entryHead, fillAddr, homePanel, hostHanded, hostJump, inAppShell, initialScreen, inviteUrls, lobbyGuide, roomRow, seatOption, seatRowText } from './home.ts';
 import { aiActionFor, closedTable, newGameState, reportText, settleMatch, stepAndMask, type OnTable } from './local.ts';
 import { deviceNick, forget, Link, recall, remember, setTableAddr, shouldWake, tableAddr } from './net.ts';
 import { MOVE_MS, Pieces } from './pieces.ts';
@@ -352,7 +353,14 @@ export class App {
   private pickTable(): void {
     this.closeRoom();
     for (const el of this.root.querySelectorAll('.sheet')) el.remove();
-    const chosen: Setup = { ...this.setup, seed: rollSeed() };
+    // 上局的三个格子从本地存档里来（qdd.solo），没存过就用引擎默认；seed 每次现摇
+    const last = recallSolo();
+    const chosen: Setup = {
+      players: last?.players ?? this.setup.players,
+      mode: last?.mode ?? this.setup.mode,
+      level: last?.level ?? this.setup.level,
+      seed: rollSeed(),
+    };
     const { veil, body, foot } = page(this.root, entryHead('solo'));
     body.append(
       segment(
@@ -375,15 +383,28 @@ export class App {
       ),
     );
     const go = div('sheet-row');
+    const launch = (setup: Setup): void => {
+      veil.remove();
+      this.setup = setup;
+      // 开桌即写：下一次进这张卡，三排格子就是这一把的（含快捷那一颗）
+      rememberSolo({ players: setup.players, mode: setup.mode, level: setup.level });
+      void this.match(setup);
+    };
+    if (last) {
+      // 上局怎么摆的记得一清二楚：老玩家一拍就开局；想改，卡上的三排就在眼前
+      go.append(
+        button(
+          '按上局配置开局',
+          () => launch({ players: last.players, mode: last.mode, level: last.level, seed: rollSeed() }),
+          'btn primary',
+        ),
+      );
+    }
     go.append(
       button(
-        '开桌',
-        () => {
-          veil.remove();
-          this.setup = chosen;
-          void this.match(chosen);
-        },
-        'btn primary',
+        last ? '按当前选择开局' : '开桌',
+        () => launch(chosen),
+        last ? 'btn' : 'btn primary',
       ),
       button(BACK, () => this.showHome(), 'btn mini'),
     );
@@ -416,19 +437,21 @@ export class App {
     // 标题和内容归 body 滚，那几颗按钮归 foot 钉住；两列（配置／椅子）是 CSS 的事，
     // 手机上就是 cfg-col → seat-col 的自然顺序，一路单列滚到底
     const { veil, head, body, foot } = page(this.root, '正连着这桌……', 'room');
+    // 「现在该干什么」置顶：这一屏每块都有自己的道理，没人替人说这句——按六种处境各给一句（home.ts 的 lobbyGuide）
+    const guide = div('guide');
     const cfg = div('room-cfg');
     const rows = div('lobby-seats');
-    const invite = div('invite');
     const note = div('note');
     const cfgCol = div('cfg-col');
     const seatCol = div('seat-col');
     // 房主位换了人才亮一句，几秒后自己收掉：常驻一行「开局那颗在谁手上」是噪音，那本来就写在椅子行里
     const handed = div('note');
     handed.hidden = true;
-    cfgCol.append(cfg, note);
-    seatCol.append(rows, handed, invite);
-    body.append(cfgCol, seatCol);
-    const go = div('sheet-row');
+    // 主 CTA 跟着决策区走（不在底栏跟轻操作挤一排）：候场厅这一屏，开局是唯一的大动作
+    const cta = div('room-cta');
+    cfgCol.append(cfg, note, cta);
+    seatCol.append(rows, handed);
+    body.append(guide, cfgCol, seatCol);
     const out = div('sheet-row');
     // 底栏这几颗一秒问一回，只改字、不拆了重搭：它们现在正对着拇指，重建会吞掉按到一半的那一下
     const start = button(
@@ -452,10 +475,20 @@ export class App {
     );
     // 断线重连那几轮退避最磨人：这一颗不等下一轮，当场把这条线拆了重接
     const retry = button('刷新', () => link.retry(), 'btn mini');
-    // 清账重开：这本账活在桌那边，重启也接得回来，页面上没有第二个入口——所以在候场厅补一颗。
-    // 摆在这一排而不是跟着开始那颗：它是「把打过的都扔了」，不该长得像主按钮
+    // 邀请折叠条：手机上二维码不该沉在座位行下面，也不该默认占一整屏——点开才见（拉人是开局前的次级动作）。
+    // details/summary 语义化：键盘 Tab/Enter 天然可达，开合同步 aria-expanded 给读屏
+    const inviteWrap = document.createElement('details');
+    inviteWrap.className = 'invite-details';
+    const inviteSum = document.createElement('summary');
+    inviteSum.textContent = '邀请朋友 ▾';
+    inviteSum.setAttribute('aria-expanded', 'false');
+    inviteSum.addEventListener('toggle', () => inviteSum.setAttribute('aria-expanded', String(inviteWrap.open)));
+    const invite = div('invite');
+    inviteWrap.append(inviteSum, invite);
+    // 清账重开：这本账活在桌那边，重启也接得回来，页面上没有第二个入口——候场厅补一颗，
+    // 现在殿后于「邀请朋友／刷新／离开」之后：它是「把打过的都扔了」，不该长得像主按钮
     const clear = button(
-      '清账重开',
+      '清账重开…',
       () =>
         popup(
           this.root,
@@ -480,9 +513,9 @@ export class App {
         ),
       'btn mini',
     );
-    go.append(start);
+    seatCol.append(inviteWrap);
     out.append(leave, retry, clear);
-    foot.append(go, out);
+    foot.append(out);
     let seatsFor = -1;
     let cfgKey = '';
     let inviteKey: string | null = null;
@@ -609,21 +642,26 @@ export class App {
         invite.append(col);
       }
 
-      note.textContent = !waiting
-        ? this.seated
-          ? iSeat?.queued
-            ? '你来得晚了：这一局先让电脑打，下一局开局归你'
-            : '你正坐在牌桌上，这一局在打；改配置得等开下一局'
-          : '这一局正在打。先坐下，下一局开局就归你打。'
-        : !this.seated
-          ? `挑一把椅子坐下${short > 0 ? `；还差 ${short} 个位子` : ''}。房主位 ${seatName(l.hostSeat)} ${
-              l.seats[l.hostSeat]?.taken ? '已经有人' : '还空着，谁先坐下谁当房主'
-            }`
-          : isHost
-            ? `你是房主 ${seatName(this.me)}｜${short > 0 ? `${short} 个位子没人坐，开局就由电脑补` : '位子坐满了，可以开局'}`
-            : `已坐下，等 ${seatName(l.hostSeat)} 开局`;
+      // 「现在该干什么」：六种处境一句，状态机住 home.ts（纯函数有闸）；note 只管坐下那一下的反馈
+      guide.textContent = lobbyGuide({
+        waiting,
+        seated: this.seated,
+        isHost,
+        queued: iSeat?.queued ?? false,
+        short,
+        hostSeatName: seatName(l.hostSeat),
+        hostTaken: l.seats[l.hostSeat]?.taken ?? false,
+      });
 
-      start.hidden = !(waiting && isHost);
+      // 开始这一局贴在决策区正下（cfgCol 之内）：只剩房主候场时可见，开打中那格换成局况不显示死按钮
+      const showCta = waiting && isHost;
+      if (showCta) {
+        cta.replaceChildren(start);
+        start.hidden = false;
+      } else {
+        cta.replaceChildren();
+        start.hidden = true;
+      }
       start.disabled = false; // 座位表一回来就解掉按下那一下的置灰（置灰只为挡住 ≤1s 里那几下连点）
       // 第 1 局还没开，这本账本来就是空的：这时候给一颗「清账重开」只是多一颗按了没用的
       clear.hidden = !(waiting && isHost && l.gameNo > 1);
@@ -1102,8 +1140,8 @@ export class App {
       console.error(e);
       this.shell.status.textContent = `出了点问题：${(e as Error).message}｜种子 ${this.state.seed}｜按右上角「换桌」回首页`;
     } finally {
-      // 收杆回到首页，别把玩家丢在一幅打完的牌面上；崩了就留着牌面，好截图看
-      if (gen === this.gen && !crashed) this.showHome();
+      // 收杆落回开桌卡（D3-b）：上局配置就在眼前，一拍再来一局；崩了就留着牌面，好截图看
+      if (gen === this.gen && !crashed) this.pickTable();
     }
   }
 
@@ -1349,7 +1387,7 @@ export class App {
     const top = winners(this.state);
     this.sound.cue('win');
     return new Promise((res) => {
-      // 把 resolve 存进实例：结算卡开着时从右上角「换桌」走，showHome 只摘 DOM、碰不到这两颗按钮，
+      // 把 resolve 存进实例：结算卡开着时从右上角「换桌」走，showAbout 只摘 DOM、碰不到这两颗按钮，
       // 不留这一手那条 match 循环就永远停在 await this.askAgain()（breakTableLoop 会替它收场）
       const done = (v: boolean): void => {
         this.againRes = null;

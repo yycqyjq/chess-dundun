@@ -55,11 +55,12 @@ export function appVersion(): string {
 }
 
 const ENTRY = {
-  solo: { head: '单机模式', note: '2~4 个位子，没坐上人的由电脑补' },
+  // 入口按目的说，不按结构说：这两块是「我要开始玩」的两条路，不是两种模式的名字
+  solo: { head: '自己开一桌', note: '电脑补位，2~4 人' },
   // note 有两份：浏览器那头能寻同网的桌、也能在自己这台开一桌；App 外壳两头都做不到（原因见 fillAddr）
   room: {
-    head: '本地联机',
-    note: '先看同网有没有桌在等人；没有就在这台机器开一桌',
+    head: '和朋友连桌',
+    note: '同一网络里选桌加入；没有就在这台机器开一桌',
     appNote: '连另一台电脑上开着的那桌：把它的地址抄进来',
   },
 };
@@ -331,4 +332,27 @@ export function fillAddr(
     ),
     button(BACK, onBack, 'btn mini'),
   );
+}
+
+/** 候场厅／牌桌进行中那一屏的「现在该干什么」：六种处境各一句，纯函数进这儿才有闸。
+ *  入参全来自快照里写着的东西（SeatInfo/Lobby），不猜为什么——猜的那句是 2026-09 立过的规矩。 */
+export function lobbyGuide(input: {
+  waiting: boolean;
+  seated: boolean;
+  isHost: boolean;
+  queued: boolean;
+  short: number;
+  hostSeatName: string;
+  hostTaken: boolean;
+}): string {
+  const { waiting, seated, isHost, queued, short, hostSeatName, hostTaken } = input;
+  if (waiting) {
+    if (!seated)
+      return `挑一把椅子坐下${short > 0 ? `；还差 ${short} 个位子` : ''}。房主位 ${hostSeatName} ${hostTaken ? '已经有人' : '还空着，谁先坐下谁当房主'}`;
+    if (isHost) return short > 0 ? `还差 ${short} 个位子，开局就由电脑补——或者把「邀请朋友」发给朋友` : '位子坐满了，可以开局';
+    return `已坐下，等 ${hostSeatName} 开局`;
+  }
+  if (queued) return '这一局先让电脑打，下一局开局归你';
+  if (seated) return '这一局在打；改配置得等下一局';
+  return '这一局正在打。先坐下，下一局开局就归你打';
 }

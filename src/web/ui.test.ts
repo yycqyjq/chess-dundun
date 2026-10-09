@@ -30,6 +30,7 @@ import {
   initialScreen,
   inviteUrls,
   isLoopback,
+  lobbyGuide,
   normAddr,
   roomRow,
   seatOption,
@@ -39,6 +40,7 @@ import {
 } from './home.ts';
 import type { Rules } from '../core/game.ts';
 import { foundLine, JOIN_QUERY, type FoundRoom } from '../net/discover.ts';
+import { recallSolo, rememberSolo } from './net.ts';
 import type { SeatInfo } from '../net/wire.ts';
 import type { Saved } from './net.ts';
 import { buildPieceSet, buildRanks, type Piece } from '../core/pieces.ts';
@@ -518,9 +520,9 @@ function planOf(spotFor: (i: number) => Placed): Map<number, Placed> {
 
   const entries = panel.findAll('button');
   ok('两个入口各是一整块按钮，不是 div（键盘 Tab 走得到）', entries.length === 2 && entries.every((e) => e.tag === 'button' && e.type === 'button'));
-  ok('顺序是「单机模式」在前、「本地联机」在后', entries[0]!.textContent.includes('单机模式') && entries[1]!.textContent.includes('本地联机'), entries.map((e) => e.textContent).join('｜'));
+  ok('顺序是「自己开一桌」在前、「和朋友连桌」在后', entries[0]!.textContent.includes('自己开一桌') && entries[1]!.textContent.includes('和朋友连桌'), entries.map((e) => e.textContent).join('｜'));
   // 点进去那一屏的标题从这儿拿（app.ts 调 entryHead）：一处改名两处跟着，不会漂成两个名字
-  ok('两块的字就是那两屏的标题，同一份来源', entryHead('solo') === '单机模式' && entryHead('room') === '本地联机');
+  ok('两块的字就是那两屏的标题，同一份来源', entryHead('solo') === '自己开一桌' && entryHead('room') === '和朋友连桌');
   ok('每一屏那颗出口都念同一个词（不再「回首页」「退出这桌」各叫各的）', BACK === '返回');
   ok(
     '每块里两个格：大字说做什么、小字说谁来补',
@@ -559,6 +561,47 @@ function planOf(spotFor: (i: number) => Placed): Map<number, Placed> {
   const withVersion = F(homePanel(() => {}, () => {})).find('home-foot')!;
   ok('注上了就在脚上念 v9.9.9，那句联机提示还在', withVersion.find('v')!.raw === 'v9.9.9' && withVersion.children.length === 2, withVersion.children.map((c) => c.raw).join(','));
   delete G.__APP_VERSION__;
+}
+
+// ---------- 候场厅「现在该干什么」：六种处境各一句（lobbyGuide 纯函数） ----------
+
+{
+  const g = (over: Partial<Parameters<typeof lobbyGuide>[0]> = {}): string =>
+    lobbyGuide({ waiting: true, seated: false, isHost: false, queued: false, short: 2, hostSeatName: '房主P1', hostTaken: false, ...over });
+  ok('候场·没坐下：先说坐，还差几个也报数', g().includes('挑一把椅子坐下') && g().includes('还差 2 个位子'));
+  ok('候场·没坐下且房主位有人：念「已经有人」，不再骗人「谁先坐下谁当房主」', g({ hostTaken: true }).includes('已经有人') && !g({ hostTaken: true }).includes('谁先坐下谁当房主'));
+  ok('候场·你是房主：差位提电脑补，坐满改念可以开局', g({ seated: true, isHost: true }).includes('电脑补') && g({ seated: true, isHost: true, short: 0 }).includes('可以开局'));
+  ok('候场·客人已坐下：等房主那句带着位名', g({ seated: true }).includes('等 房主P1 开局'));
+  ok('开打·queued：这局电脑打、下局归你', g({ waiting: false, seated: true, isHost: true, queued: true }).includes('下一局开局归你'));
+  ok('开打·坐着的人不念改配置外的东西；没坐下的先请人坐', g({ waiting: false, seated: true }).includes('改配置得等下一局') && g({ waiting: false }).includes('先坐下'));
+
+  // ---------- 开桌卡的「上局配置」：存得下读得回，三格不齐的不认，无痕不抛 ----------
+  const store = new Map<string, string>();
+  G.localStorage = {
+    getItem: (k: string) => store.get(k) ?? null,
+    setItem: (k: string, v: string) => void store.set(k, v),
+    removeItem: (k: string) => void store.delete(k),
+  };
+  ok('没存过就是 null（开桌卡退回引擎默认，不拿 undefined 往选择里灌）', recallSolo() === null);
+  rememberSolo({ players: 4, mode: 'ming', level: 'hard' });
+  const back = recallSolo();
+  ok('存得下的机器：开桌即写、进卡读回，三格原样', back !== null && back.players === 4 && back.mode === 'ming' && back.level === 'hard', JSON.stringify(back));
+  store.set('chess-dundun.solo', '{\"players\":\"4\",\"mode\":\"ming\",\"level\":\"hard\"}');
+  ok(' players 不是数的一律不认（老数据或手改的别进来）', recallSolo() === null);
+  store.set('chess-dundun.solo', '坏 JSON');
+  ok('坏 JSON 也不抛：读不出来当没存过', recallSolo() === null);
+  const boom = () => {
+    throw new Error('SecurityError：这台设备不让存东西');
+  };
+  G.localStorage = { getItem: boom, setItem: boom, removeItem: boom };
+  let threw = '';
+  try {
+    recallSolo();
+    rememberSolo({ players: 2, mode: 'kou', level: 'easy' });
+  } catch (e) {
+    threw = String((e as Error).message);
+  }
+  ok('无痕模式两头都不抛：记不住就这一局管用，不把人堵在门外', threw === '', threw);
 }
 
 // ---------- 关于页的玩法速览：文案跟引擎现状同源 ----------
