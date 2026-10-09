@@ -84,7 +84,7 @@ npm run selfplay -- --players=4 --mode=ming --games=400   # 电脑对电脑出�
 
 ## 装到手机上（安卓 APK）
 
-- `npm run apk:debug` 一把出包：`vite build` → `cap sync android` → `./gradlew assembleDebug`，产物是 `android/app/build/outputs/apk/debug/app-debug.apk`，打完顺手抄一份到 `release/qdd-android-<版本>.apk`，跟桌面的安装包放一起。APK 的 `versionName`／`versionCode` 从 package.json 现读（gradle 那头按 semver 摊成整数码），别在 android/ 里再养一份版本号。要 JDK 21 和 Android SDK——脚本里的 `JAVA_HOME` 是问 `/usr/libexec/java_home -v 21` 要的（不写死路径、不动你的 dotfiles），SDK 路径读 `android/local.properties`（每台机器自己生成，那条被 `android/.gitignore` 盖着）。
+- `npm run apk:debug` 一把出包：`vite build` → `cap sync android` → `./gradlew assembleDebug`，产物是 `android/app/build/outputs/apk/debug/app-debug.apk`，打完顺手抄一份到 `release/qdd-android-<版本>-debug.apk`；正式分发的包走 `npm run apk:release`（名字不带 debug，签名口径见 RELEASE.md），跟桌面的安装包放一起。APK 的 `versionName`／`versionCode` 从 package.json 现读（gradle 那头按 semver 摊成整数码），别在 android/ 里再养一份版本号。要 JDK 21 和 Android SDK——脚本里的 `JAVA_HOME` 是问 `/usr/libexec/java_home -v 21` 要的（不写死路径、不动你的 dotfiles），SDK 路径读 `android/local.properties`（每台机器自己生成，那条被 `android/.gitignore` 盖着）。
 - APK 是**纯客户端**：那张桌是一个 Node 进程（`npm run host`），装不进包里。所以「本地联机」那一屏在 APK 里不列同网的桌，改成**手填桌地址**：桌面机器上跑 `npm run host`，把它打印的 `http://192.168.1.11:5200/` 里那段 `192.168.1.11:5200` 敲进那一格，按「连这张桌」就进候场厅。**端口必须写全**——桌的端口是 `--port` 说了算，猜错的症状是「莫名其妙连不上」，所以读不出端口那串就地拦下、不猜一个。填过一次存在本地，下次进来还用它。
 - 那两处岔路是外壳逼出来的，不是随手关的：WebView 发不了 UDP 广播，寻呼那一套在 APK 里没有宿主可代跑；页面 origin 就是它自己，没有「同源的一张桌」可抄。`capacitor.config.json` 里 `server.androidScheme` 定成 `http` 是让那条连接走 `ws://`（https 页面连 `ws://` 会被当混合内容拦下），`cleartext` 开着才允许连局域网里那台机器。浏览器那一头一个字没变：还是同源、还是同网桌列表。
 - 「单机模式」在 APK 里照旧能打，不联网。装进手机、真连一张桌、码能不能扫通，这几件得在真机上验。
@@ -110,6 +110,8 @@ npm run knives        # 负向验证：一处一处把闸拆掉，看那套测�
 ```
 
 后两条都只在系统临时目录里抄一份仓库再跑，绝不往仓库根的 `table.json` 上落一笔（连旁边那颗 `table.json.lock` 也落在副本里）——那张桌一开桌就会写存档（`src/node/room.ts` 的 `openRoom`），拿仓库本体量等于拿你正在打的那一桌当试验品。
+
+verify 全绿这条挂了自动挡：push / PR 会跑 `.github/workflows/ci.yml`（verify + build + smoke，electron 二进制跳过下载）；刀架（298 把）太重不上 CI，留在本机按批跑。发布走 `npm run release`（改版本号 → verify → 三端出包 → 提交打 tag），口径见 [RELEASE.md](RELEASE.md)。
 
 副本抄什么、回档什么都写在 `tools/lib.mjs` 两处，**加新源码目录时两处都要看一眼**：`NOT_COPIED` 那份名单把 `release/`（一份 dmg 就 123 MB）和 `android/` 的 gradle 产物挡在副本外面，`syncSrc` 每把刀开拆前把 `src/` 和 `desktop/` 各自 rsync 回副本一次——只回 `src/` 的话，同一张谱子里下一把刀就砍在上一把的伤口上，红字对不上那句 `expect`，看起来像「刀钝了」，其实是上一把没还回去。
 

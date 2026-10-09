@@ -13,4 +13,7 @@ release/
 /android/local.properties
 # 从 mac 交叉打 win 包要的那份 Electron dist（一份 zip 151 MB，每台机器自己按 README 那句取，不进仓库）
 vendor/
+/android/keystore.properties
+*.jks
+*.keystore
 table.json.tmp

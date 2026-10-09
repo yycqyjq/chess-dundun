@@ -5,6 +5,14 @@ def qddVersion = new groovy.json.JsonSlurper().parseText(file('../../package.jso
 // versionCode 得是整数且逐版递增：按 semver 摊开（0.3.2 → 3002），从手写的 1 也能一路升上去
 def (qddMaj, qddMin, qddPat) = qddVersion.tokenize('.').collect { it.toInteger() }
 
+// 正式签名：keystore 与口令放在 android/keystore.properties（不进仓库，storeFile 可以指到仓库外）。
+// 没有这份文件时 release 构建退回 debug 签名——本地试装不受影响，正式分发按 RELEASE.md 的口径配
+def keystorePropsFile = rootProject.file('keystore.properties')
+def keystoreProps = new Properties()
+if (keystorePropsFile.exists()) {
+    keystorePropsFile.withInputStream { keystoreProps.load(it) }
+}
+
 android {
     namespace = "com.qdd.chessdundun"
     compileSdk = rootProject.ext.compileSdkVersion
@@ -21,10 +29,22 @@ android {
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    signingConfigs {
+        release {
+            if (keystorePropsFile.exists()) {
+                storeFile file(keystoreProps.storeFile)
+                storePassword keystoreProps.storePassword
+                keyAlias keystoreProps.keyAlias
+                keyPassword keystoreProps.keyPassword
+            }
+        }
+    }
     buildTypes {
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            // 没配 keystore.properties 时退回 debug 签名：装得上能玩，别当正式分发件
+            signingConfig keystorePropsFile.exists() ? signingConfigs.release : signingConfigs.debug
         }
     }
 }

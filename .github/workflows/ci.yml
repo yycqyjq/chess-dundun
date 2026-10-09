@@ -1,0 +1,25 @@
+# 验证一条龙：类型 + 规则自检 + 全部套件 + 构建 + 两桌端到端。
+# 刀架（298 把）太重，不上 CI，留在本机跑；electron 的二进制这条链用不到，跳过下载省几分钟。
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    env:
+      ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run verify
+      - run: npm run build
+      - run: npm run smoke
