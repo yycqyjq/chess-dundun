@@ -40,7 +40,7 @@ import {
   wantsJoin,
 } from './home.ts';
 import type { Rules } from '../core/game.ts';
-import { foundFree, foundMeta, JOIN_QUERY, statusBadge, type FoundRoom } from '../net/discover.ts';
+import { foundFree, foundMeta, roomName, JOIN_QUERY, statusBadge, type FoundRoom } from '../net/discover.ts';
 import { recallSolo, rememberSolo } from './net.ts';
 import type { SeatInfo } from '../net/wire.ts';
 import type { Saved } from './net.ts';
@@ -589,7 +589,19 @@ function planOf(spotFor: (i: number) => Placed): Map<number, Placed> {
   ok('候场·没坐下：先说坐，还差几个也报数', g().includes('挑一把椅子坐下') && g().includes('还差 2 个位子'));
   ok('候场·没坐下且房主位有人：念「已经有人」，不再骗人「谁先坐下谁当房主」', g({ hostTaken: true }).includes('已经有人') && !g({ hostTaken: true }).includes('谁先坐下谁当房主'));
   ok('候场·你是房主：差位提电脑补，坐满改念可以开局', g({ seated: true, isHost: true }).includes('电脑补') && g({ seated: true, isHost: true, short: 0 }).includes('可以开局'));
-  ok('候场·客人已坐下：等房主那句带着位名', g({ seated: true }).includes('等 房主P1 开局'));
+  // 房主位那把还空着时不许念「等 P1 开局」——那把没人，等的是个不存在的人（2026-10-10 用户踩的）
+  ok(
+    '候场·客人已坐下而房主位空着：说清那把还空着、点那一行就能坐上去，不念一个不存在的人',
+    g({ seated: true }).includes('还空着') &&
+      g({ seated: true }).includes('坐下 · 当房主') &&
+      !g({ seated: true }).includes('等 房主P1 开局'),
+    g({ seated: true }),
+  );
+  ok(
+    '候场·客人已坐下且房主位有人：这才念「等 房主P1 开局」',
+    g({ seated: true, hostTaken: true }).includes('等 房主P1 开局'),
+    g({ seated: true, hostTaken: true }),
+  );
   ok('开打·queued：这局电脑打、下局归你', g({ waiting: false, seated: true, isHost: true, queued: true }).includes('下一局开局归你'));
   ok('开打·坐着的人不念改配置外的东西；没坐下的先请人坐', g({ waiting: false, seated: true }).includes('改配置得等下一局') && g({ waiting: false }).includes('先坐下'));
 
@@ -710,23 +722,29 @@ function planOf(spotFor: (i: number) => Placed): Map<number, Placed> {
   ok('不点名头也是颗按钮的样子（默认 btn）', plain.className === 'btn', plain.className);
 }
 
-// ---------- 列表页那一行桌：整行是热区，徽章／情况／空位／地址分格排 ----------
+// ---------- 列表页那一行桌：整行是热区，桌名／徽章／情况／空位／地址分格排 ----------
 
 {
-  const f: FoundRoom = { ip: '192.168.1.41', port: 5200, players: 4, gameNo: 2, mode: 'kou', level: 'hard', status: 'waiting', free: 2 };
+  const f: FoundRoom = { ip: '192.168.1.41', port: 5200, name: 'A1 的桌', players: 4, gameNo: 2, mode: 'kou', level: 'hard', status: 'waiting', free: 2 };
   const row = F(roomRow(f));
   const href = (n: FEl) => (n as unknown as Record<string, string>)['href'];
   // 批3：从「点那条小地址」升成「整行都是那颗按钮」——行本体就是 <a>，不另挂 JS click（浏览器自己走，悬上去看得见去哪儿）
   ok('整行是热区：行本体就是 <a class="peer-row btn">，不挂 click 监听', row.tag === 'a' && row.names.has('peer-row') && row.names.has('btn') && !(row.listeners.get('click') ?? []).length, `${row.tag}.${row.className}｜监听 ${row.listeners.get('click')?.length ?? 0}`);
   ok('地址挂行 href 上，带着入桌那个标记：点哪儿进去落候场厅', href(row) === `http://192.168.1.41:5200/${JOIN_QUERY}` && initialScreen(new URL(href(row)).search) === 'room', href(row));
   ok('一个字都没往 HTML 里写（ip／端口都可能带脏字）', row.countHtml() === 0, row.allHtml.join('｜'));
-  // 头一排：徽章 + 情况 + 空位；第二排：地址（可整条选中拷走）
+  // 头一排：桌名；第二排：徽章 + 情况 + 空位；第三排：地址（可整条选中拷走）
+  const named = row.find('peer-name')!;
   const line = row.find('peer-t')!;
   const badge = line.find('peer-badge')!;
   const meta = line.find('peer-meta')!;
   const free = line.find('peer-free')!;
   const addr = row.find('peer-addr')!;
-  ok('两排齐了：peer-t（含徽章·情况·空位）在上、地址在下', !!line && !!badge && !!meta && !!free && !!addr, row.children.map((c) => c.className).join('+'));
+  ok('三排齐了：桌名在上、徽章·情况·空位在中、地址在下', !!named && !!line && !!badge && !!meta && !!free && !!addr, row.children.map((c) => c.className).join('+'));
+  // 桌名摆在整行最上头：两台设备各开一张桌时，光有 IP:端口分不清哪张是谁的（2026-10-09 用户点名）
+  ok('桌名那排走 roomName，且在整行最前', named.raw === roomName(f) && row.children[0] === named, `${named.raw}｜${row.children[0]?.className}`);
+  // 还没人在房主位坐下：写一句实话，不摆一行空白
+  const unnamed = F(roomRow({ ...f, name: '' }));
+  ok('还没定房主时桌名那排说人话', unnamed.find('peer-name')!.raw === '还没定房主', unnamed.find('peer-name')!.raw);
   // 徽章、情况、空位各取 discover 那批拆片函数——改一处字，列表行和候场厅那句平铺文本一起变
   ok('徽章的字和色档走 statusBadge', badge.raw === statusBadge(f).text && badge.names.has(statusBadge(f).cls) && badge.names.has('peer-badge'), `${badge.className}｜${badge.raw}`);
   ok('情况那截走 foundMeta（人数·玩法）加局号', meta.raw === `${foundMeta(f)} · 第 ${f.gameNo} 局`, meta.raw);
@@ -784,7 +802,7 @@ function planOf(spotFor: (i: number) => Placed): Map<number, Placed> {
   ok('原来那把还连着（另个标签页坐着）就谁也不抢', autoSeat(tableOf({ 2: sat }), saved(2), true) === null);
   ok('存的那个座位号不在这桌上（换了人数、或者一条脏数据）就当没存过', autoSeat(tableOf({}), saved(9), false) === -1);
   ok('座位号是负的（老版本存歪的）同样当没存过', autoSeat(tableOf({}), saved(-1), true) === 0);
-  ok('扫码那条一律递 -1：桌上只剩房主位时由桌回那一句「没空椅子了」，客户端不自己判', autoSeat(tableOf({ 0: sat, 1: sat, 2: sat, 3: sat }), null, false) === -1);
+  ok('扫码那条一律递 -1：挑哪把归桌定（真没空椅子了由桌回一句），客户端不自己判', autoSeat(tableOf({ 0: sat, 1: sat, 2: sat, 3: sat }), null, false) === -1);
 }
 
 {

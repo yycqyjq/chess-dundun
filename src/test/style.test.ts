@@ -235,7 +235,7 @@ console.log('\n同网桌只摆一处：候场厅里不留第二份');
   const cols = (val('.peer-row', 'grid-template-columns') ?? '‹没写›').trim();
   const tracks = cols.replace(/\([^)]*\)/g, '').split(/\s+/).filter(Boolean).length;
   ok('同网桌那一行只有一列：地址那颗跟在情况下面，不隔着空缝对着最右', tracks === 1, `${cols}｜${tracks} 列`);
-  ok('那一行的两排对齐到左边：共用左边缘那一根锚', val('.peer-row', 'justify-items') === 'start', val('.peer-row', 'justify-items') ?? '‹没写›');
+  ok('那一行的三排对齐到左边：共用左边缘那一根锚', val('.peer-row', 'justify-items') === 'start', val('.peer-row', 'justify-items') ?? '‹没写›');
   // 「只剩你一个」这一句得是数出来的活人，不是「我坐过椅子」；桌那头同一口径还有一道（见 net 那节的 disband）
   ok('那颗「返回」认的是「只剩一个活人」', /this\.exitTable\(this\.seated && alive <= 1\)/.test(app), '‹没找到那句›');
   // 散桌递的是这一句，不是清账那句：递错了账归零、椅子却一把不动，人还坐在那张要散的桌上
@@ -247,6 +247,68 @@ console.log('\n同网桌只摆一处：候场厅里不留第二份');
     /hostJump\(lastHost, l\.hostSeat\)/.test(app),
     (app.match(/^\s*if \(hostJump.*$/m) ?? ['‹没走 hostJump：那句判断又手写回 app.ts 了›'])[0],
   );
+}
+
+// ---------- 桌名上列表行：认桌靠这一排（2026-10-09 用户点名「分不清是哪一桌」） ----------
+
+console.log('\n同网列表那一行：桌名摆在最上头，认桌就靠它');
+{
+  const home = web('home.ts');
+  const row = home.slice(home.indexOf('export function roomRow'), home.indexOf('export function peerEmpty'));
+  ok('那一行的源码截得出来（不是空串当绿）', row.length > 200, `‹截了 ${row.length} 字›`);
+  // 顺序是这条的要点：桌名要在最前。摆到徽章下面那一排里，两台设备各开一张时还是分不出哪张是谁的
+  ok(
+    '桌名那排是整行第一个孩子，且走的是 roomName（没自己拼一句）',
+    /row\.append\(span\('peer-name', roomName\(f\)\),/.test(row) && home.includes('roomName,'),
+    (row.match(/^\s*row\.append\(.*$/m) ?? ['‹找不到那一行›'])[0],
+  );
+  // 「还没定房主」那句话本体只住在 discover.ts 的 roomName 一处：列表行和候场厅标题各抄一份就会漂成两种说法
+  ok('「还没定房主」那句文案只有一处（home.ts 里没有第二份）', !/还没定房主/.test(home), (home.match(/还没定房主[^\n]*/) ?? ['‹home.ts 里没有第二份›'])[0]);
+  // 整行的第一眼：桌名得比底下那排情况大一档，不然三排一样重、眼睛还是先落在地址上
+  const nameSize = Number((val('.peer-name', 'font-size') ?? '0').replace('px', ''));
+  const lineSize = Number((val('.peer-t', 'font-size') ?? '0').replace('px', ''));
+  ok('桌名比底下那排情况大一档（整行第一眼是它）', nameSize > lineSize && lineSize > 0, `桌名 ${nameSize}｜情况 ${lineSize}`);
+  // 桌名是自由文本（上限 24 字），一行放不下得换行——截成省略号的话「A1 的桌」和「A1 的桌子」看着一样
+  ok(
+    '桌名放不下就换行，不截成省略号',
+    val('.peer-name', 'word-break') === 'break-all' && val('.peer-name', 'text-overflow') === undefined && val('.peer-name', 'white-space') === undefined,
+    `word-break=${val('.peer-name', 'word-break')}｜text-overflow=${val('.peer-name', 'text-overflow') ?? '‹没写›'}｜white-space=${val('.peer-name', 'white-space') ?? '‹没写›'}`,
+  );
+}
+
+// ---------- 列表页那句「正在寻」：进屏就摆，首轮不落空（2026-10-09 用户「还以为没有，像有 bug」） ----------
+
+console.log('\n同网列表页：进屏先摆「正在寻」，第一轮寻呼等握手一成补发');
+{
+  const app = web('app.ts');
+  // 寻呼是一个广播往返：发一轮、等回包。空着屏让人猜「是不是没有」，比多写这几个字糟得多
+  ok(
+    '进这一屏 note 的初值就是「正在寻」（不是空白）',
+    /div\('note', SEARCHING\)/.test(app),
+    (app.match(/^\s*const note = div\(.*$/m) ?? ['‹找不到那一行›'])[0],
+  );
+  // 它得住在类外面：写进 class 里 TS 直接报「A class member cannot have the 'const' keyword」，
+  // 而这句是常驻的那一行字，不是谁的字段
+  const declAt = app.indexOf('const SEARCHING');
+  ok('那句文案是类外的一个常量（不是类字段、也不是散在各处的字面量）', declAt > 0 && declAt < app.indexOf('export class App'), `常量在 ${declAt}｜类在 ${app.indexOf('export class App')}`);
+  // 首轮几乎总赶在握手之前：那一刻发不出去就把这一趟挂起来（awaitFind），别写「还没连上」那种吓人的话
+  ok('发不出去时把这一趟挂起来等握手，不写断线那句', /this\.awaitFind = true;/.test(app), (app.match(/^\s*this\.awaitFind = .*$/gm) ?? ['‹找不到›']).join('｜'));
+  ok('握手一成当场补发那一趟（不让人对着空白干等五秒）', /if \(this\.list && this\.awaitFind\) this\.findNow\(\);/.test(app), (app.match(/^\s*if \(this\.list && this\.awaitFind\).*$/m) ?? ['‹找不到›'])[0]);
+  // 这一条是「搜得太慢像有 bug」的正主：onNet 收到「连上了」（text 空）时把 note 擦成空串，
+  // 而这一屏的 note 正是「正在寻」——擦掉就等于那句提示从来没出现过。列表那一支只许写非空的 text。
+  ok(
+    '列表那一支只在断线时写话，连回来不擦空串',
+    /if \(text\) this\.list\.note\.textContent = text;\s*else if \(back\) this\.findNow\(\);/.test(app) && !/this\.list\.note\.textContent = ''/.test(app),
+    (app.match(/^\s*if \(this\.list\) \{[\s\S]{0,160}?\}/m) ?? ['‹找不到列表那一支›'])[0].replace(/\s+/g, ' '),
+  );
+  // 已经有清单了就别再摆那行字：每五秒把结果换成「正在寻」再换回来，是拿那行字在那儿闪
+  ok(
+    '已经有清单了就不再摆「正在寻」（不闪）',
+    /if \(!this\.listed\) this\.list\.note\.textContent = SEARCHING;/.test(app) && /this\.listed = true;/.test(app),
+    `‹摆字那句›=${/if \(!this\.listed\)/.test(app)}｜‹置位›=${/this\.listed = true;/.test(app)}`,
+  );
+  // 收屏时那一轮一轮的 find 得跟着停：人都不在这儿了还朝这块网打包没道理
+  ok('收掉这一屏时定时器跟着停（stopList 里清 interval）', /window\.clearInterval\(this\.findTimer\);/.test(app), (app.match(/^\s*window\.clearInterval\(this\.findTimer\);.*$/m) ?? ['‹找不到›'])[0]);
 }
 
 // ---------- App 外壳那一屏：联机改成手填桌地址，寻呼那条路不跟着进去 ----------

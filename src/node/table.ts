@@ -47,6 +47,18 @@ export interface TableSetup {
   hostSeat?: number;
   /** 这桌「家」房主位：建房即房主坐的那把，代持那位让座时位还回这儿。缺省跟 hostSeat */
   homeSeat?: number;
+  /**
+   * 这桌叫什么。纯自动：谁先在房主位坐下，这桌就叫谁的（`<代号> 的桌`），不给人填。
+   * 名字是给人**认桌**用的——同网列表里两张桌并排时，光有 IP:端口分不清哪张是谁的。
+   * 只定一次，不跟着房主位交接改：名字飘了就等于没有名字。
+   */
+  name?: string;
+  /**
+   * 这桌被人开过没有：房主位第一回坐上真人就翻成 true，随存档一起留着。
+   * 「开过」和「房主位此刻空着」是两回事——前者说这桌有主，后者可能只是人走开了。
+   * `settleHost` 拿它决定要不要把房主位交给刚敲门进来的人（见那条注释）。
+   */
+  opened?: boolean;
 }
 
 interface Slot {
@@ -182,7 +194,13 @@ export class Table {
     // 候场期还没有「这一局」，谁都不算排队也不算电脑位——那份牌权要等房主按下开始才定
     slot.queued = this.status === 'playing' && !slot.human;
     slot.ai = this.status === 'playing' && slot.queued;
-    const moved = this.settleHost(seat);
+    const moved = this.settleHost(seat, true);
+    // 房主位第一回坐上真人：这桌就算「开过了」，桌名也在这时候定下来（纯自动，见 TableSetup 那两格）。
+    // 定名只认「坐进房主位」这一件事，不认谁开的桌、也不认后来谁接了位——名字要的是稳。
+    if (seat === (this.setup.hostSeat ?? 0)) {
+      this.setup.opened = true;
+      if (!this.setup.name && slot.nick) this.setup.name = `${slot.nick} 的桌`;
+    }
     const msg: ToClient = {
       t: 'welcome',
       seat,
@@ -208,26 +226,43 @@ export class Table {
    * 那把椅子空着、或者主人没连着，才交给刚坐下的活人代持。
    * 只有真人递得上 join，电脑补的位永远走不到这儿，所以房主位落不到 AI 头上。
    * 开打中一律不动：那一局正打着，房主位得钉在他那把椅子上。
+   *
+   * `byJoin` 说的是「这一位刚敲门进来」。那种情况下，一把**这桌还从没人开过**的房主位不给他——
+   * 那不叫代持，那叫把一张空桌白送出去：谁进来都直接接管房主位，于是「进来看看」变成了「接手这张桌」。
+   * 两台设备各自开着一张桌时，人从同网列表里点错一条（列表里能点到的本来就不是自己那张，
+   * 见 `listFound`），进去就坐上了另一张桌的房主位——屏幕上两个人各自念「房主位 · 你在这儿」，
+   * 谁也看不见谁（2026-10-09 用户实测的「两个房主」）。
+   * 空桌的房主位要人自己按「坐下 · 当房主」：那颗按钮本来就在候场厅那一行上，一句话说得明白。
+   * 而桌自己把掉线的房主位收回来再交给**已经坐在这桌的活人**（`restHost`）不受这条限制：
+   * 那种时候这桌本来就有主，只是人走开了，不接着交给活人这桌就卡死。
    */
-  private settleHost(seat: number): 'take' | null {
+  private settleHost(seat: number, byJoin = false): 'take' | null {
     if (this.status !== 'waiting') return null;
     const host = this.setup.hostSeat ?? 0;
     if (host === seat) return null;
     const keeper = this.slots[host];
     if (keeper?.token && keeper.online) return null;
+    if (byJoin && !this.setup.opened) return null;
     this.setup.hostSeat = seat;
     return 'take';
   }
 
   /**
-   * 给「自动入座」挑一把椅子：头一把没人坐过的，房主位除外——代持的那把和「家」那把都除外。
-   * 房主位留给开桌那位（建房即房主走的是另一条路：他直接坐家那把），扫码进来的人不该
-   * 一屁股坐到开局那颗按钮上；只剩房主位空着时回 null，由界面退回让人自己按「坐下 · 当房主」。
+   * 给「自动入座」挑一把椅子：**房主位还空着就先给它**；那把有人拿着了，才绕开房主位和「家」那把、
+   * 往后挑头一把没人坐过的；都坐满了回 null，由界面退回让人自己按。
+   *
+   * 房主位空着就先给它（2026-10-10）：一张桌总得有人开局。原来一律绕开房主位，于是扫码进来的人落 P2、
+   * 房主位在 P1 空着——屏幕上谁都没有「开始这一局」那颗，得人自己回头去找「坐下 · 当房主」
+   *（用户原话：「联机我一进去就是 P2，明明 P1 也是空着的」）。谁先进来谁当房主，和「在这台机器开一桌」
+   * 落到的是同一把椅子。给 `hostSeat` 而不是 `homeSeat`：房主位跟着交接挪过之后，空出来的那把才是眼下的开局按钮。
+   * 「有人拿着」把坐着和「掉线了、凭令牌等回来」都算上，所以这不会把别人的椅子摘走——
+   * 「从同网列表点错一条进来就无声接管别人桌上那把」管的是 `settleHost`，不是这儿。
    * 归桌挑而不是客户端照座位表自己挑：两台手机扫同一个码，各挑各的一定撞在同一把椅子上。
    */
   freeSeat(): number | null {
     const host = this.setup.hostSeat ?? 0;
     const home = this.setup.homeSeat ?? host;
+    if (this.slots[host] && !this.slots[host].token) return host;
     return this.slots.find((s) => s.seat !== host && s.seat !== home && !s.token)?.seat ?? null;
   }
 
@@ -531,6 +566,8 @@ export class Table {
   lobby(): Lobby {
     return {
       players: this.setup.players,
+      // 还没人在房主位坐下过就是空串：界面上那句「还没定房主」比一个编出来的名字诚实
+      name: this.setup.name ?? '',
       hostSeat: this.setup.hostSeat ?? 0,
       homeSeat: this.setup.homeSeat ?? this.setup.hostSeat ?? 0,
       gameNo: this.gameNo,

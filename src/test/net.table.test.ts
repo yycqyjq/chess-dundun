@@ -156,51 +156,60 @@ function keyOf(push: StatePush): string {
 // ───────────────────────── 自动入座挑的那把椅子 ─────────────────────────
 
 {
-  // 扫码／链接进来那句 seat:-1 归桌挑（客户端各挑各的，两台手机撞同一个码一定撞同一把）
+  // 扫码／链接进来那句 seat:-1 归桌挑（客户端各挑各的，两台手机撞同一个码一定撞同一把）。
+  // 2026-10-10 起：房主位**还空着**时第一把给的就是它——一张桌总得有人开局。原来一律绕开房主位，
+  // 进来的人落 P2、房主位在 P1 空着，屏幕上谁都没有「开始这一局」那颗（用户原话：
+  // 「联机我一进去就是 P2，明明 P1 也是空着的」）。
   const { table } = makeTable({ players: 4 });
-  ok('一张空桌：绕开房主位，挑头一把没人坐过的', table.freeSeat() === 1, `${table.freeSeat()}`);
+  ok('一张空桌：第一把给的正是房主位——谁先进来谁当房主', table.freeSeat() === 0, `${table.freeSeat()}`);
+  table.join(0, '');
+  ok('房主位有主了：绕开它和「家」那把，挑头一把没人坐过的', table.freeSeat() === 1, `${table.freeSeat()}`);
   table.join(1, '');
   ok('头一把被占了就往后挪', table.freeSeat() === 2, `${table.freeSeat()}`);
   table.join(2, '');
   table.join(3, '');
-  ok('非房主位坐满了就不硬挤（回 null，界面退回让人自己挑）', table.freeSeat() === null, `${table.freeSeat()}`);
+  ok('四把都满了就不硬挤（回 null，界面退回让人自己挑）', table.freeSeat() === null, `${table.freeSeat()}`);
   ok('让了座那把跟着回到可挑的清单里', table.stand(2).ok && table.freeSeat() === 2);
 
   {
-    // 房主位留给开桌那位：它空着也不自动给，那是「坐下 · 当房主」那一次真有意义的选择
+    // 房主位空着才给，有人拿着（哪怕只是掉线挂着令牌）就绕开——给的是「没人坐的那把」，
+    // 不是「把别人摘下来」。而「从同网列表点错一条进来就无声接管别人桌上那把」管的是 settleHost，不是这儿。
     const two = makeTable({ players: 2 });
-    ok('两人群桌只剩房主位空着：不自动给', two.table.freeSeat() === 1);
+    ok('两人空桌：房主位空着，第一把就是它', two.table.freeSeat() === 0);
     two.table.join(1, '');
-    // 客人先坐下只算代持（settleHost 那条老规矩）：真正要钉的是「家」那把没被自动发出去
     ok(
-      '客人先坐下只算代持，「家」那把还空着、也不再自动给',
-      two.table.lobby().hostSeat === 1 && !two.table.seatInfo()[0]!.taken && two.table.freeSeat() === null,
+      '客人自己挑了 P2：房主位一把没动，下一个自动入座的就去坐它',
+      two.table.lobby().hostSeat === 0 && !two.table.seatInfo()[0]!.taken && two.table.freeSeat() === 0,
     );
     two.table.join(0, '');
-    // 位只往「没人拿着」那把上走：代持那位还连着，坐回「家」那把也不把他踢下去
+    // 开桌那位自己坐进「家」那把（客户端「在这台机器开一桌」走的就是这一路：座位直接递房主位）
     ok(
-      '开桌那位坐回「家」那把：客人还连着，位就不抢',
-      two.table.lobby().hostSeat === 1 && two.table.seatInfo()[0]!.taken,
+      '房主位坐上人了：两把都满，自动入座不再发椅子',
+      two.table.lobby().hostSeat === 0 && two.table.seatInfo()[0]!.taken && two.table.freeSeat() === null,
     );
   }
   {
-    // 掉线那把椅子还在原主人名下：自动入座不许把他人的位子发出去
+    // 掉线那把椅子还在原主人名下：自动入座不许把他人的位子发出去（房主位那把也一样）
     const back = makeTable({ players: 4 });
+    back.table.join(0, ''); // 先让房主位有主：下面量的才是「绕开掉线那把」，不是「房主位空着」
     const j = back.table.join(1, '');
     const tk = j.msg?.t === 'welcome' ? j.msg.token : '';
     back.table.leave(1);
     ok('掉线那把还挂着「有主」', back.table.seatInfo()[1]!.taken && !back.table.seatInfo()[1]!.online);
-    ok('自动入座绕开掉线那把', back.table.freeSeat() === 2);
+    ok('自动入座绕开掉线那把', back.table.freeSeat() === 2, `${back.table.freeSeat()}`);
     ok('凭令牌照旧坐得回原来那把（那条路不走自动入座）', back.table.join(1, tk).ok);
   }
   {
-    // 房主位不在第 1 把（命令行 --host-seat 指过、或候场厅里交接过）时也照样绕开
+    // 房主位不在第 1 把（命令行 --host-seat 指过、或候场厅里交接过）时，认的是那把，不是 P1
     const shifted = makeTable({ players: 4, hostSeat: 2 });
-    ok('房主位挪到第 3 把：跳的还是那把', shifted.table.freeSeat() === 0, `${shifted.table.freeSeat()}`);
+    ok('空桌：房主位在第 3 把，第一把给的就是它', shifted.table.freeSeat() === 2, `${shifted.table.freeSeat()}`);
+    shifted.table.join(2, ''); // 坐进房主位：这桌就算「开过了」
+    ok('开过之后：绕开房主位，从头一把空椅给起', shifted.table.freeSeat() === 0, `${shifted.table.freeSeat()}`);
     shifted.table.join(0, '');
     shifted.table.join(1, '');
+    ok('房主位有人拿着、别处还有空：照旧往后挑，不回头摘他', shifted.table.freeSeat() === 3, `${shifted.table.freeSeat()}`);
     shifted.table.join(3, '');
-    ok('只剩房主位空着时不自动给', shifted.table.freeSeat() === null);
+    ok('四把全满了：回 null，界面退回让人自己挑', shifted.table.freeSeat() === null);
   }
 }
 
@@ -717,14 +726,14 @@ function keyOf(push: StatePush): string {
 
 {
   // 候场桌读回来椅子全空、房主位还指着第 4 把；减人减到 2 人，那把椅子就不存在了——收回来，别在屏幕上念「房主 P4」
-  const { table, clock } = makeTable({ players: 4, mode: 'ming' });
-  table.join(3, '');
+  const { table, clock } = makeTable({ players: 4, mode: 'ming', hostSeat: 3 });
+  table.join(3, ''); // 开桌那位直接坐进房主位：这桌就算「开过了」
   const again = Table.load(table.save(), () => {}, () => {}, clock.now);
   ok('读回来椅子空了，房主位还指着第 4 把', again.seatInfo().every((s) => !s.taken) && again.lobby().hostSeat === 3);
   ok('空椅子不挡减人', again.changeSetup(3, { players: 2 }).ok);
   ok('减完房主位收回第一把', again.lobby().hostSeat === 0);
   again.join(1, '');
-  ok('收回来的空房主位照样交给下一个坐下的', again.lobby().hostSeat === 1);
+  ok('这桌开过（存档里记着 opened）：收回来的空房主位照样交给下一个坐下的', again.lobby().hostSeat === 1);
 }
 
 {

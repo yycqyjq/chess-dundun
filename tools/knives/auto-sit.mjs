@@ -2,7 +2,7 @@
  * 自动入座那三处判断：客户端该递哪把椅子（home.ts 的 autoSeat）、桌该给哪把（table.ts 的 freeSeat）、
  * 线上来的那一句 -1 怎么落（wire.ts 的形闸＋room.ts 的入座）。
  * from 一律抄源码里现成的那一段，expect 是跑出来抄回去的红字，不是凭记忆写的。
- * 7 号那把反过来判：拆的是冗余保险（家那把和「没人坐过」两道还挡着），单拆它绿才算合格。
+ * 7 号那把反过来判：拆的是冗余保险（房主位空着时，前面那句已经把它给出去了），单拆它绿才算合格。
  * 跑法：npm run knives -- auto-sit（要看每刀全红几句加 --verbose）
  */
 export default {
@@ -56,7 +56,7 @@ export default {
     },
     {
       rel: 'src/node/table.ts',
-      note: '7 代持那把不单独绕开（家那把＋「没人坐过」两道还挡着：单拆这一处本该没人看得见）',
+      note: '7 代持那把不单独绕开（房主位空着时前面那句已经给了它：单拆这一处本该没人看得见）',
       from: '    return this.slots.find((s) => s.seat !== host && s.seat !== home && !s.token)?.seat ?? null;',
       to: '    return this.slots.find((s) => s.seat !== home && !s.token)?.seat ?? null;',
       suite: 'test:net',
@@ -64,11 +64,11 @@ export default {
     },
     {
       rel: 'src/node/table.ts',
-      note: '8 房主位也跟着自动发：谁扫到码谁就当上开局那位',
-      from: '    return this.slots.find((s) => s.seat !== host && s.seat !== home && !s.token)?.seat ?? null;',
-      to: '    return this.slots.find((s) => !s.token)?.seat ?? null;',
+      note: '8 房主位空着也不先给它：进来的人又落回 P2，房主位空在那儿谁都没有「开始这一局」那颗',
+      from: '    if (this.slots[host] && !this.slots[host].token) return host;',
+      to: '    if (false && this.slots[host] && !this.slots[host].token) return host;',
       suite: 'test:net',
-      expect: '绕开房主位',
+      expect: '谁先进来谁当房主',
     },
     {
       rel: 'src/node/room.ts',
@@ -81,7 +81,7 @@ export default {
     },
     {
       rel: 'src/node/room.ts',
-      note: '10 没空椅子也往桌前递：那一句「房主位不自动给」没人说，人对着转圈',
+      note: '10 没空椅子也往桌前递：那一句「没空椅子了」没人说，人对着转圈',
       from: '        if (want === null) {',
       to: '        if (false) {',
       via: 'smoke',

@@ -526,7 +526,9 @@ export function openRoom(argv: string[], port: number): Room {
         // 真递上来也只是拿原来那把重走一遍入座（令牌对不上就被 join 挡回，不会多出第二把）
         const want: number | null = msg.seat >= 0 ? msg.seat : (seatOf.get(conn) ?? table.freeSeat());
         if (want === null) {
-          conn.send(JSON.stringify({ t: 'reject', why: '这桌没空椅子了（房主位留给开桌那位，不自动给）' } satisfies ToClient));
+          // 走到这儿只剩一种可能：每把椅子都有主（`freeSeat` 房主位空着就先给了它）。
+          // 括号里那句原来是「房主位留给开桌那位」——2026-10-10 起房主位空着也会自动发，那句话不再作数
+          conn.send(JSON.stringify({ t: 'reject', why: '这桌没空椅子了：每把都有人拿着，掉线的椅子两分钟后才还给这桌' } satisfies ToClient));
           return;
         }
         // 先把椅子认给这条连接再落座：桌在 join 里就要广播一份快照，晚一步那份就发飞了

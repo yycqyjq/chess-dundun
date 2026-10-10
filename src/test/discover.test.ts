@@ -66,6 +66,9 @@ function lobby(players: number, flags: Partial<SeatInfo>[] = [], over: Partial<L
   }));
   return {
     players,
+    // 桌名默认给一个：这一批测的是「寻呼」那条链，名字在这儿只是个跟着走的字段，
+    // 专门校它的那几条自己传 over 覆盖
+    name: 'A1 的桌',
     hostSeat: 0,
     homeSeat: 0,
     gameNo: 1,
@@ -105,7 +108,7 @@ console.log('\n自我介绍：一张桌只报公开得出来的那几句');
 console.log('\n一句答话来回：原样出去、原样回来，认不下的当场拒');
 {
   const f = parseOffer(encodeOffer(offerOf(lobby(4, [{ online: true }]), 5300)), '192.168.1.31');
-  const want = { ip: '192.168.1.31', port: 5300, players: 4, gameNo: 1, mode: 'kou', level: 'hard', status: 'waiting', free: 3 };
+  const want = { ip: '192.168.1.31', port: 5300, name: 'A1 的桌', players: 4, gameNo: 1, mode: 'kou', level: 'hard', status: 'waiting', free: 3 };
   ok('自己报的、自己听得回', JSON.stringify(f) === JSON.stringify(want), JSON.stringify(f));
   ok(
     '地址由 ip 和端口现拼，不照抄线上来的字符串，且带着入桌那个标记',
@@ -118,6 +121,11 @@ console.log('\n一句答话来回：原样出去、原样回来，认不下的�
   bad('电脑档位写着没听过的拒', say({ level: 'impossible' }));
   bad('状态写着没听过的拒', say({ status: 'paused' }));
   bad('端口 22 那种不谈', say({ port: 22 }));
+  // 桌名是一句自由文本：校不了「在不在清单里」，校的是形状和长度（画到列表行上用 textContent，不拼 HTML）
+  bad('桌名写成字之外的东西拒', say({ name: 42 }));
+  bad('桌名长到一行放不下拒', say({ name: 'x'.repeat(25) }));
+  ok('桌名空串是合法值：那表示还没人在房主位坐下', typeof parseOffer(say({ name: '' }), '192.168.1.31') !== 'string');
+  ok('桌名照原样端回来（不截断、不改写）', (parseOffer(say({ name: 'A1 的桌' }), '192.168.1.31') as FoundRoom).name === 'A1 的桌');
   bad('端口大到出格拒', say({ port: 70000 }));
   bad('端口写成字拒', say({ port: '5300' }));
   bad('端口写成分数拒', say({ port: 5300.5 }));
@@ -131,7 +139,7 @@ console.log('\n一句答话来回：原样出去、原样回来，认不下的�
   bad('不是 JSON 的字节拒（也不抛）', 'hello');
   bad('空字节拒', '');
   // 多一字段不拦：报料那一版比这版新是常事，拦了等于老房主认不了新房主。
-  // 要紧的是它带不进来——清单里只可能有校验过那八格，下面一条盯着这个。
+  // 要紧的是它带不进来——清单里只可能有校验过那九格，下面一条盯着这个。
   const stray = parseOffer(say({ evil: 1 }), '192.168.1.31');
   ok('野字段不影响认话', typeof stray !== 'string', say({ evil: 1 }));
   ok('认下来的那份里没有野字段那一格', !('evil' in (stray as object)));
@@ -193,7 +201,9 @@ console.log('\n这本账会老：谁报得勤算谁，听不见的抹掉');
 
   const book: RoomCache = new Map();
   const mine = { ips: ['192.168.1.7'], port: 5200 };
-  const mk = (patch: Partial<FoundRoom>): FoundRoom => ({ ...offerOf(lobby(4), 0), ip: '192.168.1.99', ...patch });
+  // 默认给一把有人坐着的椅子：一把都没人坐过的桌不进清单（见下面那一条），
+  // 这一批测的是「排序／过滤自己那张」，让默认值落在「正经开着的一张桌」上
+  const mk = (patch: Partial<FoundRoom>): FoundRoom => ({ ...offerOf(lobby(4, [{ online: true }]), 0), ip: '192.168.1.99', ...patch });
   absorb(book, [mk({ port: 5301, status: 'playing', free: 2 }), mk({ port: 5302, free: 1 }), mk({ port: 5303, free: 3 })], 100);
   const list = listFound(book, 200, mine);
   ok('三条都在', list.length === 3, JSON.stringify(list.map((f) => f.port)));
@@ -217,6 +227,18 @@ console.log('\n这本账会老：谁报得勤算谁，听不见的抹掉');
   ok('别的机器上同样端口的照列（那是正经另一桌）', isMine(mk({ ip: '192.168.1.60', port: 5200 }), mine.ips, mine.port) === false);
   ok('同端口、又是本机网口才算自己', isMine(mk({ ip: '192.168.1.7', port: 5200 }), mine.ips, mine.port) === true);
   ok('同一台机器上端口不同的不是自己', isMine(mk({ ip: '192.168.1.7', port: 5199 }), mine.ips, mine.port) === false);
+
+  // 一把椅子都没人坐过的桌不列：那还不是「一张开着的桌」，是一张还没开的桌（房主进程刚起来就是这样）。
+  // 列出来的坏处很实在——列表里能点到的本来就不是自己那张，点进一张空桌，进门那位当场被推上房主位
+  //（2026-10-09 用户实测的「两个房主」）。想进自己那张桌就走二维码／地址。
+  const blank: RoomCache = new Map();
+  absorb(blank, [mk({ port: 5301, free: 4 }), mk({ port: 5302, free: 3 })], 100);
+  const opened = listFound(blank, 200, mine);
+  ok(
+    '一把椅子都没人坐过的桌不列（那是还没开的桌，不是开着的桌）',
+    opened.length === 1 && opened[0]!.port === 5302,
+    JSON.stringify(opened.map((f) => f.port)),
+  );
 
   ok('三秒内不必再来一轮', sweepDue(1000, 3999) === false && sweepDue(1000, 4000) === true);
   // 列表页站着不动也五秒一轮：间隔宽过宿主那道闸，好几台设备同时站在这页上才不会一起刷这块网
@@ -314,7 +336,7 @@ console.log('\n搬字节那一头：口令答一句、答话归一本账、野�
   ok('按一颗就朝八槽发口令', a.queries(before) === 8 * 3, `${a.queries(before)}`);
   ok('发往回环和定向广播两头', a.sends.slice(before).some((s) => s.addr === '127.0.0.1') && a.sends.slice(before).some((s) => s.addr === '192.168.1.255'));
   ok('上一轮还没寻到过：清单是空的', r1.rooms.length === 0, JSON.stringify(r1));
-  a.hear(encodeOffer(offerOf(lobby(2), 5400)), '192.168.1.80');
+  a.hear(encodeOffer(offerOf(lobby(2, [{ online: true }]), 5400)), '192.168.1.80');
   const sent = a.sends.length;
   const r2 = await da.find();
   ok('三秒内再按不再发一个包', a.sends.length === sent, `${a.sends.length}`);
@@ -327,7 +349,7 @@ console.log('\n搬字节那一头：口令答一句、答话归一本账、野�
   b.hear(answer, '192.168.1.7');
   const same = await db.find();
   ok('自己那张桌（回环、本机网卡各绕回来一次）都不列', same.rooms.length === 0, JSON.stringify(same.rooms));
-  b.hear(encodeOffer(offerOf(lobby(2), 5399)), '192.168.1.7');
+  b.hear(encodeOffer(offerOf(lobby(2, [{ online: true }]), 5399)), '192.168.1.7');
   const near = await db.find();
   ok('同一台机器上端口不同的算另一张桌', near.rooms.length === 1 && near.rooms[0]!.port === 5399, JSON.stringify(near.rooms));
 

@@ -889,6 +889,13 @@ body {
   text-decoration: none;
 }
 
+/* 桌名：整行的第一眼。比下面那排情况大一档，认桌就靠它——两台设备各开一张时，
+   光有 IP:端口分不清哪张是谁的（2026-10-09 用户点名「加个名字」）。 */
+.peer-name {
+  font-size: 13px;
+  word-break: break-all;
+}
+
 .peer-t {
   display: flex;
   align-items: center;

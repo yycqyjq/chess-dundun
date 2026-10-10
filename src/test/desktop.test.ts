@@ -41,7 +41,7 @@ function lobby(players = 2): Lobby {
     queued: false,
     nick: '',
   }));
-  return { players, hostSeat: 0, homeSeat: 0, gameNo: 1, mode: 'kou', level: 'hard', seats, status: 'waiting' };
+  return { players, name: '', hostSeat: 0, homeSeat: 0, gameNo: 1, mode: 'kou', level: 'hard', seats, status: 'waiting' };
 }
 
 const USER_DATA = join('/tmp', 'qdd-desktop-userdata');

@@ -96,6 +96,12 @@ function rollSeed(): number {
   return Date.now() % 1_000_000_000;
 }
 
+/**
+ * 列表页那句「正在寻」。进这一屏就摆上，寻到之前一直摆着——寻呼是一个广播往返，
+ * 空着屏让人猜「是不是没有」比多写这七个字糟得多（2026-10-09 用户：「刚开始还以为没有，像有 bug」）。
+ */
+const SEARCHING = '正在这块网上寻一圈……';
+
 export class App {
   private shell!: Shell;
   private pieces!: Pieces;
@@ -162,9 +168,13 @@ export class App {
    */
   private list: { veil: HTMLElement; rows: HTMLElement; note: HTMLElement } | null = null;
   private findTimer = 0;
+  /** 寻呼还没发出去（那一刻线还没连上）时挂起的那一趟：握手一成由 onReady 补发 */
+  private awaitFind = false;
+  /** 这一屏拿到过一份清单了没：拿到之后就不在每轮寻呼时摆「正在寻」，省得那行字每五秒闪一下 */
+  private listed = false;
   /**
    * 这一趟进候场厅是谁开的口：'create'＝在这台机器开一桌（该自动落到房主位），
-   * 'invite'＝拿着地址或扫码进来（该自动落到一把空椅，但不碰房主位）。
+   * 'invite'＝拿着地址或扫码进来（递 -1 由桌挑一把空椅：房主位空着时桌给的就是它，有人拿着才往后挑）。
    * 第一份座位表到手就用掉、跟着清空——替人挑椅子这件事只发生一次。
    */
   private autoSit: 'create' | 'invite' | null = null;
@@ -292,9 +302,10 @@ export class App {
     // 标题就是首页那块的名字：同一件事在两处换了写法，人就该怀疑这是两个地方
     const { veil, body, foot } = page(this.root, entryHead('room'));
     const rows = div('peer-list');
-    const note = div('note', '正在这块网上寻一圈……');
+    const note = div('note', SEARCHING);
     body.append(rows, note);
     this.list = { veil, rows, note };
+    this.listed = false;
     const out = div('sheet-row');
     out.append(
       button('在这台机器开一桌', () => this.openRoom('create'), 'btn primary'),
@@ -314,11 +325,23 @@ export class App {
     this.findTimer = window.setInterval(() => this.findNow(), LIST_REFRESH_MS);
   }
 
-  /** 寻一轮：线还没连上就当场说一句，别让人对着「正在寻」干等 */
+  /**
+   * 寻一轮。发不出去（那一刻线还没连上）就把这一趟挂起来，等握手一成由 onReady 补发。
+   * 原来这儿是「发不出去就写一句『这条线还没连上』」，可第一轮**几乎总是**赶在握手之前：
+   * 人一进这一屏先看见一句吓人的断线提示，紧接着那句又被 onNet 擦成空白，
+   * 下一轮要等 LIST_REFRESH_MS 五秒才来，头六秒屏上什么都没有（2026-10-09 用户：「像有 bug」）。
+   */
   private findNow(): void {
     if (!this.list) return;
-    if (this.link?.send({ t: 'find' })) return;
-    this.list.note.textContent = '这条线还没连上：寻不了同网的桌，也可以照旧在这台机器开一桌';
+    // 已经有清单了就不摆「正在寻」：每五秒把结果换成它再换回来，是拿那行字在那儿闪
+    if (!this.listed) this.list.note.textContent = SEARCHING;
+    const link = this.link;
+    if (!link?.online) {
+      this.awaitFind = true;
+      return;
+    }
+    this.awaitFind = false;
+    link.send({ t: 'find' });
   }
 
   /** 这一页收掉：那一轮一轮的 find 得跟着停，人都不在这儿了还朝这块网打包没道理 */
@@ -333,7 +356,7 @@ export class App {
   /**
    * App 外壳里那一屏「本地联机」：版面归 home.ts 的 fillAddr（判断在那儿才有闸），这儿只管挂上、连、走。
    * 连之前先把上一张桌那条线拆了：地址换了就是另一张桌，旧线留着只会让人对着「正在重连」等一张已经不在了的桌。
-   * 进来落 'invite' 那一档（照扫码那条路走：递一把空椅，不碰房主位）——外壳里开不了桌，房主永远是另一台机器。
+   * 进来落 'invite' 那一档（照扫码那条路走：递 -1 让桌挑一把空椅）——外壳里开不了桌，房主永远是另一台机器。
    */
   private showAddr(): void {
     this.closeRoom();
@@ -358,6 +381,7 @@ export class App {
   private paintList(list: FoundRoom[], why: string): void {
     const page = this.list;
     if (!page) return;
+    this.listed = true; // 有结果了：后面每一轮寻呼就不再摆「正在寻」，只等结果回来换字
     page.rows.innerHTML = '';
     if (list.length) {
       for (const f of list) page.rows.append(roomRow(f));
@@ -555,7 +579,9 @@ export class App {
       const isHost = this.seated && this.me === l.hostSeat;
       const sitting = l.seats.filter((s) => s.online && !s.queued).length;
       const short = l.players - sitting;
-      head.textContent = waiting ? `候场厅 · 第 ${l.gameNo} 局还没开` : `牌桌正在打 · 第 ${l.gameNo} 局`;
+      // 桌名摆在标题里：同网列表里点错一条、进了别人的桌，一眼看得出来（那是 2026-10-09 用户踩的那条路）
+      const called = l.name ? ` · ${l.name}` : '';
+      head.textContent = waiting ? `候场厅${called} · 第 ${l.gameNo} 局还没开` : `牌桌正在打${called} · 第 ${l.gameNo} 局`;
       gameNo = l.gameNo;
       alive = aliveSeats(l.seats);
 
@@ -761,6 +787,8 @@ export class App {
   /** 每次握手成功都走这儿：还站在候场厅就重问座位表，已经坐下就凭令牌认回那把椅子 */
   private onReady(): void {
     if (!this.seated) {
+      // 站在列表页上：那一轮寻呼多半赶在握手之前，连上了当场补发，别让人对着空白干等五秒
+      if (this.list && this.awaitFind) this.findNow();
       this.link?.askLobby();
       return;
     }
@@ -780,8 +808,13 @@ export class App {
     // 候场厅摊着时那块就是唯一的落脚处：那会儿连台面都还没搭，toast 没地方放。
     // 连回来（text 空）也要擦：不擦那句「和桌断了」会赖在那儿，人以为还断着
     if (this.room && (text || back)) this.room.note.textContent = text;
-    // 站在列表页上同理：那句「和桌断了」得写在列表底下，不然人只看见一屏不动的桌
-    if (this.list && (text || back)) this.list.note.textContent = text;
+    // 站在列表页上同理：断线那句得写在列表底下，不然人只看见一屏不动的桌。
+    // 连回来（text 空）时**不写空串**——这一屏的 note 是「正在寻」，擦成空白正是那句提示消失的原因；
+    // 改成当场再寻一轮，让那行字自己回来。
+    if (this.list) {
+      if (text) this.list.note.textContent = text;
+      else if (back) this.findNow();
+    }
     if (text && this.shell) toast(this.shell.toast, text, 2000);
     else if (back && this.shell) toast(this.shell.toast, '连上了', 1200);
   }

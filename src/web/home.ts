@@ -1,7 +1,7 @@
 import { anchor, button, div, input, span } from './ui.ts';
 import { rulesFor, seatName, type Rules } from '../core/game.ts';
 import { buildPieceSet } from '../core/pieces.ts';
-import { foundMeta, foundFree, roomUrl, statusBadge, JOIN_QUERY, type FoundRoom } from '../net/discover.ts';
+import { foundMeta, foundFree, roomName, roomUrl, statusBadge, JOIN_QUERY, type FoundRoom } from '../net/discover.ts';
 import type { Lobby, SeatInfo } from '../net/wire.ts';
 import type { Saved } from './net.ts';
 
@@ -128,7 +128,8 @@ export function entryHead(k: EntryKey): string {
 /**
  * 一条同网寻到的桌：整行就是热区（2026-10-09 批3：从「点那条小地址」升成「点哪儿都进桌」）。
  * 行本体是真 <a>——进桌就是让浏览器自己走一趟，点之前悬上去还看得见去哪儿；
- * 行内两排：头一排是徽章·情况·空位，第二排是地址（悬着可整条选中拷走）。字和色档全取
+ * 行内三排：头一排是桌名（**认桌就靠这一行**：两台设备各开一张时，光有 IP:端口分不清哪张是谁的），
+ * 第二排是徽章·情况·空位，第三排是地址（悬着可整条选中拷走）。字和色档全取
  * discover 那批拆片函数，跟候场厅那句平铺文本同源。坐满了给 .dim：这会儿没人接，
  * 不该抬起来给小手骗人去点（.btn.dim 那条家族逻辑，见 style.css）。
  */
@@ -139,7 +140,7 @@ export function roomRow(f: FoundRoom): HTMLElement {
   const row = anchor('', url, f.free > 0 ? 'peer-row btn' : 'peer-row btn dim');
   const line = span('peer-t');
   line.append(span(`peer-badge ${b.cls}`, b.text), span('peer-meta', `${foundMeta(f)} · 第 ${f.gameNo} 局`), span(`peer-free ${fr.cls}`, fr.text));
-  row.append(line, span('peer-addr', `${f.ip}:${f.port}`));
+  row.append(span('peer-name', roomName(f)), line, span('peer-addr', `${f.ip}:${f.port}`));
   return row;
 }
 
@@ -160,8 +161,9 @@ export type AutoSit = number | null;
  *   那把此刻还连着就说明另有个标签页坐着，这一页不替他抢第二把；
  * - 开桌那位（creating）直接坐「家」那把房主位，这就是「建房即房主」——
  *   那把已经被别人坐过就不硬挤，让他自己挑，别把人家掉线的椅子摘了；
- * - 扫码／链接进来的人递 -1，由桌挑一把空椅：两台手机扫同一个码各挑各的必撞，
- *   而房主位（代持的、家的那把）桌上一律不自动给，那种时候退回人自己按「坐下 · 当房主」。
+ * - 扫码／链接进来的人递 -1，由桌挑一把空椅：两台手机扫同一个码各挑各的必撞。
+ *   房主位**空着**时桌第一把给的就是它（`Table.freeSeat`，2026-10-10 起）——谁先进来谁当房主，
+ *   和上面「开桌那位」落到的是同一把椅子；那把有人拿着（哪怕只是掉线挂着令牌）才往后挑。
  */
 export function autoSeat(lobby: Pick<Lobby, 'homeSeat' | 'seats'>, saved: Saved | null, creating: boolean): AutoSit {
   const seats = lobby.seats;
@@ -378,6 +380,11 @@ export function lobbyGuide(input: {
     if (!seated)
       return `挑一把椅子坐下${short > 0 ? `；还差 ${short} 个位子` : ''}。房主位 ${hostSeatName} ${hostTaken ? '已经有人' : '还空着，谁先坐下谁当房主'}`;
     if (isHost) return short > 0 ? `还差 ${short} 个位子，开局就由电脑补——或者把「邀请朋友」发给朋友` : '位子坐满了，可以开局';
+    // 房主位那把还空着时不许念「等 P1 开局」：那把没人，等的是个不存在的人（2026-10-10 用户踩的）。
+    // 这种局面只有「自己挑了非房主位那一把」才走得出来（扫码进来的人桌会直接把房主位给他），
+    // 所以下一句是让他挪过去——点房主位那一行的按钮就直接换过去了（客户端递的是换椅子，
+    // 旧那把当场还回候场厅，见 room.ts 的 join），用不着先让座再坐。
+    if (!hostTaken) return `已坐下；房主位 ${hostSeatName} 还空着——点那一行的「坐下 · 当房主」，这桌就归你开局`;
     return `已坐下，等 ${hostSeatName} 开局`;
   }
   if (queued) return '这一局先让电脑打，下一局开局归你';

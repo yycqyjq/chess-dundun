@@ -2,6 +2,8 @@
  * b13（批4 同网找桌）的刀谱：认答话那 12 把，全在 src/net/discover.ts。手抄 recovered/run-knives-b13.mjs 的第 1–12 刀。
  * 手抄是因为那几段 from 里带反引号模板字符串（还含 ${} 插值和 TS 的 as），没法 import 进来抠。
  * 抄完由 npm run knives 逐条验：刀口没找着就会报 ✗，不会蒙成绿。
+ * 2026-10-09 添了 13（一把椅子都没人坐过的桌不列）与 14（桌名形状／长度要校）——
+ * 那两条是「两个房主」那轮加进 listFound 与 parseOffer 的，各补一把刀。
  */
 export default {
   id: "discover-check",
@@ -26,7 +28,7 @@ export default {
     {
       rel: "src/net/discover.ts",
       note: "3 照抄线上那一份（野字段跟着进清单，地址也就由它拼）",
-      from: "  return {\n    ip,\n    port: raw.port,\n    players: raw.players,\n    gameNo: raw.gameNo,\n    mode: raw.mode as 'ming' | 'kou',\n    level: raw.level as Level,\n    status: raw.status as TableStatus,\n    free: raw.free,\n  };",
+      from: "  return {\n    ip,\n    port: raw.port,\n    name: raw.name,\n    players: raw.players,\n    gameNo: raw.gameNo,\n    mode: raw.mode as 'ming' | 'kou',\n    level: raw.level as Level,\n    status: raw.status as TableStatus,\n    free: raw.free,\n  };",
       to: "  return { ...raw, ip } as FoundRoom;",
       expect: "自己报的、自己听得回",
     },
@@ -68,9 +70,23 @@ export default {
     {
       rel: "src/net/discover.ts",
       note: "9 自己那张桌照列（给自己递一条「去别的桌」）",
-      from: "    .filter((f) => !isMine(f, mine.ips, mine.port))",
-      to: "    .filter(() => true)",
+      from: "    .filter((f) => !isMine(f, mine.ips, mine.port) && f.free < f.players)",
+      to: "    .filter((f) => f.free < f.players)",
       expect: "自己绕回来的那两条不列",
+    },
+    {
+      rel: "src/net/discover.ts",
+      note: "13 一把椅子都没人坐过的桌照列（点进去当场被推上房主位）",
+      from: "    .filter((f) => !isMine(f, mine.ips, mine.port) && f.free < f.players)",
+      to: "    .filter((f) => !isMine(f, mine.ips, mine.port))",
+      expect: "一把椅子都没人坐过的桌不列",
+    },
+    {
+      rel: "src/net/discover.ts",
+      note: "14 桌名形状不查（数字、超长的野话也跟着进清单）",
+      from: "  if (typeof raw.name !== 'string' || raw.name.length > NAME_MAX) return '桌名不像话';",
+      to: "  // 拆了：桌名是什么都收",
+      expect: "桌名写成字之外的东西拒",
     },
     {
       rel: "src/net/discover.ts",

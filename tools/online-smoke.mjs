@@ -351,7 +351,7 @@ ok(
   ok('座位表连「家」那把一起报出来：客户端不用猜房主位在哪把', l4.homeSeat === 0 && l4.hostSeat === 0, JSON.stringify([l4.hostSeat, l4.homeSeat]));
   d.ask({ t: 'join', seat: -1, token: '', nick: 'D9FF' });
   const auto = await d.until(['welcome']);
-  ok('递 -1 进门就落座：挑中第 3 把，房主位和家那把都不自动给', auto.seat === 2 && auto.status === 'waiting', JSON.stringify(auto));
+  ok('递 -1 进门就落座：前两把都有人拿着，桌给头一把空的——第 3 把', auto.seat === 2 && auto.status === 'waiting', JSON.stringify(auto));
   d.ask({ t: 'join', seat: -1, token: '', nick: 'D9FF' });
   await d.until(['welcome', 'reject']);
   d.ask({ t: 'lobby' });
@@ -371,7 +371,7 @@ ok(
   await f.open;
   f.ask({ t: 'join', seat: -1, token: '', nick: 'F2BB' });
   const none = await f.until(['reject']);
-  ok('非房主位坐满了就回一句「没空椅子了」，不把人塞到房主位上', none.why.includes('没空椅子') && none.why.includes('房主位'), JSON.stringify(none));
+  ok('每把椅子都有主了就回一句「没空椅子了」，不把人硬塞到别人那把上', none.why.includes('没空椅子') && none.why.includes('每把都有人拿着'), JSON.stringify(none));
   f.ask({ t: 'lobby' });
   const stillHost = await f.until(['seats']);
   ok('那一句拒完房主位还指着开桌那位', stillHost.hostSeat === 0 && stillHost.seats[0].nick === NICK_A, JSON.stringify([stillHost.hostSeat, stillHost.seats[0].nick]));
@@ -532,11 +532,17 @@ const who = await fetch(BASE + 'whoami');
 const whoText = await who.text();
 ok('/whoami 回 200 且说的是 JSON', who.status === 200 && (who.headers.get('content-type') ?? '').includes('application/json'), `${who.status}`);
 ok(
-  '/whoami 报的就是这桌的端口，且只有明面那八格（牌面一个字没有）',
+  '/whoami 报的就是这桌的端口，且只有明面那九格（牌面一个字没有）',
   (() => {
     try {
       const j = JSON.parse(whoText);
-      return j.t === WHOAMI && j.port === PORT && Object.keys(j).length === 8 && !('seats' in j) && !('view' in j);
+      // 明面那九格：t / port / name / players / gameNo / mode / level / status / free。
+      // 原来是数个数（=== 8），2026-10-10 加了桌名那一格之后就成了「数对不上、却看不出少了谁」——
+      // 改成把名字逐个钉住：多一格野的、少一格正经的，都当场红。
+      const face = ['free', 'gameNo', 'level', 'mode', 'name', 'players', 'port', 'status', 't'];
+      return j.t === WHOAMI && j.port === PORT
+        && Object.keys(j).sort().join() === face.join()
+        && !('seats' in j) && !('view' in j);
     } catch {
       return false;
     }

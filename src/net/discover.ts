@@ -35,10 +35,20 @@ export const LIST_REFRESH_MS = 5_000;
 export const OFFER_TTL = 15_000;
 /** 端口太小的不谈：22、25 那一头是别的服务，一张桌不会开在那儿 */
 const MIN_PORT = 1024;
+/**
+ * 桌名留多长。名是桌上自己报的（`<设备代号> 的桌`，代号最多 12 字），24 给将来换写法留了余量；
+ * 比这更长的一律当野话拒掉——列表行上那点地方放不下，也没人会把一整句话起成桌名。
+ */
+const NAME_MAX = 24;
 
 /** 一张桌报出来的自己：全是候场厅本来就公开的那几项 */
 export interface RoomOffer {
   port: number;
+  /**
+   * 这桌叫什么（空串＝还没人在房主位坐下）。**认桌就靠它**：
+   * 同网列表里并排两条，光有 IP:端口分不清哪张是谁的——两台设备各自开一张，点错了就是另一张桌。
+   */
+  name: string;
   players: number;
   gameNo: number;
   mode: 'ming' | 'kou';
@@ -86,6 +96,7 @@ export function offerOf(lobby: Lobby, httpPort: number): RoomOffer {
   const held = lobby.seats.filter((s) => s.online || s.taken).length;
   return {
     port: httpPort,
+    name: lobby.name,
     players: lobby.players,
     gameNo: lobby.gameNo,
     mode: lobby.mode,
@@ -197,6 +208,9 @@ export function parseOffer(text: string, ip: string): FoundRoom | string {
   if (!isObj(raw) || raw.t !== WHOAMI) return '不是棋墩墩的答话';
   if (!isPrivate(ip)) return '这话不是自家这块网里来的';
   if (!isInt(raw.port) || raw.port < MIN_PORT || raw.port > 65535) return '那桌报的端口不像话';
+  // 桌名是一句自由文本，校不了「在不在清单里」——只校形状和长度，进清单的一律是普通字符串
+  // （画到列表行上用 textContent，不拼 HTML）。空串是合法值：那表示还没人在房主位坐下。
+  if (typeof raw.name !== 'string' || raw.name.length > NAME_MAX) return '桌名不像话';
   if (!isInt(raw.players) || raw.players < 1 || raw.players > 8) return '座位数不像话';
   if (!isInt(raw.gameNo) || raw.gameNo < 1) return '第几局不像话';
   if (typeof raw.mode !== 'string' || !MODES.includes(raw.mode as (typeof MODES)[number])) return '没听过这种玩法';
@@ -206,6 +220,7 @@ export function parseOffer(text: string, ip: string): FoundRoom | string {
   return {
     ip,
     port: raw.port,
+    name: raw.name,
     players: raw.players,
     gameNo: raw.gameNo,
     mode: raw.mode as 'ming' | 'kou',
@@ -242,12 +257,18 @@ export function prune(cache: RoomCache, now: number, ttl = OFFER_TTL): void {
 /**
  * 摆给人看的那份清单：正在打的沉底，空位多的在前，再按地址排个稳当次序。
  * 自己那张桌不列——候场厅顶上就写着它的地址，列表里再给自己递一条「去别的桌」是多余。
+ *
+ * 一把椅子都没人坐过的桌也不列（`free === players`）：那还不是「一张开着的桌」，是一张**还没开的桌**。
+ * 房主进程刚起来、人还没进去的时候就是这样。列出来对人也没用——一张谁都没坐的桌，点进去就是自己当房主，
+ * 而「我要进的是**自己**那张桌」走二维码／地址更直接（那条路本来就是给「我朋友在这桌」用的）。
+ * 注：点进一张空桌现在会直接坐进房主位（见 `Table.freeSeat`，2026-10-10 改的），
+ * 不再是原来那种「人坐 P2、房主位却空在 P1」、两张桌上各念一句「房主位」的错乱。
  */
 export function listFound(cache: RoomCache, now: number, mine: { ips: string[]; port: number }, ttl = OFFER_TTL): FoundRoom[] {
   prune(cache, now, ttl);
   return [...cache.values()]
     .map((s) => s.found)
-    .filter((f) => !isMine(f, mine.ips, mine.port))
+    .filter((f) => !isMine(f, mine.ips, mine.port) && f.free < f.players)
     .sort((a, b) => {
       const wait = (x: FoundRoom) => (x.status === 'waiting' ? 0 : 1);
       return wait(a) - wait(b) || b.free - a.free || roomUrl(a).localeCompare(roomUrl(b), 'en', { numeric: true });
@@ -290,6 +311,16 @@ export function foundLine(f: FoundRoom): string {
   const b = statusBadge(f);
   const fr = foundFree(f);
   return `${foundMeta(f)} · ${b.text} · 第 ${f.gameNo} 局 · ${fr.text}`;
+}
+
+/**
+ * 列表行上那行桌名，也是候场厅标题里那一截。
+ * 还没人在房主位坐下过（`name` 空串）时写一句实话——摆一行空白比写清楚更让人发懵：
+ * 「还没定房主」正好说明这桌还没人开过：拿着 `?join=1` 那条进来的人会当场落到房主位上
+ *（`Table.freeSeat` 把空着的房主位给第一个进来的人，2026-10-10 起），不用自己再去找那颗按钮。
+ */
+export function roomName(f: Pick<FoundRoom, 'name'>): string {
+  return f.name || '还没定房主';
 }
 
 /**
