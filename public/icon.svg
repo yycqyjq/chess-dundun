@@ -32,6 +32,8 @@
     </g>
 
     <!-- 一摞四枚：四枚一样大，等距往上叠，每枚只露一道边，正对镜头不做透视 -->
+    <!-- android-foreground:start —— 底下这两组（棋子摞 ＋ 顶上那枚的「墩」）就是安卓自适应图标的前景层。
+         tools/android-icons.mjs 照这两个标记切出来，别再挪走标记、也别把板面那几笔画进来。 -->
     <g>
       <ellipse cx="256" cy="340" rx="88" ry="84" fill="#2f1c0a"/>
       <ellipse cx="256" cy="340" rx="82" ry="78" fill="url(#back)"/>
@@ -47,6 +49,7 @@
       <text x="256" y="236" text-anchor="middle" font-family="'Songti SC','STSong','Noto Serif CJK SC','SimSun',serif"
         font-weight="700" font-size="78" fill="#8e2a1d">墩</text>
     </g>
+    <!-- android-foreground:end -->
   </g>
   <rect width="512" height="512" rx="112" fill="none" stroke="#000000" stroke-opacity="0.16" stroke-width="4"/>
 </svg>

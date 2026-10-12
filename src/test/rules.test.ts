@@ -487,6 +487,11 @@ refuses('3 人档枚数发不平', v3({ ranks: { '兵卒': [4, 3] } }), '3 人�
 const threeOk = (): Partial<VariantFile> => ({ ranks: { '兵卒': [4, 4] }, draft: { stackSize: 3 } });
 refuses('一摞张数除不尽家数', v3({ ...threeOk(), draft: { stackSize: 4 } }), '分不匀');
 refuses('3 人档加回整摞轮流拿（10 摞分 3 家必然不等张）', v3({ ...threeOk(), draft: { stackSize: 3, ways: badWays('layered', 'stacks-left') } }), '要么改一摞张数，要么 ways 只留 layered');
+// 这条原来漏了：只在 ways 里留着 layered、且总数除不尽一摞张数时才露头（2026-10-12 第二轮排查量的）。
+// 2 人档 32 枚、一摞 6 张：6 除得尽 2（过得了上面那道「分不匀」），可 32 除不尽 6——末摞短一截。
+// 「一人一层拿牌」按第一摞的长度循环，短的那几层在缺的那一摞上是空位、往手里推一个 undefined，
+// 牌数守恒当场被破，摆完牌那一刻 legalActions 里 byId.get(undefined) 就抛 TypeError。
+refuses('一摞张数除不尽枚数（一人一层拿牌，末摞短的那几层会分到空位）', { ...raw(), draft: { stackSize: 6, ways: badWays('layered') } }, '末摞短一截');
 
 // 换玩法那几枚开关以前不设闸：写错静默走默认分支，discardCost 填个像人话的 'all' 更会让压不过的人凑不出抵押、整桌死锁。
 const bad = (patch: Record<string, unknown>): RawRules => ({ ...raw(), ...patch }) as unknown as RawRules;

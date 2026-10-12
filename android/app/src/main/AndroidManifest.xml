@@ -25,6 +25,17 @@
 
         </activity>
 
+        <!--
+          扫码那一屏：起相机取景、认二维码（QrScanPlugin 起它、等它把读到的那串字递回来）。
+          exported=false：只有本应用起得动它；theme 用无标题栏那份，那一屏自己摆黑底取景框。
+          configChanges 跟 MainActivity 一样：转屏不重建这一屏，免得相机重开一下闪一下。
+        -->
+        <activity
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode|navigation|density"
+            android:name=".QrScanActivity"
+            android:exported="false"
+            android:theme="@style/AppTheme.NoActionBar" />
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"
@@ -39,4 +50,8 @@
     <!-- Permissions -->
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- 扫码要相机（QrScanPlugin）；required=false：没相机的设备照样装得上，那一头只是扫不了码，手填地址仍然能进桌 -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
 </manifest>

@@ -7,19 +7,28 @@
  * 进门那一刻落哪把椅子（建房即房主／扫码递 -1／断线认回原来那把）、
  * 整屏那一页不给「点空白关掉」（那条监听只归弹窗，且钉得住两头：页面点不掉、弹窗点得掉）、
  * 房主位交接那一句既得说清位在哪把、也得挑对开口的时机（头一份跟没换人都得闭嘴），
- * 还有 App 外壳那一屏：地址读不出来就一次也不许往连接上递。
+ * 还有 App 外壳那一屏：地址读不出来就一次也不许往连接上递，
+ * 以及外壳里那颗「扫一扫」（没那本事不摆、扫到的原文照样过同一把尺子、人取消不弹红、相机没开成不混成没扫到）。
+ * 掉线那条轻提醒也归这儿：谁掉线了、还剩几秒电脑接手——一位都没掉线就回空串（那条不该露脸）。
  *
  * 放 src/web 是有原因的：tsconfig.json 不带 DOM 库。
  * 全文件（连假元素自己）都不许用构造器参数属性——`--experimental-strip-types` 只抹类型，不改写赋值。
  */
 import { ABOUT_RULES, aboutMeta } from './aboutText.ts';
-import { anchor, buildShell, button, card, page, paintChip, popup, rich, segment, toast, type Shell } from './ui.ts';
+import { anchor, buildShell, button, card, isTouch, page, paintChip, popup, rich, segment, toast, type Shell } from './ui.ts';
 import {
   ADDR_BAD,
   ADDR_HINT,
+  ADDR_SCAN,
+  SCAN_BAD,
+  SCAN_FAIL,
+  ALT_ADDR,
   appVersion,
   autoSeat,
   BACK,
+  BACK_LIST,
+  backFlash,
+  dropFlash,
   entryHead,
   entryNote,
   fillAddr,
@@ -30,13 +39,21 @@ import {
   initialScreen,
   inviteUrls,
   isLoopback,
+  LIST_ALT,
   lobbyGuide,
   normAddr,
   peerEmpty,
+  roomFailHead,
+  roomHead,
   roomRow,
+  ROOM_FAIL,
+  seatNotice,
   seatOption,
   seatRowText,
+  staleTable,
+  takenFlash,
   type SeatRowCtx,
+  type SeatWarn,
   wantsJoin,
 } from './home.ts';
 import type { Rules } from '../core/game.ts';
@@ -200,7 +217,12 @@ const doc = {
 };
 const G = globalThis as unknown as Record<string, unknown>;
 G.document = doc;
-G.window = { setTimeout: () => 1 };
+// toast 现在会掐上一条的定时器（`clearTimeout`），假实现得跟着补一颗：
+// 少了它，连发第二条提示时会踩 `window.clearTimeout is not a function`（下面那一组正是要连发两条）。
+// 顺带记下掐过哪几颗、给过哪几颗，D4 那条断言要数这两个数。
+const clearedTimers: number[] = [];
+let timerSeq = 0;
+G.window = { setTimeout: () => ++timerSeq, clearTimeout: (id: number) => void clearedTimers.push(id) };
 
 // ---------- 壳子：名字条建够，多的藏起来 ----------
 
@@ -271,6 +293,25 @@ G.window = { setTimeout: () => 1 };
   ok('带尖括号的代号原样显出来，一个元素都没多', el.raw === words && el.children.length === 0, el.textContent);
   ok('这条路根本不碰 innerHTML', el.html.length === 0);
   ok('浮条亮起来了', !el.hidden && el.names.has('show'));
+}
+
+// ---------- 连发两条：后一条得把前一条的定时器掐掉 ----------
+
+{
+  // 全项目十几处提示共用同一个元素（`shell.toast`）。不掐上一条的定时器时：
+  // 先弹的那条短的（900ms 那种）到点会把后弹的那条长的（2400ms 的「和桌断了」）一起摘掉，
+  // 长话还没读完就没了（2026-10-12 第二轮排查量的）。
+  const el = new FEl('div');
+  clearedTimers.length = 0;
+  toast(H(el), '先弹一条短的', 900);
+  const first = timerSeq;
+  toast(H(el), '后弹一条长的：和桌断了', 2400);
+  ok(
+    '连发两条：后一条把前一条的定时器掐了（不掐就会把后弹那条长的提前摘掉）',
+    clearedTimers.includes(first),
+    `掐了 ${clearedTimers.join(',')}｜前一条的定时器是 ${first}`,
+  );
+  ok('后一条照常亮着、字是后一条的', !el.hidden && el.raw === '后弹一条长的：和桌断了' && el.names.has('show'), el.raw);
 }
 
 // ---------- 状态栏那句带粗体的 ----------
@@ -693,7 +734,11 @@ function planOf(spotFor: (i: number) => Placed): Map<number, Placed> {
   ok('格子里预填这台设备上次敲的那串（重连不用再抄一遍）', box.value === '10.0.0.9:5200', box.value);
   ok('那一格是真 input、type=url（手机键盘把「.」和「:」摆到手边）、不查拼写', box.tag === 'input' && box.type === 'url' && box.attrs.spellcheck === 'false' && box.attrs.autocapitalize === 'off', `${box.tag}｜${box.type}`);
   ok('一句话写着要抄什么、端口也写在里面', body.find('note')!.raw === ADDR_HINT && ADDR_HINT.includes(':5200'), body.find('note')!.raw);
-  const [go, backBtn] = foot.findAll('button');
+  // 按名字找那两颗，不按位置：底栏摆几颗是 home.ts 的事，位置一变按位置取就会取到别人身上（点错按钮还当场抛）
+  const btns = foot.findAll('button');
+  const go = btns.find((b) => b.textContent === '连这张桌');
+  const backBtn = btns.find((b) => b.textContent === BACK);
+  ok('不给扫的本事，底栏就两颗（连这张桌／返回），不摆那颗「扫一扫」', btns.length === 2, btns.map((b) => b.textContent).join('｜'));
   box.value = 'http://10.0.0.9:5200/';
   go!.click();
   ok('按下去递的是规范化那串 host:port，不是原样那行字', went.join(',') === '10.0.0.9:5200', went.join('｜'));
@@ -706,6 +751,70 @@ function planOf(spotFor: (i: number) => Placed): Map<number, Placed> {
   backBtn!.click();
   ok('第二颗念「返回」，点它是回首页那条回调，不是「散桌」', backBtn!.textContent === BACK && back === 1, `${backBtn!.textContent}｜back ${back}`);
   ok('这一屏不往 HTML 里塞任何一句话（敲进来的字可能带尖括号）', body.countHtml() === 0 && foot.countHtml() === 0, [...body.allHtml, ...foot.allHtml].join('｜'));
+}
+
+// ---------- 外壳里那一颗「扫一扫」：有本事才摆，扫到的原文照样走上面那把尺子 ----------
+// 扫码不是新的一条路，是「手填」的自动版：读回一串原文，规范化那一步一个字都不另写。
+// 四件真会出事的事：浏览器里没那本事却摆了颗按了没反应的按钮、扫到读不出的硬去敲门、
+// 人取消了（按返回）却被弹一句红字、相机没开成跟「扫了没扫到」混成一件。
+
+{
+  const body = new FEl('div');
+  const foot = new FEl('div');
+  const went: string[] = [];
+  fillAddr(H(body), H(foot), '', (a) => void went.push(a), () => {});
+  const labels = foot.findAll('button').map((b) => b.textContent);
+  ok('不给扫的本事就不摆那颗「扫一扫」（浏览器里扫不了）', !labels.includes('扫一扫'), labels.join('｜'));
+  ok('不给扫的本事，那一句话还是浏览器那一份', body.find('note')!.raw === ADDR_HINT, body.find('note')!.raw);
+}
+
+{
+  /** 等这一拍里排下的微任务跑完：那颗按钮的回调是 `void scan().then(...)`，点完得让它落地 */
+  const tick = (): Promise<void> => new Promise((r) => void setTimeout(r, 0));
+  const stand = async (
+    raw: string | null | (() => Promise<string | null>),
+  ): Promise<{ body: FEl; foot: FEl; went: string[] }> => {
+    const body = new FEl('div');
+    const foot = new FEl('div');
+    const went: string[] = [];
+    const scan = typeof raw === 'function' ? raw : async (): Promise<string | null> => raw;
+    fillAddr(H(body), H(foot), '', (a) => void went.push(a), () => {}, scan);
+    foot.findAll('button').find((b) => b.textContent === '扫一扫')!.click();
+    await tick();
+    return { body, foot, went };
+  };
+
+  {
+    const { body, foot } = await stand('http://192.168.1.11:5200/');
+    const labels = foot.findAll('button').map((b) => b.textContent);
+    ok('有那本事就多摆一颗，摆在「连这张桌」前面（拇指先够着它）', labels.join(',') === `扫一扫,连这张桌,${BACK}`, labels.join('｜'));
+    ok('那一句话换成把两条路都点到的那句（扫的、抄的）', body.find('note')!.raw === ADDR_SCAN && ADDR_SCAN.includes('扫一扫'), body.find('note')!.raw);
+  }
+
+  {
+    // 扫回来带前缀带斜杠（候场厅那张码里就是整条 URL）：交给 normAddr，递出去的仍是 host:port
+    const { went, body } = await stand('http://192.168.1.11:5200/');
+    ok('扫到的原文照样过那把尺子：递的是规范化那串，不是码里那行字', went.join(',') === '192.168.1.11:5200', went.join('｜'));
+    ok('扫成了一次，那一行字还是原来那句（不红）', body.find('note')!.raw === ADDR_SCAN, body.find('note')!.raw);
+  }
+
+  {
+    const { went, body } = await stand('hello world');
+    ok('扫到的读不出一张桌：一次也不往连接上递', went.length === 0, went.join('｜'));
+    ok('读不出就照填错的报，只是换句说法（让人知道该去扫什么）', body.find('note')!.raw === SCAN_BAD, body.find('note')!.raw);
+  }
+
+  {
+    const { went, body } = await stand(null);
+    ok('人按了返回（没扫到）：不递、也不弹红字（他没做错事）', went.length === 0 && body.find('note')!.raw === ADDR_SCAN, `${went.length}｜${body.find('note')!.raw}`);
+  }
+
+  {
+    const { went, body } = await stand(async () => {
+      throw new Error('没给相机权限');
+    });
+    ok('相机没开成：说一句实话，别悄悄混成「没扫到」', went.length === 0 && body.find('note')!.raw === SCAN_FAIL, `${went.length}｜${body.find('note')!.raw}`);
+  }
 }
 
 // ---------- 那条真能点的 <a>：进桌是让浏览器自己走一趟，不拿 JS 拼跳转 ----------
@@ -759,6 +868,43 @@ function planOf(spotFor: (i: number) => Placed): Map<number, Placed> {
   ok('正在打但还有空位：照样是可点热区，不降 dim', !playingOpen.names.has('dim') && playingOpen.names.has('btn'), playingOpen.className);
 }
 
+// ---------- 外壳里那一行必须是按钮：真 <a> 会被 Capacitor 甩给系统浏览器 ----------
+
+{
+  const f: FoundRoom = { ip: '192.168.1.41', port: 5200, name: 'A1 的桌', players: 4, gameNo: 2, mode: 'kou', level: 'hard', status: 'waiting', free: 2 };
+  const picked: FoundRoom[] = [];
+  const row = F(roomRow(f, (r) => void picked.push(r)));
+  // 外壳的页面住在设备自己身上（http://localhost），那条 <a> 一按就被 Bridge.launchIntent 拦下甩给系统浏览器
+  // （host 不是 localhost 又不在 server.allowNavigation 里就走 ACTION_VIEW），人根本没进到 app 里。
+  // 所以那一头给回调、行做成按钮——2026-10-11 用户实测「点列表跳去了浏览器」。
+  ok('给了 onPick 就是 <button>，不再是一条会跑掉的 <a>', row.tag === 'button' && (row as unknown as Record<string, string>)['href'] === undefined, row.tag);
+  ok(
+    '两副面孔骨架一样：三排还是那三排、class 还是 peer-row btn',
+    row.names.has('peer-row') && row.names.has('btn') && !!row.find('peer-name') && !!row.find('peer-t') && !!row.find('peer-addr'),
+    row.className,
+  );
+  ok('点它回的是这张桌（不是别张、也不是「什么都没发生」）', (row.click(), picked.length === 1 && picked[0] === f), `${picked.length} 次｜${picked[0]?.ip}:${picked[0]?.port}`);
+  ok('外壳那一行也不往 HTML 里写（ip／端口都可能带脏字）', row.countHtml() === 0, row.allHtml.join('｜'));
+  const full = F(roomRow({ ...f, free: 0 }, () => {}));
+  ok('坐满了照样降 .dim（换成按钮也一样）', full.tag === 'button' && full.names.has('dim'), `${full.tag}.${full.className}`);
+}
+
+// ---------- 候场厅那两句标题、那句实话、以及列表底下那行入口 ----------
+
+{
+  // 2026-10-11 用户截图：候场厅一屏空架子，底栏一颗没字的按钮。根子是那屏没有「连不上」这一档，
+  // 标题只写「正连着这桌……」——连的是哪台压根没露脸，人没法判断是抄错了还是桌没开。
+  ok('一进候场厅就把「连的是哪台」写在标题上', roomHead('192.168.1.11:5200') === '正连着 192.168.1.11:5200……', roomHead('192.168.1.11:5200'));
+  ok('连不上时同一句只换个词，地址还在', roomFailHead('192.168.1.11:5200') === '连不上 192.168.1.11:5200', roomFailHead('192.168.1.11:5200'));
+  ok(
+    '那句实话把三种成因都说到了（不装成「再等等就好」）',
+    ROOM_FAIL.includes('地址抄错') && ROOM_FAIL.includes('没开着') && ROOM_FAIL.includes('不在同一个网'),
+    ROOM_FAIL,
+  );
+  ok('连不上时那两颗的字各说一件事（改地址／回列表重挑）', ALT_ADDR === '换个地址' && BACK_LIST === '回去重选一张', `${ALT_ADDR}｜${BACK_LIST}`);
+  ok('列表底下那行入口把两条路都点到了（手填、扫码）', LIST_ALT.includes('手填地址') && LIST_ALT.includes('扫码'), LIST_ALT);
+}
+
 // ---------- 空清单那一格：「这儿没东西可点」加一句下一步 ----------
 
 {
@@ -779,6 +925,7 @@ function planOf(spotFor: (i: number) => Placed): Map<number, Placed> {
     online: false,
     taken: false,
     ai: true,
+    takeoverIn: 0,
     human: false,
     queued: false,
     nick: '',
@@ -805,6 +952,32 @@ function planOf(spotFor: (i: number) => Placed): Map<number, Placed> {
   ok('扫码那条一律递 -1：挑哪把归桌定（真没空椅子了由桌回一句），客户端不自己判', autoSeat(tableOf({ 0: sat, 1: sat, 2: sat, 3: sat }), null, false) === -1);
 }
 
+// ---------- 本机桌上还压着「上一桌」吗：点「开一桌」那条路要先问一句 ----------
+
+{
+  // 宿主被强杀／断电时来不及散桌，存档留在了硬盘上，下次起桌 restore() 又原样接回来。
+  // 「开一桌」撞上这种桌就该问一句，判据三条任一（口径见 home.ts 的 staleTable）
+  const chair = (n: number, over: Partial<SeatInfo> = {}): SeatInfo => ({
+    seat: n,
+    name: `P${n + 1}`,
+    online: false,
+    taken: false,
+    ai: true,
+    takeoverIn: 0,
+    human: false,
+    queued: false,
+    nick: '',
+    ...over,
+  });
+  const seats = (over: Partial<SeatInfo> = {}): SeatInfo[] => [0, 1, 2, 3].map((n) => chair(n, n === 0 ? over : {}));
+  const fresh = { gameNo: 1, status: 'waiting' as const, seats: seats() };
+
+  ok('刚起的一桌不算「上一桌」：局号还在 1、没人坐过、也没开打', !staleTable(fresh));
+  ok('打过至少一局（局号 > 1）就算', staleTable({ ...fresh, gameNo: 3 }));
+  ok('那一局正在打也算（人可能刚被打到一半就走了）', staleTable({ ...fresh, status: 'playing' as const }));
+  ok('有人坐着就算——令牌还留着，哪怕那个人早走了', staleTable({ ...fresh, seats: seats({ taken: true, nick: 'K7' }) }));
+}
+
 {
   // 房主位一交接，候场厅得说一句人话：不说的话就只有「房主位」那三个字在椅子行之间跳
   const chair = (n: number, nick = '', taken = true, online = taken): SeatInfo => ({
@@ -813,6 +986,7 @@ function planOf(spotFor: (i: number) => Placed): Map<number, Placed> {
     online,
     taken,
     ai: false,
+    takeoverIn: 0,
     human: taken,
     queued: false,
     nick,
@@ -865,6 +1039,7 @@ function planOf(spotFor: (i: number) => Placed): Map<number, Placed> {
     online: false,
     taken: false,
     ai: false,
+    takeoverIn: 0,
     human: false,
     queued: false,
     nick: '',
@@ -940,6 +1115,68 @@ function planOf(spotFor: (i: number) => Placed): Map<number, Placed> {
 
   const ai = seatRowText(slot(1, { ai: true }), at());
   ok('电脑补的位念「电脑补位」', ai.tag === '电脑补位', ai.tag);
+}
+
+// ---------- 掉线轻提醒：谁掉线了、还剩几秒电脑接手 ----------
+
+{
+  const w = (name: string, leftMs: number, ai = false): SeatWarn => ({ name, leftMs, ai });
+
+  ok('一位都没掉线：那条轻提醒不露脸（回空串）', seatNotice([]) === '');
+
+  ok(
+    '掉线还没被接手：念出谁、还剩几秒电脑接手',
+    seatNotice([w('P2', 28_000)]) === 'P2 掉线了 · 28 秒后由电脑代打',
+    seatNotice([w('P2', 28_000)]),
+  );
+  ok(
+    '剩 1.4 秒也往多了说成 2 秒：不能先把人骗过去',
+    seatNotice([w('P2', 1_400)]) === 'P2 掉线了 · 2 秒后由电脑代打',
+    seatNotice([w('P2', 1_400)]),
+  );
+  ok(
+    '已经数到 0（接手那份快照还没到）：说「马上」，不念「0 秒」',
+    seatNotice([w('P2', 0)]) === 'P2 掉线了 · 马上由电脑代打',
+    seatNotice([w('P2', 0)]),
+  );
+  ok(
+    '已经被电脑接手：换一句，不再有倒计时',
+    seatNotice([w('P2', 0, true)]) === 'P2 掉线太久，已由电脑代打',
+    seatNotice([w('P2', 0, true)]),
+  );
+
+  // 顺序故意把「近的」放在后头：取的是最小那个，不是头一个
+  const two = seatNotice([w('P2', 25_000), w('P3', 12_000)]);
+  ok('同时掉两位：名字连起来念，倒计时取最近的那位', two === 'P2、P3 掉线了 · 12 秒后由电脑代打', two);
+
+  const mixed = seatNotice([w('P2', 0, true), w('P3', 20_000)]);
+  ok(
+    '一位已接手、一位还在数：先念还在数的那位（那句带着要人现在看的倒计时）',
+    mixed === 'P3 掉线了 · 20 秒后由电脑代打',
+    mixed,
+  );
+
+  ok(
+    '翻篇那三句各说各的：掉线、电脑接手、回来了',
+    dropFlash('P2') === 'P2 掉线了' &&
+      takenFlash('P2') === 'P2 掉线太久，电脑接手了' &&
+      backFlash('P2') === 'P2 回来了',
+  );
+}
+
+// ---------- 这一下是手指还是鼠标：只认事件自己报的类型（2026-10-11 安卓真机撞的） ----------
+
+console.log('\n指针类型：只认 pointerType，不拿设备能力猜');
+{
+  // 安卓 WebView 会谎报「有 hover」，可手指点下去没有持续的 hover。
+  // 判据只能是事件自己报的这个字段
+  ok('手指：pointerType 是 touch', isTouch({ pointerType: 'touch' }));
+  ok('鼠标：pointerType 是 mouse —— 不算手指', !isTouch({ pointerType: 'mouse' }));
+  // 笔当成鼠标那一套（能悬停），不并进触屏
+  ok('触控笔：pen 不算手指（笔能悬停，走鼠标那一套）', !isTouch({ pointerType: 'pen' }));
+  // 拿不到这个字段（老浏览器、或合成事件）时不冒充手指：宁可走鼠标那一套，也别把点击判成悬停
+  ok('报不出类型（undefined）时不算手指', !isTouch({ pointerType: undefined }));
+  ok('压根没有这个字段的空对象也不算手指', !isTouch({}));
 }
 
 console.log(failures ? `\n${failures} 条没过` : '\n全部通过');

@@ -17,9 +17,9 @@ export default {
     },
     {
       rel: "src/node/discover.ts",
-      note: "14 口占不住还当它活着（一直往发不出的口发包）",
-      from: "      o.log(why);\n      socket = null;",
-      to: "      o.log(why);",
+      note: "14 口占不住还当它活着（一直往发不出的口发包）：socket 引用没撒手，read/ask 以为它还在",
+      from: "      socket = null;\n    });",
+      to: "    });",
       expect: "断了之后既不再答话，也不再发包",
     },
     {

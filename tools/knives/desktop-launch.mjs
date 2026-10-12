@@ -6,6 +6,7 @@
  * 2026-10-01 每把跑过 `npm run knives -- desktop-launch --verbose`，`expect` 从实际红字逐字抄回；
  * N（2026-10-02）照同一条路子量：先把闸改成接 `error` 事件，从 `--verbose` 的红字里抄回那句。
  * T（2026-10-02）钉单实例锁：摘掉 `requestSingleInstanceLock` 那道闸，desktop.test 的对账当场红（双击图标起两次＝两个 Electron 抢同一份 userData 存档）。
+ * U（2026-10-12 第二轮）钉 selftest 那份存档：自检跳过单实例锁，却跟开着的窗口共用同一个 userData——存档不分开就照样撞 claimSave（`hostArgs` 第三参一换，`table-selftest.json` 顶上）。
  * 跑法：npm run knives -- desktop-launch（全跑就 npm run knives；看每刀全红几句加 --verbose）
  */
 export default {
@@ -24,22 +25,22 @@ export default {
     {
       rel: 'desktop/launch.ts',
       note: 'B 不递 --save：那边读回来的就是仓库根默认那一份，桌面版跟你正在打的活存档写同一本账',
-      from: "  return [`--port=${port}`, `--save=${join(userData, 'table.json')}`, '--watch-parent'];",
-      to: '  return [`--port=${port}`, \'--watch-parent\'];',
+      from: "  const file = selftest ? 'table-selftest.json' : 'table.json';\n  return [`--port=${port}`, `--save=${join(userData, file)}`, '--watch-parent'];",
+      to: "  const file = selftest ? 'table-selftest.json' : 'table.json';\n  return [`--port=${port}`, '--watch-parent'];",
       expect: '省略 --save 就是落回默认那份，所以这一项必须写出来',
     },
     {
       rel: 'desktop/launch.ts',
       note: 'C 存档路径写死：换一份 userData 它不动，两个装好的包共用一份账（跟 B 是两件事，各拆一遍）',
-      from: "  return [`--port=${port}`, `--save=${join(userData, 'table.json')}`, '--watch-parent'];",
-      to: "  return [`--port=${port}`, `--save=${join('/var/tmp/qdd', 'table.json')}`, '--watch-parent'];",
+      from: "  const file = selftest ? 'table-selftest.json' : 'table.json';\n  return [`--port=${port}`, `--save=${join(userData, file)}`, '--watch-parent'];",
+      to: "  const file = selftest ? 'table-selftest.json' : 'table.json';\n  return [`--port=${port}`, `--save=${join('/var/tmp/qdd', 'table.json')}`, '--watch-parent'];",
       expect: '换一份 userData，存档跟着换：路径是从参数来的，不是写死的',
     },
     {
       rel: 'desktop/launch.ts',
       note: 'D 顺手带上 --fresh：每次打开桌面版都把上一桌掀了重摆，接不回自己那一局',
-      from: "  return [`--port=${port}`, `--save=${join(userData, 'table.json')}`, '--watch-parent'];",
-      to: "  return [`--port=${port}`, `--save=${join(userData, 'table.json')}`, '--watch-parent', '--fresh'];",
+      from: "  const file = selftest ? 'table-selftest.json' : 'table.json';\n  return [`--port=${port}`, `--save=${join(userData, file)}`, '--watch-parent'];",
+      to: "  const file = selftest ? 'table-selftest.json' : 'table.json';\n  return [`--port=${port}`, `--save=${join(userData, file)}`, '--watch-parent', '--fresh'];",
       expect: '不许带 --fresh：桌面重开该接回自己那一桌，不是每次掀了重摆',
     },
     {
@@ -115,9 +116,16 @@ export default {
     {
       rel: 'desktop/launch.ts',
       note: 'O 那串参数里没有 --watch-parent：桌不知道自己是给外壳拉起来的，父进程挨强退之后它赖在端口和占位条上，第二张桌被拒而屏幕上什么都不出现',
-      from: "  return [`--port=${port}`, `--save=${join(userData, 'table.json')}`, '--watch-parent'];",
-      to: "  return [`--port=${port}`, `--save=${join(userData, 'table.json')}`];",
+      from: "  const file = selftest ? 'table-selftest.json' : 'table.json';\n  return [`--port=${port}`, `--save=${join(userData, file)}`, '--watch-parent'];",
+      to: "  const file = selftest ? 'table-selftest.json' : 'table.json';\n  return [`--port=${port}`, `--save=${join(userData, file)}`];",
       expect: '带上 --watch-parent：外壳挨强退／崩了，这张桌自己先存档再退，不赖在端口和占位条上',
+    },
+    {
+      rel: 'desktop/launch.ts',
+      note: 'U 自检那条跟开着的窗口共用一份存档：它跳过了单实例锁，却照样撞上 claimSave——开着窗口跑 desktop:selftest 当场起不来（2026-10-12 第二轮排查量的）',
+      from: "  const file = selftest ? 'table-selftest.json' : 'table.json';",
+      to: "  const file = selftest ? 'table.json' : 'table.json';",
+      expect: '自检那条用另一份存档（table-selftest.json）：不跟开发时开着的窗口抢同一份',
     },
     {
       rel: 'desktop/main.ts',

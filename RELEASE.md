@@ -42,4 +42,4 @@ keyPassword=……
 
 ## CI
 
-push / PR 会自动跑 `npm run verify` + `npm run build` + `npm run smoke`（`.github/workflows/ci.yml`，electron 二进制跳过下载）。刀架（298 把）太重，不上 CI，留在本机按批跑。
+push / PR 会自动跑 `npm run verify` + `npm run build` + `npm run smoke`（`.github/workflows/ci.yml`，electron 二进制跳过下载）。刀架（64 张谱、386 把）太重，不上 CI，留在本机按批跑。

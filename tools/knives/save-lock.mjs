@@ -11,6 +11,8 @@
  * H 钉「不比对路径」＝回到冒烟撞上那一晚的行为；I 钉「条上那一格写死」，占的是哪份存档根本没记下来；
  * J 钉「比的是那串字而不是那个文件」（2026-10-02 桌面版量到的软链那一档）；K 钉「存档还没落盘就不认父目录的实底」；
  * L 钉「抢位那一步不原子」（2026-10-02 加）：退回「读→判→写」三步，同起的两张桌双双读到空条双双放行，后写的条盖前一张，两张桌同写一份 table.json。
+ * M 钉「判活只看 pid」（2026-10-12 第二轮加）：pid 复用那条老坑——持锁那张桌挨 SIGKILL 走了，号被系统发给一个无关的新进程，
+ *   于是「pid 活着」为真、这张桌永远起不来，而提示里那个进程其实早不存在（`sameHolder` 拿条上的出生证认出前人留条）。
  * 跑法：npm run knives -- save-lock（全跑就 npm run knives；要看每刀全红几句加 --verbose）
  */
 export default {
@@ -36,7 +38,7 @@ export default {
     {
       rel: 'src/node/room.ts',
       note: 'C 只要条上写着东西就当有人占着：前人挨 SIGKILL 走的留条变成死闸，这份存档从此谁也开不了桌',
-      from: "  return alive(held.pid) ? 'taken' : 'free';",
+      from: "  return alive(held) ? 'taken' : 'free';",
       to: "  return 'taken';",
       expect: '写那条的进程已经没了：让开（前人挨 SIGKILL 走的留条不算闸）',
     },
@@ -57,7 +59,7 @@ export default {
     {
       rel: 'src/node/room.ts',
       note: 'F 那句只说「被占了」：不念是哪份存档、谁占着、往哪儿改，人对着两句终端不知道关哪一张',
-      from: '    throw new Error(`这份存档（${save}）已经被 ${held!.port} 端口上那张桌占着（进程 ${held!.pid}）：先关掉那张，或者给这一张另加 --save=另一份文件`);',
+      from: '    throw new Error(\n      `这份存档（${save}）已经被 ${held!.port} 端口上那张桌占着（进程 ${held!.pid}）：先关掉那张，或者给这一张另加 --save=另一份文件` +\n        `（要是那张桌其实已经没在跑了，删掉 ${file} 再起一次）`,\n    );',
       to: "    throw new Error('这份存档正被另一张桌写着');",
       expect: '那句念得出撞上的是哪份存档、谁占着、往哪儿改',
     },
@@ -78,16 +80,23 @@ export default {
     {
       rel: 'src/node/room.ts',
       note: 'I 条上那一格写死成一个文件名：占的到底是哪份存档再也没记下来，比对路径的那两档全悬空',
-      from: '  const mine: SaveLock = { pid: process.pid, port, save: canonicalSave(save) };',
-      to: "  const mine: SaveLock = { pid: process.pid, port, save: 'table.json' };",
+      from: '  const mine: SaveLock = { pid: process.pid, port, save: canonicalSave(save), startedAt: Date.now() - Math.round(process.uptime() * 1000) };',
+      to: "  const mine: SaveLock = { pid: process.pid, port, save: 'table.json', startedAt: Date.now() - Math.round(process.uptime() * 1000) };",
       expect: '头一张桌占住了',
     },
     {
       rel: 'src/node/room.ts',
       note: 'J 那格只摊平不认软链：同一个存档写成两条串就被看成两份，两张桌各写各的、账互相盖（macOS 的 /tmp、/var 本来就是软链）',
-      from: '  const mine: SaveLock = { pid: process.pid, port, save: canonicalSave(save) };',
-      to: '  const mine: SaveLock = { pid: process.pid, port, save: resolve(save) };',
+      from: '  const mine: SaveLock = { pid: process.pid, port, save: canonicalSave(save), startedAt: Date.now() - Math.round(process.uptime() * 1000) };',
+      to: '  const mine: SaveLock = { pid: process.pid, port, save: resolve(save), startedAt: Date.now() - Math.round(process.uptime() * 1000) };',
       expect: '同一份存档换条软链写法照样撞：两张桌不许写同一本账，哪怕路径串得不一样',
+    },
+    {
+      rel: 'src/node/room.ts',
+      note: 'M 判活只看 pid（退回 pid 复用那条老坑）：持锁那张桌挨 SIGKILL 走了，号被发给一个无关的新进程，这张桌从此永远起不来',
+      from: '  return Math.abs(nowStartedAt - held.startedAt) < 3000;',
+      to: '  return true;',
+      expect: 'pid 被复用给了另一个进程：那个进程比这条晚生一大截，一眼认得出是前人留的',
     },
     {
       rel: 'src/node/room.ts',

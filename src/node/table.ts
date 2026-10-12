@@ -33,6 +33,12 @@ export const TAKEOVER_MS = 30_000;
 /** 候场期一把空椅子等人等多久就归零还桌。两分钟够去倒杯水，再长就是那台设备不回来了 */
 export const IDLE_MS = 120_000;
 
+/**
+ * 一个活人都没连着，桌还等多久就自己散掉。跟候场期那把空椅子同一把尺子（`IDLE_MS`）：
+ * 两档问的都是同一件事——**这台设备不回来了**，两分钟够去倒杯水，也够路由器抖一下自己缓过来。
+ */
+export const EMPTY_MS = 120_000;
+
 /** 设备代号留多长：够认人、又不至于把座位行挤换行 */
 export const NICK_MAX = 12;
 
@@ -96,6 +102,16 @@ export class Table {
   private seq = 0;
   /** 这一局打完的账记进总账本了没：局末那一刻记一次，换牌面那几条路就不再多算一局 */
   private booked = false;
+  /**
+   * 「一个活人都没连着」是从哪一刻起算的（0＝这会儿还有活人）。满 `EMPTY_MS` 桌就自己散掉，见 `tick`。
+   * 只活在内存里、不进存档：重启之后谁也不连着，那是另一码事，从那一刻重新数两分钟。
+   */
+  private emptySince = 0;
+  /**
+   * 桌刚把自己散掉没有。散桌在桌这头只到得了内存，硬盘归宿主管——`room.ts` 那个一秒一次的表看见
+   * 这一格就把存档抹掉（跟客户端递 `disband` 那条走的是同一颗 `discard`）。宿主读一次清一次。
+   */
+  wiped = false;
   /** 桌自己那条随机流走了几步：存档要靠它接上同一条流，别从头重放一遍 */
   private rngSteps = 0;
   /** 暗棋这一墩没翻开之前，日志只发到这儿为止——和网页的 maskFrom 同一口径 */
@@ -450,21 +466,52 @@ export class Table {
   }
 
   /**
-   * 散桌：候场厅那位房主要走，而这桌只剩他一个活人连着——椅子就该跟着人一起收，别空挂一张桌在这块网上。
+   * 散桌：最后一个人离桌，这桌就该跟着没——椅子连令牌一起收，别空挂一张桌在这块网上。
    * 跟 `resetBook` 差在椅子上：那一条椅子一把不动，这一条连令牌一起收。
    * 局号回 1、跨局那本换新、牌面重摊、每一位洗回没人坐过的样子；存档由宿主那头抹掉（在这儿抹不着硬盘）。
-   * 「只剩一个活人」和「只剩你一个」是同一件事：房主位跟着活人走，桌上有别的活人时轮不到他代持，
-   * 那道 guard 就把这句挡在 `aliveSeats` 上——不靠调用方自报「就我一个人」。
+   *
+   * **正在打的局也散得掉**（2026-10-12 用户报的那条）。原来还有一道「这一局正在打，打完再散」的闸，
+   * 结果是这样：别的位子的人早走了、全由电脑代打，最后一个人点「离桌」——散不动，桌留着、存档留着，
+   * 下次点「在这台机器开一桌」，宿主 `restore()` 把上一局原样接回来（用户原话：「都已经电脑代打了
+   * 没有人参与了，最后一个人离桌不就是解散吗」）。人走桌就该没，局打没打完不是门槛。
+   *
+   * **也不看房主位在谁手上**（2026-10-12 全面排查出来的第二条）。原来第一道闸是「必须是房主」，
+   * 而房主位可能正钉在一个**已经掉线**的人身上——`restHost` 只在非 `playing` 时跑，开打中房主掉了线，
+   * 那位就一直钉在那把椅子上。这时候「只有房主能散」成了一道谁也过不去的门：桌上只剩一个活人、
+   * 他不是房主，于是桌留着、存档留着，得等 `sweepEmpty` 满两分钟才自己散——而客户端那句
+   * 「退出去这桌就散了」根本兑不了现（那句 `reject` 也看不见：客户端递完 disband 当场就拆线了）。
+   * 人走桌就该没，谁坐过房主位不是门槛。
+   *
+   * 所以门槛只剩 `aliveSeats` 一条：**还有别人连着，谁也散不动**——那才是真正要护的东西。
+   * 只剩一个活人时他一点「离桌」就走这一扇门；**一个活人都不剩时没人递得上这句话**，
+   * 那条路由桌自己判（`sweepEmpty`：没人连着满两分钟，收尾走同一份 `wipe`）。
    */
   disband(bySeat: number): { ok: boolean; why?: string } {
-    if (bySeat !== (this.setup.hostSeat ?? 0)) return { ok: false, why: '只有房主能散这桌' };
-    if (this.status === 'playing') return { ok: false, why: '这一局正在打，打完再散' };
+    // 这条连接已经不在桌上了（人早走了）：不替这张桌做决定
+    const slot = this.slots[bySeat];
+    if (!slot?.online) return { ok: false, why: '这条连接已经不在桌上了，散不了这桌' };
+    // 还有别人连着：谁也散不动——那一下等于把别人正在打的那一局一起带走
     const alive = aliveSeats(this.slots);
     if (alive > 1) return { ok: false, why: `这桌还有 ${alive - 1} 个活人连着：要散得等别人先走` };
+    // 只剩你一个活人：你就是「最后一个走的人」，散桌归你——不看房主位在不在你这把上（理由见上面那段）
+    this.wipe();
+    this.log('这桌散了：局号回 1、账清零、椅子一把不剩（存档那头由宿主抹掉，重启接不回来）');
+    return { ok: true };
+  }
+
+  /**
+   * 散桌的收尾：椅子连令牌一起收、局号回 1、跨局那本换新、牌面重摊、回候场。
+   * 两条路走它——人递上来的 `disband`（最后一个人离桌）和桌自己判出来的 `sweepEmpty`
+   * （一个活人都没连着满 `EMPTY_MS`）。收尾只有这一份，别在两处各写一遍：写两遍迟早走岔，
+   * 而走岔的样子是「散完这桌开不了下一局」这种隔一天才看得出来的。
+   */
+  private wipe(): void {
     this.slots = this.freshSlots(this.setup.players);
     this.setup.hostSeat = this.setup.homeSeat ?? 0;
     this.book = openMatch(this.setup.players);
     this.gameNo = 1;
+    // 正在打的那一局一起收：散完得回候场，不然这桌挂着 'playing'，那颗「开始这一局」永远按不动
+    this.status = 'waiting';
     this.state = createGame({
       ...this.setup,
       seed: this.rollSeed(),
@@ -473,9 +520,7 @@ export class Table {
     this.booked = false;
     this.maskFrom = -1;
     this.last = null;
-    this.log('这桌散了：局号回 1、账清零、椅子一把不剩（存档那头由宿主抹掉，重启接不回来）');
     this.push();
-    return { ok: true };
   }
 
   /** 抽下一副牌面的种子：同一条流上掷一个 32 位整数。四处开新局都走它，别再各写一遍算式 */
@@ -508,6 +553,11 @@ export class Table {
 
   /** 一秒一次的表。回 true 表示这一秒真改了点什么，宿主就该落一次盘 */
   tick(): boolean {
+    // 一个活人都没连着满两分钟：这桌没人用了，自己散掉（收尾见 `sweepEmpty`）。
+    // 这一档**不看开没开打**——原来只在候场期扫椅子（`sweepIdle` 那句注释），于是两位都掉线的桌
+    // 挂着 'playing'，电脑替双方一直打下去，桌和存档都留在那儿（2026-10-12 用户报的：
+    // 「这两个人都掉线了 这桌还留着干啥呢」）。散桌的硬盘那一下归宿主：`wiped` 那一格叫它抹存档，不是落盘
+    if (this.sweepEmpty()) return false;
     if (this.status !== 'playing') return this.sweepIdle();
     const t = this.now();
     let changed = false;
@@ -532,10 +582,39 @@ export class Table {
   }
 
   /**
+   * 一个活人都没连着满 `EMPTY_MS`，这桌就自己散掉：椅子、令牌、局号、跨局那本账连同牌面一起收。
+   * 「还有没有别的活人」是唯一门槛——**局打没打完不是**，跟 `disband` 同一口径：没人参与了，
+   * 这桌就没有留着的理由。剩一个活人时他一点「离桌」桌就散；一个都不剩时没人递得上那句话，只能桌自己来。
+   *
+   * 起算点落在「最后一个活人掉线」那一刻，不是「这桌开起来」那一刻：中途有人回来（`join` 里把
+   * `online` 打回 true）就清零，所以掉线一下又回来的人不会把桌赔进去。
+   * 散桌的收尾走 `wipe`（跟 `disband` 同一份）；硬盘上那份存档由宿主看见 `wiped` 之后抹掉。
+   */
+  private sweepEmpty(): boolean {
+    if (aliveSeats(this.slots) > 0) {
+      this.emptySince = 0;
+      return false;
+    }
+    const t = this.now();
+    // 头一秒只是起算：掉线那一刻不该当场散桌——路由器抖一下、人锁一下屏，都还得坐得回来
+    if (!this.emptySince) {
+      this.emptySince = t;
+      return false;
+    }
+    if (t - this.emptySince < EMPTY_MS) return false;
+    this.emptySince = 0;
+    this.wipe();
+    this.wiped = true;
+    this.log('两分钟没有一个人连着，这桌自己散了：椅子、局号和那本账全清空（存档也跟着抹掉）');
+    return true;
+  }
+
+  /**
    * 候场期那把「掉线了，凭令牌坐得回来」的椅子不能永远挂着：
    * 换过 Wi-Fi、清了缓存、或者那台设备压根不再回来，屏幕上就少一把能坐的椅子，
    * 房主那颗开始也就永远点不出来。满 IDLE_MS 就整把洗回没人坐过的样子。
-   * 开打中一律不收——那一局还等着他回来接着打。
+   * 开打中不单收这一把——那一局还等着他回来接着打；可要是**全桌都没人连着**，
+   * 那就不是「他一个人回来接着打」的事了，整桌归 `sweepEmpty` 管。
    */
   private sweepIdle(): boolean {
     const t = this.now();
@@ -648,6 +727,7 @@ export class Table {
   }
 
   seatInfo(): SeatInfo[] {
+    const t = this.now();
     return this.slots.map((s) => ({
       seat: s.seat,
       name: s.name,
@@ -657,6 +737,12 @@ export class Table {
       human: s.human,
       queued: s.queued,
       nick: s.nick,
+      // 只有「打牌这一档、人还归他、又确实连不上」才在等接手：候场期不收这一档，已经被接手的也不再有倒计时。
+      // 这个数是给客户端当**锚点**用的（快照不是每秒一份），所以在这儿按当下这一刻算一次就够
+      takeoverIn:
+        this.status === 'playing' && s.human && !s.online && !s.ai
+          ? Math.max(0, TAKEOVER_MS - (t - s.gone))
+          : 0,
     }));
   }
 

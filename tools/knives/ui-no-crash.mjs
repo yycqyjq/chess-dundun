@@ -13,10 +13,12 @@ export default {
     {
       rel: 'src/web/ui.ts',
       note: 'A 浮话回到 innerHTML（别人的代号里带标签就当场执行）',
-      from: `export function toast(el: HTMLElement, text: string, ms: number): void {
-  el.textContent = text;`,
-      to: `export function toast(el: HTMLElement, text: string, ms: number): void {
-  el.innerHTML = text;`,
+      // 刀口不锚在 toast 函数头：2026-10-12 那两颗「掐上一条的定时器」插在了函数头下面，
+      // 锚函数头就会被那两行撞飞（改了源码必须回刀谱看一眼那把刀还利不利）
+      from: `  el.textContent = text;
+  el.hidden = false;`,
+      to: `  el.innerHTML = text;
+  el.hidden = false;`,
       expect: '带尖括号的代号原样显出来，一个元素都没多',
     },
     {
@@ -32,6 +34,13 @@ export default {
       from: `  private on = remembered() !== 'off';`,
       to: `  private on = localStorage.getItem(KEY) !== 'off';`,
       expect: '开桌第一下就要读音量开关：存不下来也得开得出去',
+    },
+    {
+      rel: 'src/web/ui.ts',
+      note: 'D 不掐上一条的定时器：先弹那条短的到点会把后弹那条长的（「和桌断了」）一起摘掉（2026-10-12 第二轮）',
+      from: '  const prev = toastTimers.get(el);\n  if (prev !== undefined) window.clearTimeout(prev);\n  el.textContent = text;',
+      to: '  el.textContent = text;',
+      expect: '连发两条：后一条把前一条的定时器掐了',
     },
   ],
 };

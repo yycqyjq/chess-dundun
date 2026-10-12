@@ -18,11 +18,14 @@ import {
   lockVerdict,
   openRoom,
   orphanWatch,
+  parseEtimeMs,
+  sameHolder,
   setupFrom,
+  tickOnce,
   type Room,
   type SaveLock,
 } from '../node/room.ts';
-import { Table, IDLE_MS } from '../node/table.ts';
+import { Table, EMPTY_MS, IDLE_MS } from '../node/table.ts';
 import { aliveSeats, type ToClient } from '../net/wire.ts';
 import { finishDraft, makeTable, ok, playToEnd, roundTripWhy, rules, failures } from './net.harness.ts';
 
@@ -282,8 +285,9 @@ import { finishDraft, makeTable, ok, playToEnd, roundTripWhy, rules, failures } 
   ok('挡下来什么都没动：他那把椅子还记在他名下', table.seatInfo()[1]!.taken && table.seatInfo()[1]!.online);
   table.leave(1);
   ok('那位走了才轮到散：这桌只剩一个活人', aliveSeats(table.seatInfo()) === 1);
-  // 这一问排在人走之后：桌上还连着两个人时，非房主那句会被「还有别人」那道闸一起挡下，看不出是房主闸救的
-  ok('不是房主散不动，账照旧', !table.disband(1).ok && table.book.games === 2);
+  // 2026-10-12 起这一问量的是「这条连接还在不在桌上」，不再是「是不是房主」——
+  // 房主位此刻还在 0 号位手上，所以这一问跟房主那道闸已经无关了（那一道整个拆掉了，见下面新那一块）
+  ok('一个已经掉线的座位散不动这桌：它已经不在桌上了，账照旧', !table.disband(1).ok && table.book.games === 2);
   const gone = table.disband(0);
   ok(
     '房主散了：局号回 1，四条账目全归零',
@@ -316,6 +320,32 @@ import { finishDraft, makeTable, ok, playToEnd, roundTripWhy, rules, failures } 
     '旧令牌回来只是个新人：坐得下，发的却是另一把新令牌',
     back.ok && back.msg?.t === 'welcome' && back.msg.token !== tok1 && back.msg.token.length > 0,
     `${back.msg?.t === 'welcome' ? back.msg.token : '‹没发welcome›'}｜${tok1}`,
+  );
+}
+
+console.log('房主位钉在掉线那位身上：最后一个活人不是房主，也散得掉');
+{
+  // 2026-10-12 全面排查出来的：房主位钉在一个**已经掉线**的人身上时，「只有房主能散」成了一道谁也过不去的门。
+  // 开打中房主掉了线，`restHost` 不跑（它只在非 playing 时跑），位就一直在他那把椅子上；
+  // 桌上只剩一个活人、他又不是房主 —— 于是桌散不掉，得等 `sweepEmpty` 满两分钟才自己散，
+  // 而客户端那句「退出去这桌就散了」根本兑不了现（那句 `reject` 也看不见：递完 disband 当场就拆线了）。
+  // 现在的门槛只有 `aliveSeats` 一条：只剩一个活人时，他就是「最后一个走的人」，房主位在谁手上都一样。
+  const { table } = makeTable({ mode: 'kou' });
+  table.join(0, ''); // P1 坐进房主位
+  table.join(1, ''); // P2
+  table.start(0);
+  finishDraft(table);
+  table.leave(0); // 房主先掉线，椅子连令牌留着
+  ok(
+    '房主掉了线：房主位还钉在他那把椅子上，桌上只剩一个活人',
+    table.lobby().hostSeat === 0 && aliveSeats(table.seatInfo()) === 1,
+    `host=${table.lobby().hostSeat}｜alive=${aliveSeats(table.seatInfo())}`,
+  );
+  const solo = table.disband(1); // P2 不是房主，可他是最后一个活人
+  ok(
+    '只剩一个活人时散得掉，哪怕房主位还钉在掉线那位身上（他不是房主）',
+    solo.ok && table.status === 'waiting' && aliveSeats(table.seatInfo()) === 0 && table.seatInfo().every((s) => !s.taken),
+    `${solo.ok}｜${solo.why ?? ''}｜${table.status}`,
   );
 }
 
@@ -353,7 +383,9 @@ console.log('椅子令牌不许是牌局那条种子的函数');
 }
 
 {
-  // 打了一半不散：那一局的账还没落地，这会儿收椅子等于让正在出牌的人白打，还让候场厅丢了牌面
+  // 桌上还有别人连着的时候散不动：那一下等于把别人正在打的那一局带走，这道闸留在 `aliveSeats` 上。
+  // 但只剩一个活人时不一样——别的位子早被电脑代打着、人走了，这最后一个一走桌就是空壳，局打没打完都散
+  //（2026-10-12 用户报的：「都已经电脑代打了没有人参与了，最后一个人离桌不就是解散吗」）
   const { table } = makeTable({ mode: 'kou' });
   table.join(0, '');
   table.join(1, '');
@@ -361,13 +393,17 @@ console.log('椅子令牌不许是牌局那条种子的函数');
   finishDraft(table);
   const r = table.disband(0);
   ok(
-    '这一局正在打，散不动也不碰椅子',
-    !r.ok && (r.why ?? '').includes('正在打') && aliveSeats(table.seatInfo()) === 2 && table.status === 'playing',
+    '这一局正在打，可桌上还有别人连着：散不动，也不碰椅子',
+    !r.ok && (r.why ?? '').includes('还有 1 个活人连着') && aliveSeats(table.seatInfo()) === 2 && table.status === 'playing',
     `${r.ok}｜${r.why ?? ''}｜${table.status}`,
   );
   table.leave(1);
   const solo = table.disband(0);
-  ok('就算只剩一个活人，那一局没打完照样不散', !solo.ok && aliveSeats(table.seatInfo()) === 1 && table.seatInfo()[1]!.taken);
+  ok(
+    '只剩一个活人：那一局没打完也散得掉，散完回候场',
+    solo.ok && aliveSeats(table.seatInfo()) === 0 && table.status === 'waiting' && !table.seatInfo()[1]!.taken,
+    `${solo.ok}｜${solo.why ?? ''}｜${table.status}`,
+  );
 }
 
 {
@@ -379,6 +415,36 @@ console.log('椅子令牌不许是牌局那条种子的函数');
   table.join(1, '');
   ok('房主位交到了代持那位手上：他这一个活人散得动', table.disband(1).ok);
   ok('散完房主位回「家」那把：代持那位按不动开局，家那把按得动', !table.start(1).ok && table.start(0).ok);
+}
+
+{
+  // 桌自己散掉那一下，硬盘那半边归宿主管：一个活人都没连着满两分钟，桌把 `wiped` 翻起来，
+  // 那一秒的表得**抹存档**，不是落一次盘——落盘就是把这张没人用的桌又写回硬盘，
+  // 下一回起桌 `restore()` 照旧接回来，用户那句「这桌还留着干啥呢」等于没修。
+  // 这颗表原来长在 `openRoom` 里那颗真 `setInterval` 上（两分钟一档，测试等不起），所以判断拎了出来
+  const { table, clock } = makeTable({ mode: 'kou' });
+  table.join(0, '');
+  table.join(1, '');
+  table.start(0);
+  finishDraft(table);
+  table.leave(0);
+  table.leave(1);
+  const calls: string[] = [];
+  const persist = (): void => void calls.push('persist');
+  const discard = (): void => void calls.push('discard');
+  tickOnce(table, persist, discard);
+  ok('掉线那一刻：这一秒什么也不该做（桌还没散、也没动手）', calls.length === 0, calls.join());
+  clock.step(EMPTY_MS - 1);
+  tickOnce(table, persist, discard);
+  ok('差一毫秒不到：桌还在，那一秒不许碰存档', !table.wiped && calls.join() === 'persist', `${calls.join()}｜${table.wiped}`);
+  calls.length = 0;
+  clock.step(2);
+  tickOnce(table, persist, discard);
+  ok('满两分钟：那一秒抹的是存档，不是落盘', calls.join() === 'discard', calls.join());
+  ok('抹完那一格自己清掉：不然后面每一秒都抹一回盘', table.wiped === false);
+  calls.length = 0;
+  tickOnce(table, persist, discard);
+  ok('桌已经散了、也没动手：再下一秒一个字都不该做', calls.length === 0, calls.join());
 }
 
 // ───────────────────────── 那本账只有一本：随快照下去，存档里跟着走 ─────────────────────────
@@ -621,8 +687,8 @@ const lockBody = (held: Partial<SaveLock>): string => JSON.stringify(held);
   // 一把尺子量的几档：这台桌能不能占这份存档。判断全在这个纯函数里，好让每种都点得着
   const here = '/repo/table.json';
   const mine: SaveLock = { pid: 1111, port: 5200, save: here };
-  const living = (_pid: number): boolean => true;
-  const dead = (_pid: number): boolean => false;
+  const living = (_held: SaveLock): boolean => true;
+  const dead = (_held: SaveLock): boolean => false;
   ok('硬盘上没写过那条：能占', lockVerdict(null, mine, living) === 'free');
   ok('那条写的根本不是这一份存档（项目被整个拷了一份）：能占', lockVerdict({ pid: 57898, port: 5199, save: '/elsewhere/table.json' }, mine, living) === 'free');
   ok('写那条的就是自己这个进程、自己这个端口：同一趟里重起桌，算自己的', lockVerdict(mine, mine, living) === 'mine');
@@ -639,6 +705,29 @@ console.log('占位条上那份存档路径怎么认到底');
   ok('存档已经在硬盘上：认它自己那条到底的（软链那头写的是另一串字）', canonicalSave('/tmp/x/table.json', (p) => (p === '/tmp/x/table.json' ? '/private/tmp/x/table.json' : p)) === '/private/tmp/x/table.json');
   ok('存档还没落盘（新桌第一局）：认父目录的实底，再把文件名接回去', canonicalSave('/tmp/x/table.json', (p) => { if (p === '/tmp/x') return '/private/tmp/x'; throw new Error('ENOENT'); }) === '/private/tmp/x/table.json');
   ok('连父目录都不存在：退回摊平那一条，别抛（那句「目录没建」该由起桌的去念，不是这只手）', canonicalSave('/nope/y/table.json', () => { throw new Error('ENOENT'); }) === resolve('/nope/y/table.json'));
+}
+
+console.log('占位条上那位的出生证：pid 被复用给别的进程，一眼认得出这条是前人留的');
+{
+  // 只靠 pid 判活有个窄窗口：持锁进程挨 SIGKILL 走了、那个号被系统复用给一个无关的活进程，
+  // 于是「pid 活着」为真、这桌永远起不来，而提示里那个进程其实早不存在（2026-10-12 第二轮排查量的）。
+  // 认的办法是出生证：条上记着写那一刻的进程启动时刻，现在再问一次那个 pid 的，对得上才算它。
+  const at = 1_700_000_000_000;
+  const held: SaveLock = { pid: 4242, port: 5200, save: '/repo/table.json', startedAt: at };
+  ok('同一个人：现在问出来的启动时刻跟条上记的对得上（差个几百毫秒是 ps 的秒级粒度）', sameHolder(held, at + 400) === true);
+  ok('pid 被复用给了另一个进程：那个进程比这条晚生一大截，一眼认得出是前人留的', sameHolder(held, at + 90_000) === false);
+  ok('早生一大截的也一样：差得远就是另一个人', sameHolder(held, at - 90_000) === false);
+  ok('问不出那个 pid 的启动时刻（没有 ps）：保守算它活着，别把门锁死', sameHolder(held, null) === true);
+  ok('老条没记出生证：退回「pid 活着就算占着」那条老判据', sameHolder({ pid: 4242, port: 5200, save: '/repo/table.json' }, at) === true);
+}
+
+console.log('ps -o etime= 那串怎么读（mac 与 linux 都打这个形状）');
+{
+  ok('分:秒', parseEtimeMs('03:20') === 200_000);
+  ok('时:分:秒', parseEtimeMs('02:03:20') === 7_400_000);
+  ok('天-时:分:秒', parseEtimeMs('1-02:03:20') === 93_800_000);
+  ok('只有秒（刚起来的桌）', parseEtimeMs('07') === 7_000);
+  ok('空串／认不出的形状回 null（调用方据此保守算活着，不是算死了）', parseEtimeMs('') === null && parseEtimeMs('abc') === null);
 }
 
 {
@@ -807,6 +896,46 @@ console.log('占位条上那份存档路径怎么认到底');
   ok('收桌不被写失败卡住（停落盘 ≠ 停收桌）', closed === '', closed);
   ok('停落盘真闩上了：收桌不再反复试写', !after.some((l) => l.includes('存档写不下去')), after.join('｜'));
   ok('收桌照样把占位条摘了（闸只管占位，跟落不落盘是两码事）', !existsSync(lockPathOf(asFile)), peekLock(lockPathOf(asFile)));
+}
+
+// ───────────────────────── 散掉的桌不在硬盘上留档（2026-10-12 第二轮） ─────────────────────────
+
+{
+  // D1：`close()` 原来只想「攒着的那一笔当场落盘」，不看「这桌已经散过」——
+  // 散桌那一刻 `discard()` 明明把存档抹了，Ctrl-C 走的 `close()` 又把它写回来：
+  // 散桌 → Ctrl-C → 重启，`restore()` 把这张空桌接回来（`gameNo` 回 1、椅子空，`setup.name` 还留着上一桌的名字），
+  // 跟「散了重启接不回来」那句口径正好相反。
+  // D5：`discard()` 里那两下 `rmSync` 原来没兜底——它跑在一秒一次的表里（`tickOnce`），
+  // 从 timer 抛出去就是 uncaughtException 带走全桌。
+  // 这儿用真 `openRoom` 一次量齐两件：正常文件（D1）与「存档位恰好是个目录」（D5，`rmSync` 不带 recursive 删目录必抛 EISDIR）。
+  const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+  const dir = mkdtempSync(join(tmpdir(), 'qdd-revive-'));
+  const save = join(dir, 'table.json');
+  const asDir = join(dir, '存档位');
+  mkdirSync(asDir);
+  const said: string[] = [];
+  const rawLog = console.log;
+  const cap = (into: string[]) => (...a: unknown[]): void => void into.push(a.map(String).join(' '));
+  // 目录那一桌起桌就会念一句「存档写不下去」，所以捕获窗口从头开着
+  console.log = cap(said);
+  const alive = openRoom(['--no-discover', '--fresh', `--save=${save}`], 5904);
+  const stuck = openRoom(['--no-discover', '--fresh', `--save=${asDir}`], 5905);
+  console.log = rawLog;
+  ok('起桌第一件事就是落一次盘（没人坐过椅子就断掉，重启也接得回牌面）', existsSync(save), '没落盘');
+  // 桌自己散掉走的是「翻 `wiped`，宿主看见就 `discard`」这一格（`sweepEmpty` 那条路；`disband` 那条由 room 直接 `discard`，
+  // 两条最后都到同一颗 `discard`）。真散桌要满两分钟没人连着，测试等不起，所以直接把这一格翻起来——
+  // 它正是 `tickOnce` 认的那个信号（上面那一块已经单独钉过这条契约）。
+  alive.table.wiped = true;
+  stuck.table.wiped = true;
+  console.log = cap(said);
+  await sleep(1200); // room 里那颗一秒一次的表各跑一次 tickOnce：看见 wiped 就走 discard
+  console.log = rawLog;
+  ok('散桌之后存档当场抹了（`discard` 掐掉排队的合批、连 .tmp 一起抹）', !existsSync(save), '存档还在');
+  ok('抹不掉时念一句人话，别让全桌跟着抛（那儿恰好是个目录：rmSync 删目录必抛 EISDIR）', said.some((l) => l.includes('散桌之后存档没抹干净')), said.join('｜'));
+  ok('抹不掉 ≠ 桌散了：牌桌照常答话', stuck.table.lobby().status === 'waiting', stuck.table.lobby().status);
+  alive.close();
+  ok('收杆之后存档不许复活（散桌 → Ctrl-C → 重启不该又接回一张空桌）', !existsSync(save), '存档复活了');
+  stuck.close();
 }
 
 

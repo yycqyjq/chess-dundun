@@ -9,6 +9,8 @@ ext {
     androidxFragmentVersion = '1.8.9'
     coreSplashScreenVersion = '1.2.0'
     androidxWebkitVersion = '1.14.0'
+    // 扫码那一屏的取景（CameraX）。纯 AndroidX，不碰 Google Play Services
+    androidxCameraVersion = '1.4.2'
     junitVersion = '4.13.2'
     androidxJunitVersion = '1.3.0'
     androidxEspressoCoreVersion = '3.7.0'

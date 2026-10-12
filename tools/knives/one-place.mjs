@@ -47,7 +47,9 @@ export default {
       note: 'E 确认那颗递成清账那句：账归零、椅子一把不动，人还坐在这张要散的桌上',
       from: "            this.link?.send({ t: 'disband' });",
       to: "            this.link?.send({ t: 'reset' });",
-      expect: '确认那颗递的是 disband 那句',
+      // 2026-10-12：这条原来钉的是 style.test 里那句宽匹配（「文件里出现过 send disband」），
+      // 而 askStale 里也有一模一样的一句，宽匹配就永远绿了。现在钉的是 askDisband 方法体那个形状
+      expect: '两处出口共用一套确认（askDisband 里递的就是 disband 那句）',
     },
   ],
 };

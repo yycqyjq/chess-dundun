@@ -699,18 +699,24 @@ async function playToEnd(clients, maxMs = 120_000) {
   await guest.open;
   await guest.sit(GUEST, token, 'G3');
 
+  // 2026-10-12 起这道闸整个拆了：原来它量的是「房主那道闸排在『还有别人』前面」，可房主位可能正钉在一个
+  // **已经掉线**的人身上（`restHost` 只在非 `playing` 时跑），照「只有房主能散」判，最后那个活人就永远
+  // 散不掉这桌。现在挡的是「还有别人连着」，跟谁坐房主位无关——下面这一句反过来钉：拒的那句里
+  // **不许**再出现「房主」，不然那道闸就是偷偷搬回来了
   guest.ask({ t: 'disband' });
   const notHost = await guest.tryUntil(['reject'], null, 3000);
   ok(
-    '不是房主散不动：房主那道闸排在「正在打」前面，两位各自红在自己要防的那句上',
-    notHost !== null && notHost.why.includes('房主'),
+    '不是房主也散不动，但拒的理由不再是「房主」：挡的是「还有别人连着」',
+    notHost !== null && notHost.why.includes('活人连着') && !notHost.why.includes('房主'),
     notHost ? JSON.stringify(notHost).slice(0, 120) : '等 reject 超时：桌把这一句咽成了沉默',
   );
   host.ask({ t: 'disband' });
   const midGame = await host.tryUntil(['reject'], null, 3000);
+  // 2026-10-12 起「正在打」不再是门槛（最后一个人走，桌就该没）：这一下拒的是「还有别人连着」。
+  // 钉住这一点——拒的那句里**不许**再出现「正在打」，不然那道闸就是偷偷搬回来了
   ok(
-    '这一局正打着：房主也散不动，那句说的是「打完再散」',
-    midGame !== null && midGame.why.includes('正在打'),
+    '这一局正打着，可桌上还有别人连着：拒的理由是「还有别人」，不是「正在打」',
+    midGame !== null && midGame.why.includes('活人连着') && !midGame.why.includes('正在打'),
     midGame ? JSON.stringify(midGame).slice(0, 120) : '等 reject 超时：桌把这一句咽成了沉默',
   );
   host.ask({ t: 'lobby' });
@@ -736,7 +742,8 @@ async function playToEnd(clients, maxMs = 120_000) {
     crowd ? JSON.stringify(crowd).slice(0, 140) : '等 reject 超时：桌把这一句咽成了沉默',
   );
 
-  // 那位走了：这一桌只剩一个活人，「只剩你一个」和「你是房主」到这一刻才合成同一件事
+  // 那位走了：这一桌只剩一个活人。散桌归「最后一个活人」，不再看房主位在谁手上——这儿房主正好也是
+  // 最后那个活人，所以下面那句照旧量得到；「房主先掉线、最后那个活人不是房主」那一路在本段末尾单独量
   guest.close();
   await new Promise((r) => setTimeout(r, 400));
 
@@ -793,6 +800,30 @@ async function playToEnd(clients, maxMs = 120_000) {
     again ? JSON.stringify(again).slice(0, 140) : '等 playing 超时：散完的桌按不动开始',
   );
   n1.close();
+
+  // ── 2026-10-12 全面排查出来的那条：房主位钉在一个**已经掉线**的人身上时，最后那个活人不是房主也得散得掉 ──
+  // n1 刚走，房主位还钉在它那把椅子上（`settleHost` 只在 `waiting` 时挪位，这会儿还挂着 playing），
+  // 桌面上只剩下面这一位活人。原来那道「只有房主能散」的闸会把他挡在门外，这桌就永远散不掉、
+  // 得干等两分钟让 `sweepEmpty` 收——而客户端那句「退出去这桌就散了」当场兑不了现。
+  await new Promise((r) => setTimeout(r, 400)); // 等桌收到 n1 那条 close、把房主位那把标成掉线
+  const solo = new Client();
+  await solo.open;
+  await solo.sit(GUEST, '', 'S1');
+  // 先证明这一下真是「房主位不在他手上」：不然整段白量（那位要是接了房主位，散得动是当然的）
+  solo.ask({ t: 'lobby' });
+  const pinned = await solo.tryUntil(['seats'], null, 3000);
+  ok(
+    '量之前先确认这一下是「房主位还钉在刚走的那位身上」：最后这个活人不是房主',
+    pinned !== null && pinned.hostSeat === HOST && pinned.seats[GUEST].online === true,
+    pinned ? JSON.stringify([pinned.hostSeat, pinned.seats[GUEST]]) : '等 seats 超时',
+  );
+  solo.ask({ t: 'disband' });
+  const soloCut = await solo.tryUntil(['closed'], null, 4000);
+  ok(
+    '房主位钉在掉线那位身上时，最后一个活人（不是房主）也散得掉',
+    soloCut !== null && soloCut.t === 'closed',
+    soloCut ? JSON.stringify(soloCut) : '等不到桌关线：那道「只有房主能散」的闸还在，最后一个活人被挡在门外',
+  );
 }
 
 await new Promise((r) => setTimeout(r, 200));

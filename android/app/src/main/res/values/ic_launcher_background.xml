@@ -1,4 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="ic_launcher_background">#FFFFFF</color>
+    <!-- 自适应图标底下那层：取自 public/icon.svg 木纹棋盘中间那一道（#d0a76c）。
+         原来这里是 #FFFFFF：白底 + 浅色图案，浅色桌面上等于「没图标」（2026-10-10 用户报的）。 -->
+    <color name="ic_launcher_background">#d0a76c</color>
 </resources>

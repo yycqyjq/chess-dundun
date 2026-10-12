@@ -59,6 +59,7 @@ function lobby(players: number, flags: Partial<SeatInfo>[] = [], over: Partial<L
     online: false,
     taken: false,
     ai: true,
+    takeoverIn: 0,
     human: false,
     queued: false,
     nick: '',

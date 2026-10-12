@@ -31,7 +31,8 @@ let child: ChildProcess | null = null;
 // 一台机器一个实例：双击图标两下就是两个 Electron 进程，各自起一桌抢同一份 userData 存档——
 // claimSave 那道「读→判→写」之间有窗口，两个都可能读到空条双双放行，两张桌同写一份 table.json。
 // 拿不到单实例锁就当场退出（不 `app.quit()` 走异步退出：那时 whenReady 可能已经排队，还会闪一个窗口）。
-// selftest 不受它管：桌面自测（`desktop:selftest`）本来就是一次性脚本，跟开发时开着的窗口不该互相挤掉。
+// selftest 不受它管：桌面自测（`desktop:selftest`）本来就是一次性脚本，跟开发时开着的窗口不该互相挤掉
+// ——那半个承诺的另一半在 launch.ts::hostArgs：selftest 另用一份存档，不然「跳过锁」也照样撞上 claimSave。
 if (!selftest && !app.requestSingleInstanceLock()) {
   console.error('棋墩墩已经开着一个窗口了，先用那个（第二个实例已退出）');
   app.exit(0);
@@ -80,7 +81,7 @@ app.on('before-quit', stopHost);
 
 function startHost(port: number): ChildProcess {
   // ELECTRON_RUN_AS_NODE 让同一个二进制当 Node 用：装进包里之后没有别的 Node 可依赖
-  const args = [...stripTypeFlags(process.allowedNodeEnvironmentFlags), HOST_TS, ...hostArgs(app.getPath('userData'), port)];
+  const args = [...stripTypeFlags(process.allowedNodeEnvironmentFlags), HOST_TS, ...hostArgs(app.getPath('userData'), port, selftest)];
   return spawn(process.execPath, args, {
     env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
     stdio: ['ignore', 'inherit', 'inherit'],

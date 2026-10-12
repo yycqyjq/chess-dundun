@@ -129,6 +129,35 @@ body {
   max-width: calc(100% - 20px);
 }
 
+/* 掉线轻提醒：钉在桌面正上方那条。半透明底、不抢牌，只在那几位连不上时露脸；
+   `top` 留白是给名字条让的——名字条贴四角，中间这一带平时空着。
+   常驻「这会儿还这样」，翻篇那一下另飘一句 toast（见 .toast）。 */
+.notice {
+  position: absolute;
+  top: 10px;
+  left: 50%;
+  transform: translate(-50%, -8px);
+  z-index: 1400;
+  max-width: calc(100% - 24px);
+  padding: 7px 14px;
+  border-radius: 999px;
+  background: rgba(64, 36, 10, 0.9);
+  border: 1px solid #a86a24;
+  color: #ffd98a;
+  font-size: 13px;
+  line-height: 1.35;
+  text-align: center;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.22s ease-out, transform 0.22s ease-out;
+}
+
+.notice.show {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+
 .btn {
   appearance: none;
   border: 1px solid #6b5b48;
@@ -948,6 +977,21 @@ body {
   font-size: 12px;
   opacity: 0.7;
   line-height: 1.5;
+}
+
+/* 列表底下那行次要入口（只有外壳里摆）：手填／扫码。
+   它原来占着底栏那颗主按钮的位置——可寻呼＋扫码才是主路，手填是兜底，
+   所以收成一行居中的小字，别长得像底栏那颗主按钮（2026-10-11 用户拍板降级）。 */
+.list-alt {
+  display: flex;
+  justify-content: center;
+  padding-top: 2px;
+}
+.list-alt .btn {
+  padding: 6px 12px;
+  font-size: 13px;
+  min-height: 34px;
+  opacity: 0.9;
 }
 
 /* App 外壳里那格手填的桌地址：长得跟 .btn 同一族（同一条边、同一个圆角、同一份字），

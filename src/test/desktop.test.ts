@@ -37,6 +37,7 @@ function lobby(players = 2): Lobby {
     online: false,
     taken: false,
     ai: true,
+    takeoverIn: 0,
     human: false,
     queued: false,
     nick: '',
@@ -74,6 +75,14 @@ console.log('给房主子进程那串参数');
   ok('不许带 --fresh：桌面重开该接回自己那一桌，不是每次掀了重摆', !hasFlag(args, 'fresh'), args.join(' '));
   ok('带上 --watch-parent：外壳挨强退／崩了，这张桌自己先存档再退，不赖在端口和占位条上', hasFlag(args, 'watch-parent'), args.join(' '));
   ok('host 那一头读的就是这一串：拼法只有一份，改名不会两头各自安好', readFileSync(new URL('../node/room.ts', import.meta.url), 'utf8').includes(`hasFlag(argv, 'watch-parent')`) && args.includes('--watch-parent'), args.join(' '));
+  // 自检那条另用一份存档（2026-10-12 第二轮排查量的）：它跳过了单实例锁（见 main.ts），可它跟开发时开着的
+  // 那个窗口共用同一个 userData——存档不分开的话，开着窗口跑 desktop:selftest 会被 claimSave 按「pid 存活」拒掉，
+  // 跟 main.ts 那句「不该互相挤掉」的承诺正好相反
+  const st = hostArgs(USER_DATA, 5213, true);
+  ok('自检那条用另一份存档（table-selftest.json）：不跟开发时开着的窗口抢同一份', flag(st, 'save', '') === join(USER_DATA, 'table-selftest.json'), st.join(' '));
+  ok('自检那份落在同一个 userData 目录里，不飘到别处', flag(st, 'save', '').startsWith(`${USER_DATA}/`), flag(st, 'save', ''));
+  ok('不传 selftest 还是那份老存档：开窗口跟 npm run host 照旧各用各的', flag(hostArgs(USER_DATA, 5213), 'save', '') === join(USER_DATA, 'table.json'));
+  ok('两份只差一个文件名：同一目录、同一份东西的两个副本位', flag(st, 'save', '') === flag(args, 'save', '').replace('table.json', 'table-selftest.json'), `自检=${flag(st, 'save', '')}`);
 }
 
 console.log('窗口开哪条地址');
@@ -129,6 +138,8 @@ console.log('判断确实住在 launch.ts');
   ok('双击图标起两次：第二个实例拿不到单实例锁就当场退出，不跟第一个抢同一份存档', code.includes('app.requestSingleInstanceLock()') && code.includes('app.exit(0)'));
   const host = readFileSync(new URL('../../src/node/host.ts', import.meta.url), 'utf8');
   ok('host.ts 把那条看门狗拴在开桌之后：拴在前面那一挨就是撞 room 还没定义，桌没存成反倒抛一句', host.includes('orphanWatch(argv, quit)') && host.indexOf('orphanWatch(argv, quit)') > host.indexOf('openTable();'));
+  // 跳过单实例锁那半个承诺的另一半：selftest 得真把第三参递下去，hostArgs 才会换成另一份存档（见上一节）
+  ok('main.ts 把「这次是不是自检」真递给了 hostArgs', code.includes("hostArgs(app.getPath('userData'), port, selftest)"));
 }
 
 console.log(failures === 0 ? '\n全部通过' : `\n${failures} 条没过`);

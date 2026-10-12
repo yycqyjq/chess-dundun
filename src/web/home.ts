@@ -57,11 +57,12 @@ export function appVersion(): string {
 const ENTRY = {
   // 入口按目的说，不按结构说：这四块都是「进门要做的一件事」的入口，同级同尺寸
   solo: { head: '单机模式', note: '电脑补位，2~4 人' },
-  // note 有两份：浏览器那头能寻同网的桌、也能在自己这台开一桌；App 外壳两头都做不到（原因见 fillAddr）
+  // note 有两份：浏览器那头能寻同网的桌、也能在自己这台开一桌；App 外壳能寻同网的桌（原生插件发广播），
+  // 但开不了桌（桌是 Node 那张）——所以那一路的小字把「开一桌」换成「把地址抄进来」
   room: {
     head: '联机模式',
     note: '同一网络里选桌加入；没有就在这台机器开一桌',
-    appNote: '连另一台电脑上开着的那桌：把它的地址抄进来',
+    appNote: '同一网络里选桌加入；没有就把另一台电脑上那桌的地址抄进来',
   },
   // 关于／设置是 2026-10-09 从脚注小链接升格上来的第三、四块：和玩法入口同级同尺寸，不再压在页面最底
   about: { head: '关于', note: '玩法速览与版本' },
@@ -78,8 +79,8 @@ export function entryNote(k: EntryKey, app: boolean): string {
 
 /**
  * 这页面是不是跑在原生外壳（App）里：Capacitor 起来时往全局上注一个 Capacitor 对象。
- * 这一个判断管两件都落在同一头的事——外壳里没有同源可抄（桌地址得人敲，见 fillAddr），
- * 也没有 UDP 广播（同网寻呼那一屏在那儿根本跑不起来）。
+ * 这一个判断管两件事：外壳里开不了桌（桌是 Node 那张，首页那块的小字与列表页底栏那颗按钮都得换），
+ * 同网寻呼也不走本机宿主那条线——外壳里没有那个宿主，改由原生插件自己发（见 app.ts 的 findNative）。
  * 浏览器里永远是 false：没那个全局就别给人多摆一格用不上的输入框。
  */
 export function inAppShell(): boolean {
@@ -87,9 +88,15 @@ export function inAppShell(): boolean {
   return c?.isNativePlatform?.() === true;
 }
 
-/** 那一屏的两句话：要人给什么、给错了怎么说 */
+/** 那一屏要说的话：要人给什么（抄的、扫的两种说法）、给错了怎么说、相机没开成怎么说 */
 export const ADDR_HINT = '桌开在另一台电脑上：那边跑 npm run host，把它打印的 http://192.168.1.11:5200/ 抄进来（端口要一起写）';
+/** 「扫一扫」那颗在的时候改念这一句：说的还是同一件事，只是把给地址的两条路都点到 */
+export const ADDR_SCAN = '桌开在另一台设备上：点下面「扫一扫」扫它候场厅里那张码，或者把那边打印的 http://192.168.1.11:5200/ 抄进来（端口要一起写）';
 export const ADDR_BAD = '这串读不出一张桌：得写成 192.168.1.11:5200 那样，主机和端口都得有';
+/** 扫回来的那串读不出一张桌：跟手敲的错法分开说，人才知道该去扫什么 */
+export const SCAN_BAD = '扫到的这串读不出一张桌：得是棋墩墩候场厅里那张码';
+/** 相机压根没开成（没给权限最常见）：这是「办不成」，跟「扫了但没扫到」不是一回事 */
+export const SCAN_FAIL = '相机没开成：多半是没给相机权限，去系统设置里给上再试';
 
 /**
  * 人敲进来的桌地址 → 连接用的 host:port。
@@ -120,6 +127,81 @@ export function normAddr(raw: string): string | null {
  */
 export const BACK = '返回';
 
+/**
+ * 同网列表底下那行次要入口（只有外壳里摆）：同网寻不到、或者不想等那一圈广播时，
+ * 手填／扫码把地址弄进来。它原来占着底栏那颗主按钮的位置——可那是「主路」的位置，
+ * 而寻呼＋扫码才是主路，手填是兜底（2026-10-11 用户：手填留着，但别杵在底栏）。
+ */
+export const LIST_ALT = '寻不到？手填地址／扫码';
+
+/**
+ * 候场厅摊开、第一份座位表还没到手时的标题。把「连的是哪台」写在脸上：
+ * 连不上时同一句只换个词（见 roomFailHead），人一眼看得出地址抄错没有。
+ */
+export function roomHead(addr: string): string {
+  return `正连着 ${addr}……`;
+}
+
+/** 同上，可一次快照都没到手就断了——那不是「断线重连」，是压根没连上 */
+export function roomFailHead(addr: string): string {
+  return `连不上 ${addr}`;
+}
+
+/**
+ * 同一屏上那句实话：三种成因（地址抄错／桌没开着／两台设备不在同一个网）长得一模一样，
+ * 不装成「再等等就好」——原来只有一句「和桌断了，正在重连…」，人对着它无限等，没有出路。
+ */
+export const ROOM_FAIL = '一直在重连。地址抄错了、桌没开着、或者两台设备不在同一个网里——都长这样';
+
+/** 连不上时底栏那两颗：改地址，或者回列表重挑一张 */
+export const ALT_ADDR = '换个地址';
+export const BACK_LIST = '回去重选一张';
+
+/** 一桌里掉线的那几位，归成轻提醒要念的东西 */
+export interface SeatWarn {
+  name: string;
+  /** 还有多久由电脑接手（毫秒）；已经被接手的给 0 */
+  leftMs: number;
+  /** 已经由电脑接手了 */
+  ai: boolean;
+}
+
+/**
+ * 掉线轻提醒那句话（钉在桌面正上方那条）。一位都没有就回空串——那一档不该露脸。
+ * 还没被电脑接手的优先念：那句带着倒计时，是要人**现在**看见的；都已经接手了就只说接手。
+ * 一桌同时掉几位时名字连起来念，倒计时取最近的那一位。
+ * 原来只有名字条上那两个字（「掉线」／「代打」），缩在座位行里，2026-10-11 用户：都看不到。
+ */
+export function seatNotice(list: SeatWarn[]): string {
+  if (list.length === 0) return '';
+  const pending = list.filter((s) => !s.ai);
+  if (pending.length > 0) {
+    const ms = Math.min(...pending.map((s) => s.leftMs));
+    const tail = ms <= 0 ? '马上由电脑代打' : `${Math.ceil(ms / 1000)} 秒后由电脑代打`;
+    return `${warnNames(pending)} 掉线了 · ${tail}`;
+  }
+  return `${warnNames(list)} 掉线太久，已由电脑代打`;
+}
+
+/** 几位连成一句：`P2、P3` */
+function warnNames(list: SeatWarn[]): string {
+  return list.map((s) => s.name).join('、');
+}
+
+/**
+ * 座位翻篇那一下飘的一句（toast）。跟正上方那条轻提醒分工不同：
+ * 那条是**这会儿还这样**的常驻状态，这三句是**刚发生**的那一下，飘两秒就走。
+ */
+export function dropFlash(name: string): string {
+  return `${name} 掉线了`;
+}
+export function takenFlash(name: string): string {
+  return `${name} 掉线太久，电脑接手了`;
+}
+export function backFlash(name: string): string {
+  return `${name} 回来了`;
+}
+
 /** 入口那块的字，也就是点进去之后那一屏的标题：一处改两处跟着，不会漂 */
 export function entryHead(k: EntryKey): string {
   return ENTRY[k].head;
@@ -127,17 +209,25 @@ export function entryHead(k: EntryKey): string {
 
 /**
  * 一条同网寻到的桌：整行就是热区（2026-10-09 批3：从「点那条小地址」升成「点哪儿都进桌」）。
- * 行本体是真 <a>——进桌就是让浏览器自己走一趟，点之前悬上去还看得见去哪儿；
  * 行内三排：头一排是桌名（**认桌就靠这一行**：两台设备各开一张时，光有 IP:端口分不清哪张是谁的），
  * 第二排是徽章·情况·空位，第三排是地址（悬着可整条选中拷走）。字和色档全取
  * discover 那批拆片函数，跟候场厅那句平铺文本同源。坐满了给 .dim：这会儿没人接，
  * 不该抬起来给小手骗人去点（.btn.dim 那条家族逻辑，见 style.css）。
+ *
+ * 两副面孔，看你在哪儿（2026-10-11 用户实测：点列表跳去了浏览器）：
+ * - **浏览器里（不给 onPick）**行本体是真 `<a>`——进桌就是让浏览器自己走一趟，落在**桌自己那份页面**上，
+ *   同源、那条 ws 也同源；点之前悬上去还看得见去哪儿。
+ * - **App 外壳里（给了 onPick）必须是按钮**：外壳的页面住在设备自己身上（`http://localhost`），
+ *   那条 `<a>` 一按就被 Capacitor 的 `Bridge.launchIntent` 拦下来甩给系统浏览器
+ *   （`host` 不是 `localhost`、又不在 `server.allowNavigation` 里，就走 `Intent.ACTION_VIEW`），
+ *   人根本没进到 app 里。所以那一头改成回调——把地址记下来、由壳自己开一条 ws，
+ *   跟扫码／手填走同一条路。
  */
-export function roomRow(f: FoundRoom): HTMLElement {
-  const url = roomUrl(f);
+export function roomRow(f: FoundRoom, onPick?: (f: FoundRoom) => void): HTMLElement {
   const b = statusBadge(f);
   const fr = foundFree(f);
-  const row = anchor('', url, f.free > 0 ? 'peer-row btn' : 'peer-row btn dim');
+  const cls = f.free > 0 ? 'peer-row btn' : 'peer-row btn dim';
+  const row = onPick ? button('', () => onPick(f), cls) : anchor('', roomUrl(f), cls);
   const line = span('peer-t');
   line.append(span(`peer-badge ${b.cls}`, b.text), span('peer-meta', `${foundMeta(f)} · 第 ${f.gameNo} 局`), span(`peer-free ${fr.cls}`, fr.text));
   row.append(span('peer-name', roomName(f)), line, span('peer-addr', `${f.ip}:${f.port}`));
@@ -172,6 +262,20 @@ export function autoSeat(lobby: Pick<Lobby, 'homeSeat' | 'seats'>, saved: Saved 
   if (mine) return mine.online ? null : saved!.seat;
   if (creating) return seats[lobby.homeSeat]?.taken ? null : lobby.homeSeat;
   return -1;
+}
+
+/**
+ * 本机桌上是不是还压着「上一桌」。三条判据，任一命中就算：
+ * 打过至少一局（局号 > 1）、有人坐着（令牌留着，哪怕人早走了）、或者那一局正在打。
+ * 全新的一桌是：局号还在 1、一把椅子没人坐过、也没开打——宿主刚起来、存档刚抹掉的那张就是。
+ *
+ * 上一桌是怎么留下来的：正常离桌会散桌（闸在 `table.ts::disband` 的 `aliveSeats` 上），
+ * 可宿主进程被强杀、断电、或者早先那版「正在打就不散」漏下来的时候来不及散，存档留在了硬盘上，
+ * 下次起桌 `restore()` 又原样接回来（见 `room.ts`）。点「在这台机器开一桌」的人要的是一张新桌，
+ * 可那上面也许还压着别人的账——所以不替他决定，问一句（口径见 app.ts 的 askStale）。
+ */
+export function staleTable(lobby: Pick<Lobby, 'gameNo' | 'status' | 'seats'>): boolean {
+  return lobby.gameNo > 1 || lobby.status === 'playing' || lobby.seats.some((s) => s.taken);
 }
 
 /**
@@ -335,10 +439,17 @@ export function homePanel(
 }
 
 /**
- * App 外壳那一屏「本地联机」的版面：一格地址、一句话、底栏两颗。
+ * 「手填桌地址」那一屏的版面：一格地址、一句话、底栏两颗（外壳里多一颗「扫一扫」）。
  * 住在 home.ts 而不是 app.ts 的理由和首页那块一样——「读不出来就别去连」这条判断得有闸。
+ * 这一屏不是外壳专属了（2026-10-10 起 App 里也先摆同网列表，寻不到才点这儿进来），
+ * 只是外壳里没有本机宿主、也没有一张桌可开，能走的就是把地址弄进来这一条。
  * 填错了就地换那一行字、不弹层：这就是一串字打错了，不该把人从这一屏摘出去。
  * `cur` 是这台设备上次敲的那串（tableAddr），进来就摆在格里，重连不用再抄一遍。
+ *
+ * `scan` 是「扫一扫」那一趟（只有 App 外壳里给得出来，见 nativeScan.ts）：它读回一串**原文**，
+ * 规范化那一步仍然走上面那把尺子——**扫码就是手填的自动版**，读得出就照读得出的走，
+ * 读不出就照填错的报（只是那句说法换成 SCAN_BAD，让人知道该去扫什么）。
+ * 不给这一项就不摆那颗按钮：浏览器里扫不了，那儿没有原生插件。
  */
 export function fillAddr(
   body: HTMLElement,
@@ -346,22 +457,44 @@ export function fillAddr(
   cur: string,
   onGo: (addr: string) => void,
   onBack: () => void,
+  scan?: () => Promise<string | null>,
 ): void {
+  const hint = scan ? ADDR_SCAN : ADDR_HINT;
   const box = input('addr', cur, '192.168.1.11:5200');
-  const note = div('note', ADDR_HINT);
+  const note = div('note', hint);
   body.append(box, note);
-  foot.append(
-    button(
-      '连这张桌',
-      () => {
-        const addr = normAddr(box.value);
-        note.textContent = addr ? ADDR_HINT : ADDR_BAD;
-        if (addr) onGo(addr);
-      },
-      'btn primary',
-    ),
-    button(BACK, onBack, 'btn mini'),
+  const go = button(
+    '连这张桌',
+    () => {
+      const addr = normAddr(box.value);
+      note.textContent = addr ? hint : ADDR_BAD;
+      if (addr) onGo(addr);
+    },
+    'btn primary',
   );
+  if (scan) {
+    foot.append(
+      button(
+        '扫一扫',
+        () => {
+          void scan()
+            .then((raw) => {
+              // 人取消了（回 null）什么都不动：他没做错事，不该被弹一句
+              if (raw === null) return;
+              const addr = normAddr(raw);
+              note.textContent = addr ? hint : SCAN_BAD;
+              if (addr) onGo(addr);
+            })
+            .catch(() => {
+              // 相机没开成（没给权限最常见）：说一句，别让人对着没反应的按钮猜
+              note.textContent = SCAN_FAIL;
+            });
+        },
+        'btn',
+      ),
+    );
+  }
+  foot.append(go, button(BACK, onBack, 'btn mini'));
 }
 
 /** 候场厅／牌桌进行中那一屏的「现在该干什么」：六种处境各一句，纯函数进这儿才有闸。

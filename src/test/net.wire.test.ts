@@ -588,10 +588,29 @@ await withServer(async (port, _srv, _ws, counter) => {
   // 浏览器不把默认端口写进 Origin：http://x:80 和 Host: x 得算一个地址，不然正经页面被误杀
   const flat = await rawClient(port, '/', ['Origin: http://x:80']);
   ok('Origin 带默认端口、Host 不带：摊平了算同一个', /^HTTP\/1\.1 101 /.test(flat.head), flat.head.split('\r\n')[0] ?? '');
+  // App 外壳（APK）那条路：Capacitor 把打包好的页面从 http://localhost 递进 WebView，人再从那一页
+  // 去连**另一台机器**上的桌——Origin 是 localhost、Host 是桌的地址，两个天生对不上。
+  // 2026-10-11 真机实测：外壳里扫码、同网列表两条路都卡在这儿（403），屏上写的是「连不上 <地址>」，
+  // 看着像网络不通，其实是桌自己把话掐了。这道闸要挡的是别人家的站点，不是这一条（理由见 ws.ts 的 loopbackOrigin）
+  const shell = await rawClient(port, '/', ['Origin: http://localhost']);
+  ok(
+    'App 外壳那条路放行：Origin 是 localhost，桌在另一台机器上',
+    /^HTTP\/1\.1 101 /.test(shell.head),
+    shell.head.split('\r\n')[0] ?? '',
+  );
+  // 回环上别的端口（本机 dev 页面 http://127.0.0.1:5199）同一条理：它跟访问者同在这一台设备里
+  const loop = await rawClient(port, '/', ['Origin: http://127.0.0.1:5199']);
+  ok('回环上别的端口也放行', /^HTTP\/1\.1 101 /.test(loop.head), loop.head.split('\r\n')[0] ?? '');
   await nap(60);
-  ok('放行那几条一条没被掐', counter.open === 3 && !none.closed && !same.closed && !flat.closed);
+  ok(
+    '放行那几条一条没被掐',
+    counter.open === 5 && !none.closed && !same.closed && !flat.closed && !shell.closed && !loop.closed,
+    `连上 ${counter.open} 条`,
+  );
   same.close();
   flat.close();
+  shell.close();
+  loop.close();
   none.close();
 
   const foe = await rawClient(port, '/', ['Origin: http://evil.example']);
@@ -599,7 +618,7 @@ await withServer(async (port, _srv, _ws, counter) => {
   const opaque = await rawClient(port, '/', ['Origin: null']);
   ok('Origin 是 null（本地文件、沙箱页）也拒', /^HTTP\/1\.1 403 /.test(opaque.head), opaque.head.split('\r\n')[0] ?? '');
   await nap(60);
-  ok('被拒那两条连上没记进连接表', counter.open === 3 && foe.closed && opaque.closed);
+  ok('被拒那两条连上没记进连接表', counter.open === 5 && foe.closed && opaque.closed, `连上 ${counter.open} 条`);
   foe.close();
   opaque.close();
 });

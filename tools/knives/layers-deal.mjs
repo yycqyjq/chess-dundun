@@ -47,5 +47,13 @@ export default {
       to: '    state.log.push(`${seatName(draft.decider)} 定：从自己开始顺时针一人一张`);',
       expect: '分牌那行日志念的是这一档的口径',
     },
+    {
+      rel: 'src/core/game.ts',
+      suite: 'test:rules',
+      note: 'C 拆掉「一摞张数除不尽枚数」那道闸：一人一层拿牌时末摞短一截，短的那几层分到空位（摆完牌当场 TypeError）（2026-10-12 第二轮）',
+      from: "  if (draft.ways.includes('layered') && total % draft.stackSize !== 0)\n    throw new Error(\n      `rules.json：${at} 一共 ${total} 枚、一摞 ${draft.stackSize} 张，除不尽：末摞短一截，而「一人一层拿牌」按满摞循环，短的那几层会分到空位（要么把一摞张数改成 ${total} 的约数，要么 ways 去掉 layered）`,\n    );",
+      to: '  // 刀：这条闸拆了',
+      expect: 'parseRules 拒掉「一摞张数除不尽枚数',
+    },
   ],
 };

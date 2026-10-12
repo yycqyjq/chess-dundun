@@ -150,8 +150,8 @@ export default {
     {
       rel: 'src/web/app.ts',
       note: 'Q 候场厅那一屏退回裸 card()：半透黑底＋居中卡又叠回首页上面（批12 摘掉的就是它）',
-      from: "const { veil, head, body, foot } = page(this.root, '正连着这桌……', 'room');",
-      to: "const { veil, head, body, foot } = card(this.root, '正连着这桌……', 'room');",
+      from: "const { veil, head, body, foot } = page(this.root, roomHead(tableHost()), 'room');",
+      to: "const { veil, head, body, foot } = card(this.root, roomHead(tableHost()), 'room');",
       expect: '牌桌外那一层的六屏全走 page()，一处也没退回裸 card()',
     },
     {
@@ -167,6 +167,13 @@ export default {
       from: '.home {\n  position: fixed;\n  inset: 0;\n  z-index: 1950;',
       to: '.home {\n  position: fixed;\n  inset: 0;\n  z-index: 2500;',
       expect: '首页压在牌桌之上、任何卡之下',
+    },
+    {
+      rel: 'src/web/app.ts',
+      note: 'T 摊开新框之前不摘旧的那份：局域网下（非安全上下文）每次点都走这条兜底，点一下叠一个同样的框（2026-10-12 第二轮）',
+      from: "    host.querySelector('.report')?.remove();\n    const box = document.createElement('textarea');",
+      to: "    const box = document.createElement('textarea');",
+      expect: '摊开新框之前先把上一次那份摘掉',
     },
   ],
 };

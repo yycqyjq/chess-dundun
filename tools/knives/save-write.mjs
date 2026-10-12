@@ -46,5 +46,19 @@ export default {
       to: '  function write(): void {',
       expect: '停落盘真闩上了：收桌不再反复试写',
     },
+    {
+      rel: 'src/node/room.ts',
+      note: 'E 收杆不看「这桌散过没有」：散桌 → Ctrl-C → 重启，那份空桌又躺回硬盘上被 restore 接回来（2026-10-12 第二轮）',
+      from: '      if (!discarded) write();',
+      to: '      write();',
+      expect: '收杆之后存档不许复活（散桌 → Ctrl-C → 重启不该又接回一张空桌）',
+    },
+    {
+      rel: 'src/node/room.ts',
+      note: 'F 抹存档那两下不兜底：这颗从一秒一次的表里调，抛出去就是 uncaughtException 带走全桌（2026-10-12 第二轮）',
+      from: "    try {\n      rmSync(savePath, { force: true });\n      // 原子写那颗中转名也一起抹：上回写一半没换上去的，不该在散桌之后还躺在硬盘上等人捡\n      rmSync(`${savePath}.tmp`, { force: true });\n    } catch (e) {\n      tell(`散桌之后存档没抹干净（${(e as Error).message}）：硬盘上那份可能还接得回来`);\n    }",
+      to: '    rmSync(savePath, { force: true });\n    rmSync(`${savePath}.tmp`, { force: true });',
+      crash: true,
+    },
   ],
 };

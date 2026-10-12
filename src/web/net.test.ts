@@ -189,6 +189,33 @@ function make(now?: () => number): { link: Link; sock: () => FakeSocket; log: st
   link.close();
 }
 
+// ---------- 手上有条连接停在 CLOSING：不许当场另开一条 ----------
+{
+  // 那颗「刷新」原来写的是 `ws.readyState <= OPEN ? ws.close() : this.open()`，那个 else 是个坑：
+  // 旧连接正停在 CLOSING（close 握手还没走完）时，当场新建一条挂到 `this.ws` 上；
+  // 旧连接那条 `onclose` 随后才到，无条件 `this.ws = null`（抹掉的是新那条的引用）并再排一次重连——
+  // 结果两条活连接一起喂 `onMsg`，中间那段 `online` 读的是空引用、outbox 补发不出去。
+  // 触发窗口：连点「刷新」，或者切回标签页那一下撞在 close 握手上。
+  made.length = 0;
+  const { link, sock } = make();
+  const s = sock();
+  s.raise();
+  // 真实浏览器里 close() 之后这条停在 CLOSING（握手没走完），onclose 还没到
+  s.readyState = 2;
+  const before = made.length;
+  link.retry();
+  ok(
+    '手上那条停在 CLOSING 时不当场另开一条（原来那个 else 会新建一条，随后被旧 onclose 抹掉引用、再排一条，两条活连接一起喂）',
+    made.length === before,
+    `开了 ${made.length - before} 条`,
+  );
+  ok('这条被就地 close 掉了：置空 + close 对 CONNECTING/OPEN/CLOSING 三种都成立，重连只排一次', s.readyState === 3, `readyState=${s.readyState}`);
+  // close 之后 onclose 排的那条重连到点，才真正新开——而且只有一条
+  await sleep(1200);
+  ok('旧那条的 onclose 排了一条重连，且只有一条', made.length === before + 1, `一共开了 ${made.length} 条`);
+  link.close();
+}
+
 // ---------- 桌上安静：那是对面在想牌，不是断了 ----------
 {
   made.length = 0;

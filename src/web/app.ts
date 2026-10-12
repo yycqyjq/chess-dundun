@@ -11,13 +11,15 @@ import { pieceLabel, type Piece } from '../core/pieces.ts';
 import { nextDrawer, openMatch, winners, type MatchBook } from '../core/match.ts';
 import { mulberry32 } from '../core/rng.ts';
 import { aliveSeats, deckFor, hydrate, type SeatInfo, type Seats, type TableStatus, type ToClient } from '../net/wire.ts';
-import { LIST_REFRESH_MS, peerNote, type FoundRoom } from '../net/discover.ts';
+import { LIST_REFRESH_MS, peerNote, SWEEP_MS, type FoundRoom } from '../net/discover.ts';
 import { ABOUT_RULES, aboutMeta } from './aboutText.ts';
 import { ctrlLift, draftShape, handCramped, labelBands, LABEL_W, layout, maxStacks, pieceSize, stackSpots, type Board, type TableView } from './board.ts';
 import { recallSolo, rememberSolo } from './net.ts';
-import { appVersion, autoSeat, BACK, entryHead, fillAddr, homePanel, hostHanded, hostJump, inAppShell, initialScreen, inviteUrls, lobbyGuide, peerEmpty, roomRow, seatOption, seatRowText } from './home.ts';
+import { ALT_ADDR, appVersion, autoSeat, BACK, BACK_LIST, backFlash, dropFlash, entryHead, fillAddr, homePanel, hostHanded, hostJump, inAppShell, initialScreen, inviteUrls, LIST_ALT, lobbyGuide, peerEmpty, roomFailHead, roomHead, roomRow, ROOM_FAIL, seatNotice, seatOption, seatRowText, staleTable, takenFlash, type SeatWarn } from './home.ts';
 import { aiActionFor, bookLine, closedTable, newGameState, reportText, settleMatch, stepAndMask, type OnTable } from './local.ts';
-import { deviceNick, forget, Link, recall, remember, setTableAddr, shouldWake, tableAddr } from './net.ts';
+import { nativeSweep } from './nativeDiscover.ts';
+import { nativeScan, nativeScanAvailable } from './nativeScan.ts';
+import { deviceNick, forget, Link, recall, remember, setTableAddr, shouldWake, tableAddr, tableHost } from './net.ts';
 import { MOVE_MS, Pieces } from './pieces.ts';
 import { rules } from './rules.ts';
 import { Sound } from './sound.ts';
@@ -25,6 +27,7 @@ import {
   buildShell,
   button,
   div,
+  isTouch,
   page,
   paintChip,
   popup,
@@ -102,6 +105,19 @@ function rollSeed(): number {
  */
 const SEARCHING = '正在这块网上寻一圈……';
 
+/**
+ * App 外壳里那一屏空着时的那句说明。浏览器那头空清单由 peerNote 现给（「照上面那条局域网地址手动敲」），
+ * 可外壳里那一屏压根没有「上面那条地址」——能走的是列表底下那行次要入口（LIST_ALT），
+ * 指错地方等于把人引到一条不存在的路上。所以那句里引的就是那行按钮上的字，一处改两处跟着。
+ */
+const APP_EMPTY = `一台都没寻到：多半是这块网不让设备之间互访（访客网络、开了 AP 隔离的路由器常这样）。点下面那行「${LIST_ALT}」，把另一台电脑上那桌的地址抄进来、或者扫它候场厅里那张码，一样进得来`;
+
+/**
+ * 外壳里那一屏寻不动时的一句实话：Capacitor 在、可这个插件没打进包里（老包、或者网页比壳子新）。
+ * 这不是「这一圈没寻到」，是「这一头压根没这本事」——两件事分着说，人才知道下一步往哪儿走。
+ */
+const NO_SWEEP = `这台设备发不出同网寻呼：点下面那行「${LIST_ALT}」把另一台电脑上那桌的地址抄进来`;
+
 export class App {
   private shell!: Shell;
   private pieces!: Pieces;
@@ -121,8 +137,19 @@ export class App {
   private spots: { x: number; y: number; w: number; h: number }[] = [];
   /** 桌面在视口里的位置，只随尺寸变化重算（见 measureBoard）：pointermove 里现量 DOM 会把「改 transform → 强制重排」串成每帧一次 */
   private boardRect = { left: 0, top: 0 };
-  /** 这台设备有没有真正的鼠标：没有就没有 hover，摊开/亮牌全改成点一下 */
-  private hasHover = window.matchMedia('(hover: hover)').matches;
+  /**
+   * 这一刻在台面上动的是鼠标还是手指。**按真见到的指针类型分**，不拿设备能力猜。
+   *
+   * 原来这儿是一句 `matchMedia('(hover: hover)')`：设备说「有 hover」就走鼠标那一套（摊开靠 hover）。
+   * 2026-10-11 安卓真机撞了——那台机器的 WebView 报「有 hover」，可手指点下去根本没有**持续的** hover：
+   * 一次点按的 hover 在抬指那一刻就没了，于是台面永远停在「摊开」那一步，第二下点上去还是摊开，抽不走。
+   * （截图里那句提示写的是「鼠标压上来那一摞就摊开」，正是设备骗过了媒体查询的铁证。）
+   *
+   * 现在只有**指针事件自己报的类型**说了算：`pointerdown`／`pointermove` 上各记一笔（见 notePointer），
+   * hover 那几个处理器一律只认非 touch 的指针（见 wire）。页面刚打开还没见着任何指针时，
+   * 先照「有没有触摸屏」猜一个——手机上 `(any-pointer: coarse)` 会命中，猜错的窗口也就第一次真指针动之前那一小段。
+   */
+  private pointer: 'mouse' | 'touch' = window.matchMedia('(any-pointer: coarse)').matches ? 'touch' : 'mouse';
   private sound = new Sound();
   private ask: ((a: Action | null) => void) | null = null;
   /** 暗棋里这一墩的日志从第几行起还不能给看；-1 = 没有藏着 */
@@ -160,6 +187,8 @@ export class App {
     veil: HTMLElement;
     note: HTMLElement;
     fill: (l: Seats) => void;
+    /** 一次快照都没到手就断了＝压根没连上：这一屏换成「连不上 <地址>」+ 两条出路。回 true 表示归它管了 */
+    fail: () => boolean;
   } | null = null;
   /**
    * 同网桌列表那一层；null = 没站着。同网别的桌只有这一处看得见——候场厅里不摆第二份：
@@ -172,6 +201,11 @@ export class App {
   private awaitFind = false;
   /** 这一屏拿到过一份清单了没：拿到之后就不在每轮寻呼时摆「正在寻」，省得那行字每五秒闪一下 */
   private listed = false;
+  /**
+   * 这一屏的寻呼走哪条路：true＝原生插件自己发（App 外壳，见 findNative），false＝本机宿主代跑（浏览器）。
+   * 进这一屏时定下来：这一趟是哪种壳，这一屏就一直是哪种，不必每轮再问一遍。
+   */
+  private listNative = false;
   /**
    * 这一趟进候场厅是谁开的口：'create'＝在这台机器开一桌（该自动落到房主位），
    * 'invite'＝拿着地址或扫码进来（递 -1 由桌挑一把空椅：房主位空着时桌给的就是它，有人拿着才往后挑）。
@@ -191,6 +225,13 @@ export class App {
   private netNote = '';
   /** 这条连接是不是正等着桌把椅子认回来：这期间来的 reject 说的都是「座位没了」 */
   private reseat = false;
+  /**
+   * 手上这份座位表是**什么时候**到手的。掉线那三十秒的倒计时是本地从这儿往下数的：
+   * 快照不是每秒一份（掉线那一刻一份、到点接手再一份），拿桌给的那个数当锚点才走得动。
+   */
+  private seatsAt = 0;
+  /** 轻提醒上那句的上一版：跟这一版一样就不写 DOM，省得每秒白改一次 */
+  private noticeText = '';
 
   constructor(private root: HTMLElement) {
     // 地址是别人给的那就是来入桌的，直接进候场厅；本机自己打开才先落在首页，由人自己挑玩法
@@ -201,8 +242,12 @@ export class App {
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState === 'visible' && this.link) this.link.retry();
     });
-    // 看门狗跟这条连接一样长：没连着就是每秒一次空转。安静多久该问一声、问而不答该不该拆线，全在 Link.beat 里
-    window.setInterval(() => this.link?.beat(), 1000);
+    // 看门狗跟这条连接一样长：没连着就是每秒一次空转。安静多久该问一声、问而不答该不该拆线，全在 Link.beat 里。
+    // 顺手每秒把掉线那条轻提醒的倒计时往下推一格：快照不是每秒一份，屏上那个数得自己走
+    window.setInterval(() => {
+      this.link?.beat();
+      this.paintNotice();
+    }, 1000);
   }
 
   // ---------- 首页 ----------
@@ -220,7 +265,7 @@ export class App {
       homePanel(
         () => this.pickTable(),
         () => this.showList(),
-        // 外壳里那块上第二行字不一样：那一头寻不了同网的桌、也没法在自己这台开一桌
+        // 外壳里那块上第二行字不一样：那一头在自己这台开不了桌（桌是 Node 那张），同网寻呼改由原生插件自己发
         inAppShell(),
         () => this.showAbout(),
         () => this.showSettings(),
@@ -278,37 +323,50 @@ export class App {
 
   /**
    * 点首页那块「本地联机」落在这一屏：同网有没有桌在等人一眼看得见，不用先在自己这台开一张。
-   * 浏览器发不了 UDP，寻一圈仍由本机那个宿主代跑（一句 find 递出去）；
-   * 它那儿有 SWEEP_MIN_MS 那道闸，所以这一屏五秒一轮不会把这块网刷爆。
-   * 底栏那两颗归 foot 钉住：手机上列表长过一屏，「开一桌」跟着滚就等于要人先滚到底再摸黑点。
-   * App 外壳里这一屏换成手填桌地址（showAddr）：那一头既没有本机宿主可让它的 UDP，也没有一张桌可开。
+   * 寻一圈这件事两条路：浏览器发不了 UDP，由本机那个宿主代跑（一句 find 递出去），
+   * 它那儿有 SWEEP_MIN_MS 那道闸，所以这一屏五秒一轮不会把这块网刷爆；
+   * App 外壳里没有那个宿主，改由原生插件自己发（findNative）。
+   * 两条路点进一张桌的办法也不一样（2026-10-11 用户实测：点列表跳去了浏览器）：
+   * 浏览器里那一行是真 <a>，让浏览器自己跳一趟；外壳里那一行是按钮，走 enterRoom 由壳自己开 ws
+   * （两副面孔的口径见 home.ts 的 roomRow）。
+   * 外壳里还开不了桌（桌是 Node 那张），底栏就只剩一颗「返回」——「手填／扫码」降成列表底下
+   * 那行次要入口（LIST_ALT）：寻呼＋扫码才是主路，手填是兜底，不该占底栏那颗主按钮的位置。
+   * 底栏那颗归 foot 钉住：手机上列表长过一屏，它跟着滚就等于要人先滚到底再摸黑点。
    */
   private showList(): void {
-    if (inAppShell()) {
-      this.showAddr();
-      return;
-    }
     this.closeRoom();
     if (this.list) {
       this.findNow();
       return;
     }
     for (const el of this.root.querySelectorAll('.sheet')) el.remove();
-    this.link ??= new Link({
-      onMsg: (m) => this.onPush(m),
-      onStatus: (text) => this.onNet(text),
-      onReady: () => this.onReady(),
-    });
+    // 走哪条路进来时就定下：外壳里不建那条 WebSocket——那一头没有本机宿主，
+    // 连上去只会每隔几秒甩一句「和桌断了，正在重连…」盖掉「正在寻」，而它压根没打算连谁。
+    this.listNative = inAppShell();
+    if (!this.listNative) {
+      this.link ??= new Link({
+        onMsg: (m) => this.onPush(m),
+        onStatus: (text) => this.onNet(text),
+        onReady: () => this.onReady(),
+      });
+    }
     // 标题就是首页那块的名字：同一件事在两处换了写法，人就该怀疑这是两个地方
     const { veil, body, foot } = page(this.root, entryHead('room'));
     const rows = div('peer-list');
     const note = div('note', SEARCHING);
     body.append(rows, note);
+    // 外壳里多这一行：手填／扫码（原来它是底栏那颗主按钮，2026-10-11 用户拍板降级）
+    if (this.listNative) {
+      const alt = div('list-alt');
+      alt.append(button(LIST_ALT, () => this.showAddr(), 'btn mini'));
+      body.append(alt);
+    }
     this.list = { veil, rows, note };
     this.listed = false;
     const out = div('sheet-row');
+    // 外壳里开不了桌，底栏就一颗「返回」；浏览器那头照旧是「在这台机器开一桌」+「返回」
+    if (!this.listNative) out.append(button('在这台机器开一桌', () => this.openRoom('create'), 'btn primary'));
     out.append(
-      button('在这台机器开一桌', () => this.openRoom('create'), 'btn primary'),
       button(
         BACK,
         () => {
@@ -330,11 +388,16 @@ export class App {
    * 原来这儿是「发不出去就写一句『这条线还没连上』」，可第一轮**几乎总是**赶在握手之前：
    * 人一进这一屏先看见一句吓人的断线提示，紧接着那句又被 onNet 擦成空白，
    * 下一轮要等 LIST_REFRESH_MS 五秒才来，头六秒屏上什么都没有（2026-10-09 用户：「像有 bug」）。
+   * App 外壳里没有那条线，寻呼由原生插件自己发（findNative），这一支连握手都不必等。
    */
   private findNow(): void {
     if (!this.list) return;
     // 已经有清单了就不摆「正在寻」：每五秒把结果换成它再换回来，是拿那行字在那儿闪
     if (!this.listed) this.list.note.textContent = SEARCHING;
+    if (this.listNative) {
+      void this.findNative();
+      return;
+    }
     const link = this.link;
     if (!link?.online) {
       this.awaitFind = true;
@@ -344,6 +407,31 @@ export class App {
     link.send({ t: 'find' });
   }
 
+  /**
+   * App 外壳里的那一轮寻呼：原生插件（LanSweep）自己发 UDP 广播、收一圈回包。
+   * 跟电脑那一头同源——口令、槽位、广播地址算法全在 discover.ts，插件只搬字节。
+   * 收包窗口有 SWEEP_MS 那么长，所以这一趟天然比宿主那条路慢一拍；
+   * 「正在寻」那行字正好把这段时间填上，不必另摆个转圈。
+   * 插件不在（老包、或者网页比壳子新）、或者这一趟没跑成（没网卡、权限没给）都算
+   * 「这一头没这本事」——回 NO_SWEEP 说清楚，别当成「这一圈没寻到」让人对着空清单猜。
+   * 收包回来时人可能已经走了（list 撤了）：那就一个字都不写，别往一块撤了的屏上画。
+   */
+  private async findNative(): Promise<void> {
+    let found: FoundRoom[] | null = null;
+    try {
+      found = await nativeSweep(SWEEP_MS);
+    } catch {
+      found = null;
+    }
+    if (!this.list) return;
+    if (found === null) {
+      this.list.note.textContent = NO_SWEEP;
+      return;
+    }
+    // why 只在清单空着时念（peerNote 有结果就换成那句数目）：空着时点它去列表底下那行次要入口（LIST_ALT）
+    this.paintList(found, APP_EMPTY);
+  }
+
   /** 这一页收掉：那一轮一轮的 find 得跟着停，人都不在这儿了还朝这块网打包没道理 */
   private stopList(): void {
     if (!this.list) return;
@@ -351,12 +439,21 @@ export class App {
     this.findTimer = 0;
     this.list.veil.remove();
     this.list = null;
+    // 寻呼那趟可能还在收包（原生那一路是异步的），等它回来时 this.list 已经空了：
+    // findNative 头一句就拦住了。这儿顺手把路子也归零，免得哪条早退的分支漏了重设。
+    this.listNative = false;
   }
 
   /**
-   * App 外壳里那一屏「本地联机」：版面归 home.ts 的 fillAddr（判断在那儿才有闸），这儿只管挂上、连、走。
+   * 「手填桌地址」那一屏：同网寻不到、这一头发不出寻呼、或者某张桌连不上时，人自己把地址弄进来。
+   * 两个入口落到这儿：列表底下那行次要入口（LIST_ALT）、候场厅连不上时那颗「换个地址」（ALT_ADDR）。
+   * 版面归 home.ts 的 fillAddr（读地址那把尺子在那儿才有闸），这儿只管挂上、连、走。
    * 连之前先把上一张桌那条线拆了：地址换了就是另一张桌，旧线留着只会让人对着「正在重连」等一张已经不在了的桌。
-   * 进来落 'invite' 那一档（照扫码那条路走：递 -1 让桌挑一把空椅）——外壳里开不了桌，房主永远是另一台机器。
+   * 进来落 'invite' 那一档（照扫码那条路走：递 -1 让桌挑一把空椅）——这一头开不了桌，房主永远是另一台机器。
+   *
+   * 外壳里多给一颗「扫一扫」：另一台设备（电脑）候场厅里就摆着这张桌的码，扫它比抄地址顺手。
+   * 有没有这本事问 nativeScanAvailable()——浏览器里没有那个原生插件，扫不了，就别摆那颗按钮；
+   * 扫回来的原文仍走 fillAddr 里那把尺子，跟手敲的是同一条路。
    */
   private showAddr(): void {
     this.closeRoom();
@@ -374,23 +471,43 @@ export class App {
         this.openRoom('invite');
       },
       () => this.showHome(),
+      nativeScanAvailable() ? nativeScan : undefined,
     );
   }
 
-  /** 寻回来的桌：整行是热区，点哪儿都进桌。列表页整块重画（这一层一秒不刷）；一条都没有就摆空状态那一格 */
+  /**
+   * 寻回来的桌：整行是热区，点哪儿都进桌。列表页整块重画（这一层一秒不刷）；一条都没有就摆空状态那一格。
+   * 外壳里那一行是**按钮**，点它走 enterRoom（壳自己开 ws）；浏览器里那一行还是真 <a>，由浏览器自己跳
+   * ——两副面孔的理由写在 home.ts 的 roomRow 头上。
+   */
   private paintList(list: FoundRoom[], why: string): void {
     const page = this.list;
     if (!page) return;
     this.listed = true; // 有结果了：后面每一轮寻呼就不再摆「正在寻」，只等结果回来换字
     page.rows.innerHTML = '';
+    const pick = this.listNative ? (room: FoundRoom): void => this.enterRoom(room) : undefined;
     if (list.length) {
-      for (const f of list) page.rows.append(roomRow(f));
+      for (const f of list) page.rows.append(roomRow(f, pick));
       page.note.textContent = peerNote(list, why);
     } else {
       // 空的时候那句说明不飘在页脚了——它本来就是空状态的第二行字，跟着那一格摆（口径还是 peerNote 现给，不另养一份）
       page.rows.append(peerEmpty(peerNote([], why)));
       page.note.textContent = '';
     }
+  }
+
+  /**
+   * 从同网列表点进一张桌——**外壳里那条路**。
+   * 外壳的页面住在设备自己身上（`http://localhost`），列表那一行要是真 `<a>`，
+   * 一按就被 Capacitor 甩给系统浏览器，人根本没进到 app 里（见 home.ts 的 roomRow）。
+   * 所以这一头把地址记下来、壳自己开一条 ws：跟扫码／手填走的是同一条（setTableAddr + openRoom('invite')），
+   * 顺带把上一张桌那条线拆了——地址换了就是另一张桌。
+   */
+  private enterRoom(f: FoundRoom): void {
+    setTableAddr(`${f.ip}:${f.port}`);
+    this.link?.close();
+    this.link = null;
+    this.openRoom('invite');
   }
 
   // ---------- 开桌 ----------
@@ -479,7 +596,8 @@ export class App {
     }));
     // 标题和内容归 body 滚，那几颗按钮归 foot 钉住；两列（配置／椅子）是 CSS 的事，
     // 手机上就是 cfg-col → seat-col 的自然顺序，一路单列滚到底
-    const { veil, head, body, foot } = page(this.root, '正连着这桌……', 'room');
+    // 标题带上「连的是哪台」：连不上时同一句只换个词（roomFailHead），人一眼看得出地址抄错没有
+    const { veil, head, body, foot } = page(this.root, roomHead(tableHost()), 'room');
     // 「现在该干什么」置顶：这一屏每块都有自己的道理，没人替人说这句——按六种处境各给一句（home.ts 的 lobbyGuide）
     const guide = div('guide');
     const cfg = div('room-cfg');
@@ -495,10 +613,14 @@ export class App {
     cfgCol.append(cfg, note, cta);
     seatCol.append(rows, handed);
     body.append(guide, cfgCol, seatCol);
+    // 收到过至少一份座位表：有了它这一屏才不是空架子，也才谈得上「断线重连」
+    let filled = false;
+    // 一次快照都没到手就断了：这不是断线，是压根没连上——这一屏得说实话、给条出路
+    let failed = false;
     const out = div('sheet-row');
     // 底栏这几颗一秒问一回，只改字、不拆了重搭：它们现在正对着拇指，重建会吞掉按到一半的那一下
     const start = button(
-      '',
+      '开始这一局',
       () => {
         // 按下就本地置灰：座位表要等下一份快照（≤1s）才回来，这中间连点会重复递 start
         start.disabled = true;
@@ -507,8 +629,13 @@ export class App {
       'btn primary',
     );
     const leave = button(
-      '',
+      BACK,
       () => {
+        // 连不上那一档：这一颗改念「回去重选一张」——人压根没进到桌里，该回列表重挑，不是「离开这桌」
+        if (failed) {
+          this.showList();
+          return;
+        }
         // 这一颗只做一件事：离开这一桌，回到「本地联机」那一屏。椅子留给令牌，回来凭它还坐这一位。
         // 它不再兼任「看牌桌」——那一屏整屏盖着牌桌，掀开看见的其实是首页，那颗按钮撒了谎。
         // 只剩自己一个活人时先问一句再散桌（口径见 exitTable）；站着看桌的人不该有这一问
@@ -556,8 +683,31 @@ export class App {
         ),
       'btn mini',
     );
+    // 一次快照都没到手时它凭什么露脸：这本账活在桌那边，这一头还不知道打到第几局。
+    // 露脸的事交给 fill()（那会儿才读得到 gameNo），在那之前先藏着——不然底栏会摆一颗按了没用的。
+    clear.hidden = true;
+    // 连不上那一档才露的第二条路：地址抄错了就改地址，桌换了就回列表重挑
+    const alt = button(ALT_ADDR, () => this.showAddr(), 'btn mini');
+    alt.hidden = true;
+    /**
+     * 一次快照都没到手就断了——这不是「断线重连」，是压根没连上：标题换成「连不上 <地址>」，
+     * 摆上那句实话，底栏补一颗「换个地址」、那颗出口改念「回去重选一张」。
+     * 回 true 表示这一屏已经归这一档管，调用方别再拿「正在重连」盖上去。
+     * 连上过一次就不再进这一档（filled）：那才是真的断线重连，说「正在重连」是对的。
+     */
+    const fail = (): boolean => {
+      if (filled) return false;
+      if (!failed) {
+        failed = true;
+        head.textContent = roomFailHead(tableHost());
+        note.textContent = ROOM_FAIL;
+        alt.hidden = false;
+        leave.textContent = BACK_LIST;
+      }
+      return true;
+    };
     seatCol.append(inviteWrap);
-    out.append(leave, retry, clear);
+    out.append(alt, leave, retry, clear);
     foot.append(out);
     let seatsFor = -1;
     let cfgKey = '';
@@ -571,6 +721,13 @@ export class App {
     let handDue = 0;
 
     const fill = (l: Seats) => {
+      // 连上过一份座位表了：这一屏不再是空架子，「连不上」那一档跟着撤（标题／那句话／底栏都归位）
+      filled = true;
+      if (failed) {
+        failed = false;
+        alt.hidden = true;
+        note.textContent = '';
+      }
       this.status = l.status;
       this.hostSeat = l.hostSeat;
       const waiting = l.status === 'waiting';
@@ -722,10 +879,13 @@ export class App {
         if (!this.seated) {
           const seat = autoSeat(l, recall(), creating);
           if (seat !== null) this.takeSeat(seat);
+          // 「在这台机器开一桌」撞上本机桌上还压着上一桌（宿主被强杀／断电那种留下的，判据见 staleTable）：
+          // 问一句。桌上还有别的活人连着就不问——那不是我该替他散的东西；没坐下也不问，散桌得是房主位
+          if (creating && seat !== null && aliveSeats(l.seats) === 0 && staleTable(l)) this.askStale(l);
         }
       }
     };
-    this.room = { veil, note, fill };
+    this.room = { veil, note, fill, fail };
     link.askLobby();
     // 谁进谁出得看得见：站在这儿就一秒问一遍
     this.poll = window.setInterval(() => link.askLobby(), 1000);
@@ -807,7 +967,11 @@ export class App {
     if (this.shell) this.paintMeta();
     // 候场厅摊着时那块就是唯一的落脚处：那会儿连台面都还没搭，toast 没地方放。
     // 连回来（text 空）也要擦：不擦那句「和桌断了」会赖在那儿，人以为还断着
-    if (this.room && (text || back)) this.room.note.textContent = text;
+    if (this.room) {
+      // 一次快照都没到手就断了：那一档自己会写「连不上 <地址>」和那句实话，别再拿「正在重连」盖上去
+      const handled = text !== '' && this.room.fail();
+      if (!handled && (text || back)) this.room.note.textContent = text;
+    }
     // 站在列表页上同理：断线那句得写在列表底下，不然人只看见一屏不动的桌。
     // 连回来（text 空）时**不写空串**——这一屏的 note 是「正在寻」，擦成空白正是那句提示消失的原因；
     // 改成当场再寻一轮，让那行字自己回来。
@@ -954,7 +1118,12 @@ export class App {
     // 自己攒一本迟早跟桌这本对不上号
     this.book = m.book;
     this.seqDone = m.seq;
+    // 座位翻篇那一下要跟上一份比：谁掉线了、谁被电脑接手了、谁回来了——全在这一行前后
+    const wasSeats = this.seats;
     this.seats = m.seats;
+    this.seatsAt = Date.now();
+    this.seatFlash(wasSeats);
+    this.paintNotice();
     this.liveActs = m.acts;
     this.maskFrom = m.maskFrom;
     const fresh = m.view.seed !== this.openedSeed;
@@ -1131,6 +1300,9 @@ export class App {
     this.seats = null;
     this.liveActs = [];
     this.netNote = '';
+    // 下一桌重新数：那句轻提醒和倒计时锚点都跟着这一桌走，留着就是上一桌的旧账
+    this.seatsAt = 0;
+    this.noticeText = '';
     if (toList) this.showList();
     else this.showHome();
   }
@@ -1139,30 +1311,71 @@ export class App {
    * 候场厅那颗「返回」。桌上还有别的活人连着就悄悄退（椅子留给令牌，回来还坐这一位）；
    * 只剩自己一个时才先问一句——这一退就把这桌散了：椅子连令牌一起收，存档也抹掉，重启宿主接不回来。
    * 「只剩自己一个」由座位表数出来（`aliveSeats`，同一句判断在桌那头还有一道），页面上这句只是给人看的。
-   * 问一句用的还是那张弹窗卡：整屏页只给「一直待在那一层」的界面，一次性的是非题不在这儿。
    */
   private exitTable(alone: boolean): void {
     if (!alone) return this.leaveTable(true);
+    this.askDisband(
+      '返回会散掉这桌',
+      '这桌只剩你一个活人。退出去这桌就散了：椅子、令牌、局号和跨局那本账全清空，存档也抹掉——重启这台机器上的桌也接不回来。',
+      () => this.leaveTable(true),
+    );
+  }
+
+  /**
+   * 「走这一下就把整桌收掉」的那一问。候场厅的「返回」和牌桌右上角的「离桌」共用一套：
+   * 两边都落在「只剩我一个活人」上（`aliveSeats`），只是入口的名字、和退出去之后落到哪一层不同。
+   * 先把 disband 递出去再拆线：同一只 socket 上帧是排队走的，桌那头先收到散桌、再收到关闭。
+   * 点空白处不给关（lock）：这一下是把整桌收掉，误触的代价太大。
+   * 问一句用的是那张弹窗卡：整屏页只给「一直待在那一层」的界面，一次性的是非题不在这儿。
+   */
+  private askDisband(title: string, body: string, after: () => void): void {
     popup(
       this.root,
-      '返回会散掉这桌',
-      (body, close) => {
+      title,
+      (b, close) => {
         const p = div('note');
-        p.textContent =
-          '这桌只剩你一个活人。退出去这桌就散了：椅子、令牌、局号和跨局那本账全清空，存档也抹掉——重启这台机器上的桌也接不回来。';
+        p.textContent = body;
         const row = div('sheet-row');
         row.append(
           button('确认散桌', () => {
             close();
-            // 先把这一句递出去再拆线：同一只 socket 上帧是排队走的，桌那头先收到 disband、再收到关闭
             this.link?.send({ t: 'disband' });
-            this.leaveTable(true);
+            after();
           }),
           button('再坐会儿', () => close()),
         );
-        body.append(p, row);
+        b.append(p, row);
       },
-      // 这是要把整桌收掉：点空白处就关掉，误触一下代价太大
+      true,
+    );
+  }
+
+  /**
+   * 「在这台机器开一桌」撞上本机桌上还压着上一桌（判据见 home.ts 的 staleTable）时问的那一句。
+   * 不替人决定：接着打有接着打的道理（宿主被强杀前那一局也许还值得打完），
+   * 但要一张新桌，就得先把上一桌散掉——散桌那句话递给桌，抹存档、收椅子都是桌那头的事。
+   * 这会儿自己那把椅子的 join 刚递出去（见 fill 里 autoSeat 那一段）：同一只 socket 上帧是排队走的，
+   * 桌先让他坐下、再收到 disband，`bySeat === hostSeat` 才成立（这就是为什么能当场散、不用等下一份快照）。
+   */
+  private askStale(l: Seats): void {
+    popup(
+      this.root,
+      '这台机器上还压着上一桌',
+      (b, close) => {
+        const p = div('note');
+        p.textContent =
+          `上一桌停在「第 ${l.gameNo} 局」${l.status === 'playing' ? '（那一局还没打完）' : ''}。` +
+          '要接着打就留在候场厅；要新的一桌，就先把上一桌散掉——椅子、令牌、局号和跨局那本账全清空，存档也抹掉。';
+        const row = div('sheet-row');
+        row.append(
+          button('散掉，开新的一桌', () => {
+            close();
+            this.link?.send({ t: 'disband' });
+          }),
+          button('接着上一桌', () => close()),
+        );
+        b.append(p, row);
+      },
       true,
     );
   }
@@ -1489,6 +1702,10 @@ export class App {
     } catch {
       // 落不到剪贴板上，走下面这段
     }
+    // 上一次摊开的那一份先摘掉：这段兜底在局域网下**每次都会走**——页面是 `http://<IP>:端口`，
+    // 非安全上下文里 `navigator.clipboard` 压根是 undefined，`writeText` 必抛。
+    // 不摘就是点一下叠一个同样的框（2026-10-12 第二轮排查量的）。
+    host.querySelector('.report')?.remove();
     const box = document.createElement('textarea');
     box.className = 'report';
     box.readOnly = true;
@@ -1505,11 +1722,22 @@ export class App {
    */
   private resign(): void {
     const online = this.link !== null;
+    // 这桌此刻还有几个活人连着：只剩我一个时，这一走就该把整桌收掉（口径同候场厅那颗「返回」）。
+    // 别人的位子早由电脑代打着，局打没打完都散——闸在桌那头（table.ts::disband），这儿只是给人一句实话
+    const alone = online && aliveSeats(this.seats ?? []) <= 1;
     const go = () => {
       this.breakTableLoop();
       if (online) this.leaveTable();
       else this.showHome();
     };
+    if (alone) {
+      this.askDisband(
+        '离桌会散掉这桌',
+        '这桌只剩你一个活人，别的位子都是电脑在代打。走这桌就散了：椅子、令牌、局号和跨局那本账全清空，存档也抹掉——重启这台机器上的桌也接不回来。',
+        go,
+      );
+      return;
+    }
     if (this.state.phase === 'over') {
       go();
       return;
@@ -1545,17 +1773,40 @@ export class App {
       ev.preventDefault();
       this.tapFrom(ev.target);
     });
-    // 触屏没有 hover，一按就是抽牌，所以只在真有鼠标的设备上挂展开
-    if (this.hasHover) {
-      // 摊开靠的是「鼠标落进这一摞的领地」，不是某张牌自己的 enter/leave：
-      // 摊开后牌缝只有两三个像素，挂在牌上会在缝里反复合上又摊开
-      this.shell.board.addEventListener('pointermove', (ev) => this.hoverAt(ev as PointerEvent));
-      this.shell.board.addEventListener('pointerleave', () => this.hoverStack(null));
-      // 扣棋里我自己那套也扣着，鼠标压上去单独亮给我看
-      this.shell.board.addEventListener('pointerover', (ev) => this.peekPlay(ev.target as HTMLElement, true));
-      this.shell.board.addEventListener('pointerout', (ev) => this.peekPlay(ev.target as HTMLElement, false));
-    }
+    // 手指还是鼠标，先记一笔再让 click 那条路走（click 在 pointerdown 之后到，赶得上）
+    this.shell.board.addEventListener('pointerdown', (ev) => this.notePointer(ev));
+    // 摊开靠的是「鼠标落进这一摞的领地」，不是某张牌自己的 enter/leave：
+    // 摊开后牌缝只有两三个像素，挂在牌上会在缝里反复合上又摊开
+    //
+    // 这一套**一律挂着**，改成在处理器里按 this.pointer 判：一台机器上手指和鼠标都可能用，
+    // 谁最后动谁作数，挂死在某一次 wire() 的设备判断上就换不回来了。
+    // 触屏那套走「点一下摊开、再点一下抽」，所以下面四个处理器碰到 touch 指针都得让路——
+    // 尤其 pointerleave：手指抬起时它会来一下，要是不挡，刚点开的那一摞当场又被合上。
+    this.shell.board.addEventListener('pointermove', (ev) => {
+      // 鼠标一挪就把这台机器认成鼠标：开头那个「有没有触摸屏」的猜法只撑到第一次真指针动
+      const p = ev as PointerEvent;
+      this.notePointer(p);
+      this.hoverAt(p);
+    });
+    this.shell.board.addEventListener('pointerleave', () => {
+      if (this.pointer !== 'touch') this.hoverStack(null);
+    });
+    // 扣棋里我自己那套也扣着，鼠标压上去单独亮给我看
+    this.shell.board.addEventListener('pointerover', (ev) => this.peekPlay(ev.target as HTMLElement, true));
+    this.shell.board.addEventListener('pointerout', (ev) => this.peekPlay(ev.target as HTMLElement, false));
     this.watchResize();
+  }
+
+  /** 指针事件自己报的类型说了算：同一台机器上手指和鼠标都可能用，谁最后动谁作数 */
+  private notePointer(ev: PointerEvent): void {
+    const next = isTouch(ev) ? 'touch' : 'mouse';
+    if (next === this.pointer) return;
+    this.pointer = next;
+    // 手指点开的那一摞，换成鼠标时先合上：不合的话鼠标一压上来就是摊开的，看着像卡住不动
+    if (next === 'mouse' && this.view?.hover != null && this.state?.phase === 'draft') {
+      this.view.hover = null;
+      this.render(true);
+    }
   }
 
   /** 点牌／键盘按牌共用的那一段：点空白处＝收回，点到牌就走 tapPiece */
@@ -1576,6 +1827,8 @@ export class App {
   }
 
   private hoverAt(ev: PointerEvent): void {
+    // 手指挪动也会来 pointermove；摸签那套摊开在触屏上是「点」出来的，不能让手指滑过去改掉
+    if (this.pointer === 'touch') return;
     if (this.state.phase !== 'draft') return;
     // 用缓存的 boardRect，不现量 DOM：现量会把「上一步改 transform → 这一步读布局」串成每帧一次强制重排
     const x = ev.clientX - this.boardRect.left;
@@ -1586,6 +1839,8 @@ export class App {
 
   /** 亮不亮走引擎口径，这里只是把「我自己的那一套」临时借给鼠标看一眼 */
   private peekPlay(el: HTMLElement, on: boolean): void {
+    // 手指那套走「点一下摊开、再点一下收回」（见 tapPiece），不吃压上来亮一下这一路
+    if (this.pointer === 'touch') return;
     const piece = el.closest<HTMLElement>('.piece');
     if (!piece) return;
     const id = Number(piece.dataset.id);
@@ -1630,8 +1885,8 @@ export class App {
       this.tapDraftPiece(id);
       return;
     }
-    // 桌面上我自己那一套：触屏没 hover，点一下摊开亮给我看，再点一下收回
-    if (!this.hasHover) {
+    // 桌面上我自己那一套：手指没有 hover，点一下摊开亮给我看，再点一下收回
+    if (this.pointer === 'touch') {
       const mine = this.view.freeze?.find((p) => p.seat === this.me && p.ids.includes(id));
       if (mine) {
         this.togglePeek(mine);
@@ -1744,6 +1999,52 @@ export class App {
     return seat === this.me ? '你' : seatName(seat);
   }
 
+  /**
+   * 座位翻篇那一下飘一句：谁掉线了、谁被电脑接手了、谁回来了。
+   * 跟正上方那条轻提醒分工不同——那条是**常驻状态**，这三句是**刚发生**的那一下。
+   * 第一份座位表不飘（`before` 为空）：刚坐下那会儿一桌都还没连上，说谁掉线了都是冤枉。
+   */
+  private seatFlash(before: SeatInfo[] | null): void {
+    if (!before || !this.shell || !this.seats) return;
+    for (const now of this.seats) {
+      if (now.seat === this.me) continue;
+      const was = before.find((s) => s.seat === now.seat);
+      if (!was) continue;
+      const who = seatName(now.seat);
+      // 先看连没连：回来那一刻 ai 也跟着落回 false，别让「电脑接手」抢在「回来了」前头
+      if (was.online && !now.online) toast(this.shell.toast, dropFlash(who), 2400);
+      else if (!was.online && now.online) toast(this.shell.toast, backFlash(who), 1600);
+      else if (!was.ai && now.ai && now.human) toast(this.shell.toast, takenFlash(who), 2400);
+    }
+  }
+
+  /**
+   * 掉线那几位归成一句，挂在桌面正上方；一位都没有就收起来。
+   * 每秒被推一次（那句倒计时得自己走），所以字没变就不碰 DOM。
+   */
+  private paintNotice(): void {
+    if (!this.shell) return;
+    const text = this.noticeLine();
+    if (text === this.noticeText) return;
+    this.noticeText = text;
+    this.shell.notice.textContent = text;
+    this.shell.notice.classList.toggle('show', text !== '');
+  }
+
+  /**
+   * 这一屏此刻该提醒什么。只有**打牌这一档**才数掉线那三十秒——候场期压根不收这一档
+   * （那把椅子归另一条路：闲置两分钟还回桌上），拿「几秒后代打」去吓人就是撒谎。
+   * 自己那一把不算：我要是掉线了，这屏压根没人看。
+   */
+  private noticeLine(): string {
+    if (!this.seats || this.status !== 'playing') return '';
+    const left = Date.now() - this.seatsAt;
+    const warns: SeatWarn[] = this.seats
+      .filter((s) => s.seat !== this.me && s.human && !s.online)
+      .map((s) => ({ name: seatName(s.seat), leftMs: Math.max(0, s.takeoverIn - left), ai: s.ai }));
+    return seatNotice(warns);
+  }
+
   private paintChips(board: Board): void {
     const state = this.state;
     const actors = new Set(this.pending());
@@ -1836,7 +2137,7 @@ export class App {
       if (draft.stage === 'draw') {
         shell.status.textContent =
           draft.drawer === this.me
-            ? this.hasHover
+            ? this.pointer === 'mouse'
               ? '轮到你摸签：鼠标压上来那一摞就摊开，点哪张抽哪张'
               : '轮到你摸签：先点一摞把它摊开，再点你要抽的那张'
             : `${this.who(draft.drawer)} 正在摸签…`;

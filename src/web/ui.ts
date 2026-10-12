@@ -14,6 +14,12 @@ export interface Shell {
   chipEls: ChipEls[];
   /** 摸签那一排「第 N 摞」标签：每块罩住一摞的领地，只管文字，点击目标是摞里的牌 */
   pileZones: HTMLElement[];
+  /**
+   * 掉线轻提醒：钉在桌面正上方一条。谁掉线了、还剩几秒电脑接手都写在这儿。
+   * 原来这事只写在名字条那两个字里（「掉线」／「代打」），缩在座位行里没人看得见——
+   * 2026-10-11 用户：都看不到。文字由 app.ts 每秒跟着倒计时写。
+   */
+  notice: HTMLElement;
   toast: HTMLElement;
   drawer: HTMLElement;
   lines: HTMLElement;
@@ -89,7 +95,9 @@ export function buildShell(
     board.append(zone);
   }
   const ctrl = div('ctrl');
-  board.append(ctrl);
+  // 掉线轻提醒钉在桌面正上方（那一带平时空着：名字条贴的是四角）：谁掉线了一眼就看见
+  const notice = div('notice');
+  board.append(ctrl, notice);
   stage.append(board);
 
   const hint = div('status');
@@ -113,6 +121,7 @@ export function buildShell(
     chips,
     chipEls,
     pileZones,
+    notice,
     toast,
     drawer,
     lines,
@@ -230,16 +239,32 @@ export function rich(el: HTMLElement, parts: (string | { b: string })[]): void {
   }
 }
 
+/**
+ * 每条提示自己的那颗定时器。全项目十几处提示**共用同一个元素**（`shell.toast`），
+ * 所以定时器必须一条一条掐：不掐的话，先弹的那条短的（900ms 那种）到点时会
+ * 把**后弹的那条长的**（2400ms 的「和桌断了」「谁掉线了」）一起摘掉，
+ * 长话还没读完就没了（2026-10-12 第二轮排查量的）。
+ */
+const toastTimers = new WeakMap<HTMLElement, number>();
+
 /** 一句话浮在台面上。文字照原样显，别当 HTML 解析——桌上别人的代号里可能带尖括号 */
 export function toast(el: HTMLElement, text: string, ms: number): void {
+  const prev = toastTimers.get(el);
+  if (prev !== undefined) window.clearTimeout(prev);
   el.textContent = text;
   el.hidden = false;
   el.classList.remove('show');
   void el.offsetWidth;
   el.classList.add('show');
-  window.setTimeout(() => {
-    if (!el.hidden) el.classList.remove('show');
-  }, ms);
+  // 收尾那句不判 `el.hidden`：这一格从创建（`hidden = true`）之后就只有这一处在写，
+  // 永远是 false，那个判断从来没拦住过谁——真正该拦的「上一条的定时器」由上面那句 clearTimeout 管
+  toastTimers.set(
+    el,
+    window.setTimeout(() => {
+      toastTimers.delete(el);
+      el.classList.remove('show');
+    }, ms),
+  );
 }
 
 /**
@@ -316,4 +341,16 @@ export function segment<T>(
   });
   row.append(group);
   return row;
+}
+
+/**
+ * 这一下是手指点的吗。**只认事件自己报的 pointerType**，不拿设备能力猜。
+ *
+ * 原来 app.ts 用 `matchMedia('(hover: hover)')` 判「有没有鼠标」——那是**设备能力**，
+ * 安卓 WebView 会谎报 true，于是触屏走了鼠标那一套（摊开靠 hover），
+ * 可手指点下去没有**持续的** hover，台面就永远停在摊开那一步（2026-10-11 真机）。
+ * 指针事件自己报的类型不会骗人：手指就是 `'touch'`。
+ */
+export function isTouch(ev: { pointerType?: string }): boolean {
+  return ev.pointerType === 'touch';
 }

@@ -3,6 +3,7 @@
  * （它经 rules.ts 拉了 `rules.json?raw`）。所以这里不测浏览器怎么画，测这份文件本身写了什么——
  * 钉底靠的是「滚的是 .sheet-body，不是 .sheet-card」，两栏靠的是那条 820 的 media，
  * 座位行不挤靠的是 .t 落在第二行。这几句一旦被人顺手改回去，这里就红。
+ * 掉线那条轻提醒（桌面正上方）也归这儿：挂在桌上、平时不吃点击、倒计时跟着本地时间走、那句文案本体在 home.ts。
  *
  * 只读文件，不碰 DOM，所以住在 src/test（node 那侧才有 @types/node）。
  */
@@ -238,8 +239,8 @@ console.log('\n同网桌只摆一处：候场厅里不留第二份');
   ok('那一行的三排对齐到左边：共用左边缘那一根锚', val('.peer-row', 'justify-items') === 'start', val('.peer-row', 'justify-items') ?? '‹没写›');
   // 「只剩你一个」这一句得是数出来的活人，不是「我坐过椅子」；桌那头同一口径还有一道（见 net 那节的 disband）
   ok('那颗「返回」认的是「只剩一个活人」', /this\.exitTable\(this\.seated && alive <= 1\)/.test(app), '‹没找到那句›');
-  // 散桌递的是这一句，不是清账那句：递错了账归零、椅子却一把不动，人还坐在那张要散的桌上
-  ok('确认那颗递的是 disband 那句', /send\(\{ t: 'disband' \}\)/.test(app), '‹没找到那句›');
+  // 「散桌递的是 disband、不是清账那句」这条断言 2026-10-12 挪进了「离桌散桌」那一节：
+  // 宽匹配（文件里出现过 send disband）在 askStale 也添了同一句之后就永远绿了，钉不住东西
   // 「什么时候开口」那条判断住在 home.ts（hostJump，见 ui 那节）；这一句只钉调用点把顺序递对了：
   // 递反了就再没有闸——prev 变成这一份，永远 >= 0，头一份快照照样凭空念一句交接
   ok(
@@ -311,21 +312,101 @@ console.log('\n同网列表页：进屏先摆「正在寻」，第一轮寻呼�
   ok('收掉这一屏时定时器跟着停（stopList 里清 interval）', /window\.clearInterval\(this\.findTimer\);/.test(app), (app.match(/^\s*window\.clearInterval\(this\.findTimer\);.*$/m) ?? ['‹找不到›'])[0]);
 }
 
-// ---------- App 外壳那一屏：联机改成手填桌地址，寻呼那条路不跟着进去 ----------
+// ---------- App 外壳那一屏：同网照样摆列表，寻呼改由原生插件自己发 ----------
 
-console.log('\nApp 外壳：这一头没有本机宿主，同网寻呼换成手填桌地址');
+console.log('\nApp 外壳：没有本机宿主，同网寻呼改由原生插件（LanSweep）自己发');
 {
   const app = web('app.ts');
   const home = web('home.ts');
-  // WebView 里 location.host 是设备自己（那儿没有同源的一张桌），UDP 也发不出去，所以联机那一屏整个换掉
+  const native = web('nativeDiscover.ts');
+  // 2026-10-10 起外壳里也先摆同网列表：寻呼不再靠本机宿主，改由原生插件发 UDP 广播（nativeDiscover）
   ok(
-    '联机那一屏第一句就分岔：外壳里走手填地址，浏览器里照旧走同网列表',
-    /if \(inAppShell\(\)\) \{\s*this\.showAddr\(\);\s*return;/.test(app),
+    '联机那一屏不再一进来就跳手填地址（外壳里也摆列表）',
+    !/if \(inAppShell\(\)\) \{\s*this\.showAddr\(\);\s*return;/.test(app),
     (app.match(/^\s*private showList\(\): void \{.*$/m) ?? ['‹找不到那一行›'])[0],
   );
+  // 这一屏走哪条路进来时就定下：外壳里不建那条 WebSocket——那一头没有本机宿主，连上去只会甩「和桌断了」
+  ok(
+    '外壳里不建那条 WebSocket：进屏先按外壳定下走哪条路',
+    /this\.listNative = inAppShell\(\);/.test(app) && /if \(!this\.listNative\) \{\s*this\.link \?\?= new Link\(/.test(app),
+    `‹定路›=${/this\.listNative = inAppShell\(\);/.test(app)}｜‹外壳里不建线›=${/if \(!this\.listNative\) \{\s*this\.link \?\?= new Link\(/.test(app)}`,
+  );
+  // 寻呼分岔：走原生那条路时不发递给宿主的那句 find
+  ok(
+    '寻呼分岔：外壳里走原生插件，不发递给宿主的那句 find',
+    /if \(this\.listNative\) \{\s*void this\.findNative\(\);\s*return;\s*\}/.test(app),
+    (app.match(/private findNow\(\): void \{[\s\S]{0,600}?\n  \}/) ?? ['‹找不到 findNow›'])[0].replace(/\s+/g, ' ').slice(0, 220),
+  );
+  // 原生那一趟真去调插件，认话那套（口令／槽位／广播地址）跟电脑端同源，一个字没抄进 app.ts
+  ok(
+    '原生那一趟真去调插件（nativeSweep），口令那套没抄进 app.ts',
+    /await nativeSweep\(SWEEP_MS\)/.test(app) && /export async function nativeSweep/.test(native) && !/whoami\/v1|ANNOUNCE_PORT/.test(app),
+    `‹调插件›=${/await nativeSweep\(SWEEP_MS\)/.test(app)}｜‹口令抄进 app.ts 了›=${/whoami\/v1|ANNOUNCE_PORT/.test(app)}`,
+  );
+  // 外壳里开不了桌：底栏就只剩一颗「返回」；「手填／扫码」降成列表底下那行次要入口（2026-10-11 用户拍板）
+  ok(
+    '外壳里底栏不摆「在这台机器开一桌」（那一头开不了桌），那颗分岔挂在 !listNative 上',
+    /if \(!this\.listNative\) out\.append\(button\('在这台机器开一桌', \(\) => this\.openRoom\('create'\), 'btn primary'\)\);/.test(app) &&
+      /out\.append\(\s*button\(\s*BACK,/.test(app),
+    (app.match(/^\s*if \(!this\.listNative\) out\.append.*$/m) ?? ['‹找不到那颗分岔›'])[0],
+  );
+  ok(
+    '外壳里那行次要入口（手填／扫码）挂在列表底下、不在底栏',
+    /if \(this\.listNative\) \{\s*const alt = div\('list-alt'\);\s*alt\.append\(button\(LIST_ALT, \(\) => this\.showAddr\(\), 'btn mini'\)\);\s*body\.append\(alt\);/.test(app),
+    (app.match(/^\s*alt\.append\(button\(LIST_ALT.*$/m) ?? ['‹找不到那行入口›'])[0],
+  );
+  // 那行入口的样式得跟着走：只写个 class 名、CSS 里没有，它就跟底栏那些按钮长一样了
+  ok(
+    '那行入口在 CSS 里有自己的样子（.list-alt）',
+    RULES.some((r) => r.sel.includes('.list-alt')),
+    RULES.filter((r) => r.sel.includes('.list-alt')).map((r) => r.sel).join('｜') || '‹CSS 里没有 .list-alt›',
+  );
+  // 外壳里那两句空状态的话引的就是那行入口上的字：一处改两处跟着，不会一边改了另一边还指着旧按钮
+  ok(
+    '外壳里那两句空状态的话引的就是那行入口上的字',
+    /const APP_EMPTY = `[^`]*\$\{LIST_ALT\}/.test(app) && /const NO_SWEEP = `[^`]*\$\{LIST_ALT\}/.test(app),
+    (app.match(/^const APP_EMPTY = .*$/m) ?? ['‹找不到 APP_EMPTY›'])[0].slice(0, 80),
+  );
+  // 点列表那一行进桌：外壳里给回调（壳自己开 ws），浏览器里还是真 <a>（让浏览器自己跳）
+  ok(
+    '外壳里那一行给的是回调（走 enterRoom），浏览器里还是真 <a>',
+    /const pick = this\.listNative \? \(room: FoundRoom\): void => this\.enterRoom\(room\) : undefined;/.test(app) && /roomRow\(f, pick\)/.test(app),
+    (app.match(/^\s*const pick = .*$/m) ?? ['‹找不到那一行›'])[0],
+  );
+  ok(
+    'enterRoom 走的是「记下地址 ＋ 壳自己开 ws」那条（跟扫码／手填同一条）',
+    /private enterRoom\(f: FoundRoom\): void \{[\s\S]{0,240}?setTableAddr\(/.test(app) && /private enterRoom\(f: FoundRoom\): void \{[\s\S]{0,300}?this\.openRoom\('invite'\);/.test(app),
+    (app.match(/private enterRoom[\s\S]{0,300}/) ?? ['‹找不到 enterRoom›'])[0].replace(/\s+/g, ' ').slice(0, 180),
+  );
+  // 候场厅：一次快照都没到手时不许摆一副空架子（2026-10-11 用户截图：底栏一颗一个字都没有的按钮）
+  ok(
+    '底栏那颗「返回」的字搭屏时就写好了，不等快照（连不上时它改念「回去重选一张」）',
+    /const leave = button\(\s*BACK,/.test(app) && /leave\.textContent = BACK;/.test(app) && /leave\.textContent = BACK_LIST;/.test(app),
+    (app.match(/const leave = button\([\s\S]{0,60}/) ?? ['‹找不到 leave›'])[0].replace(/\s+/g, ' '),
+  );
+  ok(
+    '「清账重开」默认藏着：打到第几局是桌那边说的，没快照就没它的事',
+    /clear\.hidden = true;/.test(app) && /clear\.hidden = !\(waiting && isHost && l\.gameNo > 1\);/.test(app),
+  );
+  ok(
+    '连不上那一档：标题「连不上 <地址>」＋那句实话＋「换个地址」＋出口改「回去重选一张」',
+    /head\.textContent = roomFailHead\(tableHost\(\)\);/.test(app) &&
+      /note\.textContent = ROOM_FAIL;/.test(app) &&
+      /alt\.hidden = false;/.test(app) &&
+      /leave\.textContent = BACK_LIST;/.test(app),
+  );
+  ok(
+    '连不上那句归那一档管，不被「正在重连」盖掉；连上过一次就不再算「连不上」',
+    /const handled = text !== '' && this\.room\.fail\(\);/.test(app) && /if \(filled\) return false;/.test(app),
+  );
+  ok(
+    '连回来时那副架子归位（标题／那句话／底栏都回正常那套）',
+    /if \(failed\) \{\s*failed = false;\s*alt\.hidden = true;\s*note\.textContent = '';/.test(app),
+  );
+  ok('候场厅标题一开始就带着「连的是哪台」', /page\(this\.root, roomHead\(tableHost\(\)\), 'room'\)/.test(app));
   // 「读不出地址就别去连」这条判断得有闸，所以版面和判断都住在 home.ts；app.ts 只管挂上、连、走
   ok(
-    '那一屏的版面和尺子都在 home.ts（没写回 app.ts）',
+    '手填那一屏的版面和尺子都在 home.ts（没写回 app.ts）',
     /export function fillAddr/.test(home) && /export function normAddr/.test(home) && /fillAddr\(/.test(app) && !/function normAddr/.test(app),
   );
   // 外壳开不了桌（桌是 Node 那张），那颗按钮要是跟着抄进那一屏，人就多看见一颗按了没反应的
@@ -333,8 +414,19 @@ console.log('\nApp 外壳：这一头没有本机宿主，同网寻呼换成手�
   ok('手填那一屏没有「在这台机器开一桌」（外壳里开不了桌）', fillAt > 0 && !home.slice(fillAt).includes('在这台机器开一桌'), fillAt > 0 ? `‹那一屏的源码 ${home.length - fillAt} 字›` : '‹home.ts 里没有 fillAddr›');
   const addrAt = app.indexOf('private showAddr()');
   const addrBody = app.slice(addrAt, app.indexOf('private paintList'));
-  ok('那一屏自己是一段（showAddr 在 paintList 前面），不是截了个空串就当绿', addrAt > 0 && addrBody.length > 200, `‹截了 ${addrBody.length} 字›`);
-  ok('外壳那一屏不发寻呼那一句（没有本机宿主代跑）', !addrBody.includes('findNow()'));
+  ok('手填那一屏自己是一段（showAddr 在 paintList 前面），不是截了个空串就当绿', addrAt > 0 && addrBody.length > 200, `‹截了 ${addrBody.length} 字›`);
+  // 那一屏只管「把地址抄进来连过去」：寻呼那一句是列表页的事，别跟着抄进这一屏
+  ok('手填那一屏不发寻呼那一句（那是列表页的事）', !addrBody.includes('findNow()'));
+  // 「扫一扫」那颗只在有原生插件时才递进去：有没有这本事问 nativeScan.ts 的 nativeScanAvailable()，
+  // 别在 app.ts 里另判一遍（判错了症状是「摆了颗按了没反应的按钮」，人对着相机权限猜半天）
+  const scan = web('nativeScan.ts');
+  ok(
+    '「扫一扫」只在有原生插件时摆（浏览器里扫不了）',
+    /nativeScanAvailable\(\) \? nativeScan : undefined,/.test(addrBody) &&
+      /export function nativeScanAvailable/.test(scan) &&
+      /import \{ nativeScan, nativeScanAvailable \} from '\.\/nativeScan\.ts';/.test(app),
+    (addrBody.match(/^\s*nativeScanAvailable\(\).*$/m) ?? ['‹showAddr 里没接那颗›'])[0],
+  );
   // 那是拇指要按、又要看得清的一格：矮过 44px 就成了「热区比操作对象小」的那类毛病
   ok(
     '桌地址那一格有拇指的高度（≥44px）',
@@ -353,9 +445,12 @@ console.log('\n整屏页：三处出口同一份名字，身后不隔着半透�
   ok('那颗不再按「身后有没有牌桌」分两种名字', !/this\.shell \? '看牌桌'/.test(app) && /leave\.textContent = BACK;/.test(app));
   // 同一件事在一条链上换了三个名字（回首页／退出这桌／看牌桌），人就不知道哪一颗会把他从这桌上摘下来。
   // 后两颗分别住在 home.ts（App 外壳那一屏的版面在那儿）与关于页，所以这条数的是两份文件：漏掉哪一份都会有一屏自己改名字
-  const backs = (app.match(/button\(\s*BACK,|textContent = BACK/g) ?? []).length + (home.match(/button\(\s*BACK,/g) ?? []).length;
-  // 2026-10-09 关于页是第五屏、设置页是第六屏：出口照旧念同一份「返回」，两颗都在新增的断言里跟着数
-  ok('每一屏那颗出口念的是同一份 BACK（app.ts 五屏＋home.ts 那一屏）', backs === 6, `${backs} 处`);
+  // 数的是「出口」这一颗：BACK 后面必须紧跟逗号或分号——不这么写，BACK_LIST（「回去重选一张」）
+  // 会被当成同一个词混进来，数出来的 8 就成了假的（2026-10-11 加连不上那一档时踩的）
+  const backs = (app.match(/button\(\s*BACK,|textContent = BACK;/g) ?? []).length + (home.match(/button\(\s*BACK,/g) ?? []).length;
+  // 2026-10-09 关于页是第五屏、设置页是第六屏：出口照旧念同一份「返回」，两颗都在新增的断言里跟着数。
+  // 2026-10-11 候场厅那颗也归了这一档（它的字改成搭屏时就写，不再等快照）——六屏 + home.ts 那一屏 = 7
+  ok('每一屏那颗出口念的是同一份 BACK（app.ts 六屏＋home.ts 那一屏）', backs === 7, `${backs} 处`);
   // 标题从 home.ts 那份 ENTRY 拿：入口写的字和点进去那一屏顶上的字是同一份，改一处不会漂成两个名字
   ok(
     '两屏的标题就是首页那两块的字',
@@ -483,6 +578,288 @@ console.log('\n系列战绩：顶栏那行跟结算卡同源，一局没打完�
     (val('.stand', 'flex') ?? '').includes('100%'),
     val('.stand', 'flex') ?? '‹没写›',
   );
+}
+
+// ---------- 掉线轻提醒：谁掉线了、还剩几秒电脑接手（用户点名：那两个字缩在座位行里都看不到） ----------
+
+console.log('\n掉线轻提醒：桌面正上方那条，掉线时带倒计时、被接手后换一句');
+{
+  const app = web('app.ts');
+  const home = web('home.ts');
+  const ui = web('ui.ts');
+  const table = readFileSync(new URL('../node/table.ts', import.meta.url), 'utf8');
+
+  // 那一条挂在桌面上（不是浮在屏幕中央的 toast）：钉四角的名字条中间那一带平时空着
+  ok(
+    '外壳里真有那么一条，钉在桌面上（board.append(ctrl, notice)）',
+    /board\.append\(ctrl, notice\);/.test(ui) && /notice: HTMLElement;/.test(ui),
+    (ui.match(/board\.append\(ctrl, notice\);/) ?? ['‹没挂上›'])[0],
+  );
+  ok(
+    '它在 CSS 里有个「平时不露脸、该露才露」的样子（.notice / .notice.show）',
+    RULES.some((r) => r.sel === '.notice') && RULES.some((r) => r.sel === '.notice.show'),
+    RULES.filter((r) => r.sel.startsWith('.notice')).map((r) => r.sel).join('｜') || '‹CSS 里没有 .notice›',
+  );
+  // 平时不露脸：它是提醒，不是挡在桌上的东西——不吃点击
+  ok(
+    '不露脸时也不吃点击（pointer-events: none）',
+    (val('.notice', 'pointer-events') ?? '') === 'none',
+    val('.notice', 'pointer-events') ?? '‹没写›',
+  );
+  // 那句话本体住在 home.ts：app.ts 只管挂上、每秒推一格
+  ok(
+    '那句话本体住在 home.ts（app.ts 里没有第二份）',
+    /export function seatNotice\(/.test(home) && !/掉线了 · \$\{/.test(app),
+    (home.match(/export function seatNotice\(.*/) ?? ['‹没找到 seatNotice›'])[0],
+  );
+  ok(
+    '一位都没掉线就回空串（那条轻提醒不露脸）',
+    /if \(list\.length === 0\) return '';/.test(home),
+  );
+  ok(
+    '还没被接手的优先念，倒计时取的是最近的那位（Math.min）',
+    /const pending = list\.filter\(\(s\) => !s\.ai\);/.test(home) &&
+      /Math\.min\(\.\.\.pending\.map\(\(s\) => s\.leftMs\)\)/.test(home),
+  );
+  // 倒计时得跟着本地时间往下走：快照不是每秒一份，光把桌给的数摆上去就是一个冻住的数
+  ok(
+    '倒计时跟着本地时间往下走（拿桌给的锚点减本地过了多久）',
+    /leftMs: Math\.max\(0, s\.takeoverIn - left\)/.test(app) && /const left = Date\.now\(\) - this\.seatsAt;/.test(app),
+    (app.match(/leftMs: Math\.max\(0, s\.takeoverIn - left\)/) ?? ['‹没接上倒计时›'])[0],
+  );
+  // 每秒推一格：那个数才会走
+  ok(
+    '每秒推一次（1 秒那条 ticker 里也调 paintNotice）',
+    /window\.setInterval\(\(\) => \{\s*this\.link\?\.beat\(\);\s*this\.paintNotice\(\);\s*\}, 1000\);/.test(app),
+    (app.match(/window\.setInterval\([\s\S]{0,120}?\}, 1000\);/) ?? ['‹找不到那条 ticker›'])[0].replace(/\s+/g, ' '),
+  );
+  // 只有打牌这一档才数那三十秒：候场期那把椅子归另一条路，别拿「几秒后代打」吓人
+  ok(
+    '只有打牌这一档才给倒计时（候场期那条椅子归另一条路）',
+    /if \(!this\.seats \|\| this\.status !== 'playing'\) return '';/.test(app),
+  );
+  // 翻篇那一下另飘一句：掉线、电脑接手、回来——三句都得住 home.ts
+  ok(
+    '翻篇那三句（掉线／电脑接手／回来）都住在 home.ts',
+    /export function dropFlash\(/.test(home) &&
+      /export function takenFlash\(/.test(home) &&
+      /export function backFlash\(/.test(home),
+  );
+  ok(
+    '那份座位表到手时接上了：翻篇飘一句、那条轻提醒跟着重画',
+    /const wasSeats = this\.seats;/.test(app) && /this\.seatFlash\(wasSeats\);\s*this\.paintNotice\(\);/.test(app),
+  );
+  // 服务端得给那个锚点：快照不是每秒一份，没这个数客户端就只能瞎猜
+  ok(
+    '服务端把「还剩多久接手」当锚点发下来（seatInfo 里按 TAKEOVER_MS 算）',
+    /takeoverIn:[\s\S]{0,180}?TAKEOVER_MS - \(t - s\.gone\)/.test(table),
+  );
+}
+
+// ---------- 摸签那套按「真见到的指针类型」分，不拿设备能力猜（2026-10-11 安卓真机：点得开、抽不走） ----------
+
+console.log('\n摸签交互：手指和鼠标分两套，判据是指针事件自己报的类型');
+{
+  const app = web('app.ts');
+  const ui = web('ui.ts');
+  // 注释里会提到那句旧写法（讲清为什么拆它），别让注释把人绊倒：这几条断言扫的是代码本身
+  const appCode = app.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[ \t]*\/\/.*$/gm, '');
+
+  // 根子上的那条：`(hover: hover)` 是设备能力，安卓 WebView 谎报 true，
+  // 于是触屏走了鼠标那一套（摊开靠 hover），而手指点下去没有持续的 hover ⇒ 永远停在摊开那一步
+  ok(
+    '不再拿设备能力猜指针（app.ts 的代码里没有 (hover: hover) 那一句）',
+    !/\(hover: hover\)/.test(appCode),
+    (appCode.match(/.*\(hover: hover\).*/) ?? ['‹没有›'])[0].trim(),
+  );
+  ok(
+    '那面旧旗子（hasHover）整个拆了，没留半截',
+    !/hasHover/.test(appCode),
+    (appCode.match(/.*hasHover.*/) ?? ['‹没有›'])[0].trim(),
+  );
+  // 判据落在指针事件自己报的类型上，且只认 touch（ui.ts 那一处口径）
+  ok(
+    '判据是事件自己报的 pointerType（ui.ts 的 isTouch 只认 touch）',
+    /export function isTouch\(ev: \{ pointerType\?: string \}\): boolean \{\s*return ev\.pointerType === 'touch';/.test(ui),
+    (ui.match(/return ev\.pointerType === .*?;/) ?? ['‹找不到 isTouch 的口径›'])[0],
+  );
+  // 谁最后动谁作数：pointerdown 上记一笔，同一台机器上手指和鼠标来回换也跟得上
+  ok(
+    'pointerdown 上记一笔（手指／鼠标来回换都跟得上）',
+    /addEventListener\('pointerdown', \(ev\) => this\.notePointer\(ev\)\);/.test(app) &&
+      /const next = isTouch\(ev\) \? 'touch' : 'mouse';/.test(app),
+    (app.match(/addEventListener\('pointerdown'.*/) ?? ['‹没挂 pointerdown›'])[0].trim(),
+  );
+  // 光靠按下记还不够：一台「主指针是触摸、可也插着鼠标」的机器（安卓平板正对着鼠标），
+  // 开头猜成 touch 之后，鼠标只是挪一挪没按下去，就永远翻不过来——pointermove 上也得记
+  ok(
+    '鼠标一挪就把这台机器认成鼠标（pointermove 上也记一笔）',
+    /addEventListener\('pointermove', \(ev\) => \{[\s\S]{0,200}?this\.notePointer\(p\);[\s\S]{0,80}?this\.hoverAt\(p\);/.test(appCode),
+    (appCode.match(/addEventListener\('pointermove', \(ev\) => \{[\s\S]{0,200}?\}\)/) ?? ['‹找不到 pointermove›'])[0].replace(/\s+/g, ' '),
+  );
+  // hover 那一路（挪、亮自己那套、离桌）碰到 touch 都得让路
+  ok(
+    '手指挪动不改摊开（hoverAt 里第一句就挡 touch）',
+    /private hoverAt\(ev: PointerEvent\): void \{\s*if \(this\.pointer === 'touch'\) return;/.test(appCode),
+    (appCode.match(/private hoverAt\(ev: PointerEvent\): void \{[\s\S]{0,160}?\n/) ?? ['‹找不到 hoverAt›'])[0].replace(/\s+/g, ' '),
+  );
+  ok(
+    '压上来亮一下那一路也挡 touch（触屏走点按 toggle）',
+    /private peekPlay\(el: HTMLElement, on: boolean\): void \{\s*if \(this\.pointer === 'touch'\) return;/.test(appCode),
+    (appCode.match(/private peekPlay\(el: HTMLElement, on: boolean\): void \{[\s\S]{0,200}?\n/) ?? ['‹找不到 peekPlay›'])[0].replace(/\s+/g, ' '),
+  );
+  // 这一条是这次 bug 的正身：手指抬起时 pointerleave 会来一下，
+  // 不挡的话刚点开的那一摞当场又被合上 ⇒ 点得开、抽不走
+  ok(
+    '手指抬起那下不合上刚点开的那一摞（pointerleave 只在非 touch 时清）',
+    /addEventListener\('pointerleave', \(\) => \{\s*if \(this\.pointer !== 'touch'\) this\.hoverStack\(null\);\s*\}\);/.test(app),
+    (app.match(/addEventListener\('pointerleave'[\s\S]{0,120}?\}\)/) ?? ['‹找不到 pointerleave›'])[0].replace(/\s+/g, ' '),
+  );
+  // 点牌那两套：触屏点一下摊开亮给我看，鼠标直接选
+  ok(
+    '点牌那两套按指针分（触屏走 togglePeek）',
+    /if \(this\.pointer === 'touch'\) \{\s*const mine = this\.view\.freeze\?\.find\(\(p\) => p\.seat === this\.me && p\.ids\.includes\(id\)\);/.test(app),
+    (app.match(/if \(this\.pointer === 'touch'\) \{[\s\S]{0,120}?/) ?? ['‹找不到 tapPiece 那支›'])[0].replace(/\s+/g, ' '),
+  );
+  // 提示那句得跟着指针类型换：触屏那句是「先点一摞」，鼠标那句是「压上来」
+  ok(
+    '摸签那句提示跟着指针类型换（鼠标版／手指版）',
+    /\? this\.pointer === 'mouse'\s*\? '轮到你摸签：鼠标压上来那一摞就摊开，点哪张抽哪张'\s*: '轮到你摸签：先点一摞把它摊开，再点你要抽的那张'/.test(app),
+    (app.match(/轮到你摸签：[\s\S]{0,80}?'/) ?? ['‹找不到摸签那句提示›'])[0].replace(/\s+/g, ' '),
+  );
+}
+
+// ---------- 最后一个人离桌，桌跟着没（2026-10-12 用户报的：点了离桌没散，下次开一桌又接回上一局） ----------
+// ---------- 一个活人都没连着，桌也自己散（同一天用户报的另一半：两个人都掉线了，这桌还留着干啥） ----------
+
+console.log('\n散桌：最后一个人走，桌跟着没（局打没打完都一样）；一个活人都没连着，桌也自己散');
+{
+  const app = web('app.ts');
+  const home = web('home.ts');
+  const table = readFileSync(new URL('../node/table.ts', import.meta.url), 'utf8');
+  // 注释里要讲清「原来那道闸长什么样」，所以这两条扫的是去注释之后的代码本身
+  const tableCode = table.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[ \t]*\/\/.*$/gm, '');
+
+  // 桌那头：那道「正在打就不散」的闸整个拆了——它正是「人走了桌没走、存档留着」的根。
+  // 判据只留 aliveSeats 一条：还有别人连着才散不动
+  ok(
+    '散桌不再拿「这一局正在打」当门槛',
+    !/这一局正在打，打完再散/.test(tableCode),
+    (tableCode.match(/.*这一局正在打，打完再散.*/) ?? ['‹没有那道闸了›'])[0].trim(),
+  );
+  // 2026-10-12 全面排查出来的第二条：那道闸原来是「必须是房主」，可房主位可能正钉在一个**已经掉线**的
+  // 人身上（`restHost` 只在非 playing 时跑），于是只剩一个活人也散不掉 —— 整道闸拆了。
+  // 现在只挡「这条连接已经不在桌上」这一种：人早走了，不替这张桌做决定
+  ok(
+    '散桌不看房主位在谁手上：只挡「这条连接已经不在桌上」那一种',
+    !/只有房主能散这桌/.test(tableCode) &&
+      /if \(!slot\?\.online\) return \{ ok: false, why: '这条连接已经不在桌上了，散不了这桌' \};/.test(tableCode),
+    (tableCode.match(/disband\(bySeat[\s\S]{0,280}/) ?? ['‹找不到 disband›'])[0].replace(/\s+/g, ' '),
+  );
+  ok(
+    '只剩一个活人时散得掉，且散完回候场（status 打回 waiting）',
+    /private wipe\(\): void \{[\s\S]{0,600}?this\.slots = this\.freshSlots\(this\.setup\.players\);[\s\S]{0,400}?this\.gameNo = 1;[\s\S]{0,400}?this\.status = 'waiting';/.test(
+      tableCode,
+    ),
+    (tableCode.match(/private wipe\(\)[\s\S]{0,260}?\n/) ?? ['‹找不到 wipe›'])[0].replace(/\s+/g, ' '),
+  );
+  // 收尾只有一份：人递上来的 `disband`（最后一个人离桌）和桌自己判出来的 `sweepEmpty`
+  // （一个活人都没连着满两分钟）走的是同一个 `wipe`。写两遍迟早走岔，而走岔的样子隔一天才看得出来
+  ok(
+    '两条路走同一份收尾：disband 和 sweepEmpty 都调 wipe',
+    /disband\(bySeat: number\)[\s\S]{0,400}?this\.wipe\(\);/.test(tableCode) &&
+      /private sweepEmpty\(\): boolean \{[\s\S]{0,700}?this\.wipe\(\);/.test(tableCode),
+    (tableCode.match(/private sweepEmpty\(\)[\s\S]{0,400}?\n/) ?? ['‹找不到 sweepEmpty›'])[0].replace(/\s+/g, ' '),
+  );
+  // 用户 2026-10-12 报的「这两个人都掉线了 这桌还留着干啥呢」：桌那头原来只有「最后一个人递 disband」这一档，
+  // 一个活人都不剩时没人递得上那句话。这一档得挂在 `tick` 上，而且**不看开没开打**——
+  // 挂在候场期那条分支里，两位都掉线的桌就挂着 playing 由电脑替双方一直打下去
+  ok(
+    '一个活人都没连着满两分钟就散：那一档挂在 tick 上，不在「候场期」那条分支里',
+    /if \(this\.sweepEmpty\(\)\) return false;[\s\S]{0,300}?if \(this\.status !== 'playing'\) return this\.sweepIdle\(\);/.test(tableCode),
+    (tableCode.match(/tick\(\): boolean \{[\s\S]{0,300}/) ?? ['‹找不到 tick›'])[0].replace(/\s+/g, ' '),
+  );
+  ok(
+    '判据是「一个活人都没连着」（aliveSeats）＋ 满两分钟，起算点跟着活人回来清零',
+    /private sweepEmpty\(\): boolean \{[\s\S]{0,800}?aliveSeats\(this\.slots\) > 0[\s\S]{0,300}?this\.emptySince = 0;[\s\S]{0,500}?t - this\.emptySince < EMPTY_MS/.test(
+      tableCode,
+    ),
+    (tableCode.match(/private sweepEmpty\(\)[\s\S]{0,300}?\n/) ?? ['‹找不到 sweepEmpty›'])[0].replace(/\s+/g, ' '),
+  );
+  ok(
+    '散桌那一格（wiped）翻起来：硬盘那半边归宿主，桌这头只到得了内存',
+    /this\.wipe\(\);\s*this\.wiped = true;/.test(tableCode),
+    (tableCode.match(/this\.wiped = true;/) ?? ['‹找不到 wiped›'])[0],
+  );
+  // 客户端两处出口（候场厅的「返回」、牌桌右上角的「离桌」）共用同一套散桌确认：
+  // 牌桌那颗原来只断连接、一个字都不往桌递，所以桌留着、存档留着，下次 restore 又接回来
+  ok(
+    '牌桌那颗「离桌」也走散桌确认（原来只断连接，桌留着）',
+    /const alone = online && aliveSeats\(this\.seats \?\? \[\]\) <= 1;/.test(app) && /if \(alone\) \{\s*this\.askDisband\(/.test(app),
+    (app.match(/const alone = online[\s\S]{0,200}/) ?? ['‹找不到 resign 里那句 alone›'])[0].replace(/\s+/g, ' '),
+  );
+  // 钉的是「确认那颗按下去先递 disband、再走人」这个顺序，不是「文件里出现过这句话」——
+  // 散桌那句在 askStale 里也有一份，光查出现与否，拆了 askDisband 这处照样绿
+  ok(
+    '两处出口共用一套确认（askDisband 里递的就是 disband 那句）',
+    /private askDisband\(title: string, body: string, after: \(\) => void\): void \{[\s\S]{0,700}?button\('确认散桌', \(\) => \{\s*close\(\);\s*this\.link\?\.send\(\{ t: 'disband' \}\);\s*after\(\);\s*\}\)/.test(
+      app,
+    ),
+    (app.match(/private askDisband\(.*/) ?? ['‹找不到 askDisband›'])[0].trim(),
+  );
+  // 「开一桌」那条：本机桌上还压着上一桌就问一句，别静默把人丢进上一局
+  ok(
+    '「在这台机器开一桌」撞上旧局会问一句（create 那条路）',
+    /if \(creating && seat !== null && aliveSeats\(l\.seats\) === 0 && staleTable\(l\)\) this\.askStale\(l\);/.test(app),
+    (app.match(/if \(creating && seat !== null.*/) ?? ['‹找不到那一条›'])[0].trim(),
+  );
+  ok(
+    '「上一桌」的判据住在 home.ts（局号／正在打／有人坐过，三条任一）',
+    /export function staleTable\(lobby: Pick<Lobby, 'gameNo' \| 'status' \| 'seats'>\): boolean \{\s*return lobby\.gameNo > 1 \|\| lobby\.status === 'playing' \|\| lobby\.seats\.some\(\(s\) => s\.taken\);/.test(
+      home,
+    ),
+    (home.match(/export function staleTable[\s\S]{0,240}?\n\}/) ?? ['‹找不到 staleTable›'])[0].replace(/\s+/g, ' '),
+  );
+}
+
+// ---------- 复制战报：兜底那条局域网下每次都会走，摊开的框得先摘旧的（2026-10-12 第二轮） ----------
+
+console.log('\n复制战报兜底：局域网下每次都会摊一次，先摘旧框再摆新框');
+{
+  const app = web('app.ts');
+  // 页面是 http://<IP>:端口，非安全上下文里 navigator.clipboard 压根是 undefined、writeText 必抛，
+  // 这段兜底在局域网下**每次点都会走**：不先摘掉旧的，点一下叠一个同样的框。
+  const body = app.slice(app.indexOf('private async copyReport'), app.indexOf('private resign'));
+  const dropAt = body.indexOf("host.querySelector('.report')?.remove()");
+  const makeAt = body.indexOf("document.createElement('textarea')");
+  ok('摊开新框之前先把上一次那份摘掉', dropAt > 0 && makeAt > 0 && dropAt < makeAt, `摘=${dropAt}｜建=${makeAt}`);
+  ok('摘的正是 host 里那一份 .report（className 摆的也是 report，一摘一摆对得上）', body.includes("box.className = 'report'"), '‹找不到 box.className›');
+}
+
+// ---------- 口径卫生：起桌失败撂人话、寻呼那次错误不漏 socket、脚本键别写两遍（2026-10-12 第二轮） ----------
+
+console.log('\n口径卫生：起桌失败撂人话、寻呼那次错误不漏 socket、脚本键别写两遍');
+{
+  // 端口被占（同机另一张桌、或者别的进程占了这号）时 listen 抛的是裸栈，从访达点开的人屏幕上什么都不出现。
+  // 这一条跟 openTable 那句「参数写歪了就撂一句人话退台」一个口径（2026-10-12 第二轮排查量的）
+  const host = readFileSync(new URL('../node/host.ts', import.meta.url), 'utf8');
+  const errAt = host.indexOf("server.on('error'");
+  ok('host.ts 接了 listen 那条 error：端口被占时不是甩一串裸栈', errAt > 0, '‹找不到 server.on(error)›');
+  const errBody = errAt > 0 ? host.slice(errAt, host.indexOf("server.on('upgrade'", errAt)) : '';
+  ok('端口被占时点的是「已经被占着」那句人话（认 EADDRINUSE）', errBody.includes("e.code === 'EADDRINUSE'") && errBody.includes('已经被占着'), errBody.replace(/\s+/g, ' ').slice(0, 90));
+  ok('别的起桌失败也有话说，不是一片静默', errBody.includes('这桌起不来'));
+  ok('说人话之前先把桌收了（room.close）再退：别把占位条和存档锁留下', errBody.indexOf('room.close()') > 0 && errBody.includes('process.exit(1)'));
+
+  // 寻呼那一槽占不住（同机另一张桌占了同一槽）时，原来只把 socket 置空——底下 close() 拿到的已经是 null，
+  // 这条 dgram socket 就再没人关了（一次错误漏一条，2026-10-12 第二轮排查量的）
+  const disc = readFileSync(new URL('../node/discover.ts', import.meta.url), 'utf8');
+  const onErr = disc.slice(disc.indexOf("s.on('error'"), disc.indexOf('// 绑上了才开广播'));
+  ok('寻呼那次的错误里先 s.close() 再置空：只置空就再没人关这条 socket 了', onErr.indexOf('s.close()') > 0 && onErr.indexOf('s.close()') < onErr.indexOf('socket = null;'), onErr.replace(/\s+/g, ' ').slice(0, 90));
+
+  // package.json 里同一个脚本键写两遍：JSON 认后一个，前一个静默失效——照前一个理解的人就被带沟里了
+  const pkg = readFileSync(new URL('../../package.json', import.meta.url), 'utf8');
+  const hits = (pkg.match(/"release"\s*:/g) ?? []).length;
+  ok('package.json 里 "release" 这个键只出现一次（写两遍时后一个静默顶掉前一个）', hits === 1, `出现 ${hits} 次`);
 }
 
 console.log(failures ? `\n${failures} 条没过` : '\n全部通过');

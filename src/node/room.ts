@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { closeSync, existsSync, fsyncSync, openSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync, writeSync } from 'node:fs';
 import { basename, dirname, join, normalize, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -82,6 +83,14 @@ export interface SaveLock {
   /** 占的是哪一份存档（绝对路径）。没有这一格，「把项目整个拷一份再开一桌」都会被拦：
    *  拷走的条上写着一个还活着的进程号，可那位占的是原来那一份，跟这份副本无关（冒烟就是这么撞上的） */
   save: string;
+  /**
+   * 写这条那一刻、这个进程是什么时候起来的（ms 时间戳，= `Date.now() - 已跑时长`）。
+   * 只靠 pid 判活有个窄窗口：持锁进程挨 SIGKILL 走了，pid 被系统**复用**给一个无关的活进程，
+   * 于是「pid 活着」为真、这桌永远起不来，而提示里那个进程其实早不存在了（2026-10-12 第二轮排查量的）。
+   * 启动时刻是进程的出生证：复用来的进程跟条上记的对不上，一眼认得出这条是前人留的。
+   * 老条没写这一格（可选）：读回来是 undefined，退回「pid 活着就算占着」那条老判据。
+   */
+  startedAt?: number;
 }
 
 export function lockPathOf(save: string): string {
@@ -132,11 +141,12 @@ export function atomicPut(file: string, body: string): void {
  * 这把存档能不能占。四种「能」：没人写过、那条写的是另一份存档、写那条的进程已经没了
  * （前人挨 SIGKILL 走的留条不算闸）、还有写的就是自己这个进程同一个端口同一份文件（同一趟里重起一次）。
  * 只看 pid 不算数：同进程不同端口也得拒，不然一台机器上两张桌照样各写各的。
+ * `alive` 收的是**整条**（不是光 pid）：判活那一步还得拿条上记的 `startedAt` 去认 pid 复用（见 `lockAlive`）。
  */
-export function lockVerdict(held: SaveLock | null, mine: SaveLock, alive: (pid: number) => boolean): 'free' | 'mine' | 'taken' {
+export function lockVerdict(held: SaveLock | null, mine: SaveLock, alive: (held: SaveLock) => boolean): 'free' | 'mine' | 'taken' {
   if (!held || held.save !== mine.save) return 'free';
   if (held.pid === mine.pid && held.port === mine.port) return 'mine';
-  return alive(held.pid) ? 'taken' : 'free';
+  return alive(held) ? 'taken' : 'free';
 }
 
 /** 这个进程号还在不在：报 EPERM 是「在，但不是我的人」，一样算活着 */
@@ -147,6 +157,49 @@ function pidAlive(pid: number): boolean {
   } catch (e) {
     return (e as NodeJS.ErrnoException).code === 'EPERM';
   }
+}
+
+/** 占位条上那位还活着吗（真判活）：pid 活着之外，还得是**同一个进程**——见 `sameHolder` */
+function lockAlive(held: SaveLock): boolean {
+  if (!pidAlive(held.pid)) return false;
+  return sameHolder(held, processStartedAt(held.pid));
+}
+
+/**
+ * 条上那位**还是不是原来那个人**：拿「条上记的启动时刻」跟「现在问出来的」对一对。
+ * pid 会被系统复用——持锁那张桌挨 SIGKILL 走了，那个号可能马上发给一个无关的新进程，
+ * 于是「pid 活着」为真、这张桌永远起不来，而提示里那个进程其实早不存在（2026-10-12 第二轮排查量的）。
+ * 对不上就是前人留的条，不算闸。有一头认不出（老条没记 `startedAt`、或者问不出那个 pid 的启动时刻）
+ * 就保守算它活着：宁可多拦一次，也别让两张桌同写一份账。纯函数，闸在 net.host.test.ts。
+ */
+export function sameHolder(held: SaveLock, nowStartedAt: number | null): boolean {
+  if (typeof held.startedAt !== 'number' || nowStartedAt === null) return true;
+  return Math.abs(nowStartedAt - held.startedAt) < 3000;
+}
+
+/**
+ * 某个进程号是什么时候起来的（ms 时间戳），问不出来回 null。
+ * 走 `ps -p <pid> -o etime=`（已跑时长，`[[dd-]hh:]mm:ss`）——mac 和 linux 都有它，够用且不用碰 `/proc`。
+ * 这一步是**尽力而为**：拿不到就当「认不出」，交给调用方退回保守判据，绝不因为问不出来就把门锁死。
+ */
+function processStartedAt(pid: number): number | null {
+  try {
+    const out = execFileSync('ps', ['-p', String(pid), '-o', 'etime='], { encoding: 'utf8', timeout: 1000 }).trim();
+    const up = parseEtimeMs(out);
+    return up === null ? null : Date.now() - up;
+  } catch {
+    return null;
+  }
+}
+
+/** `ps -o etime=` 那串（`[[dd-]hh:]mm:ss`）换成毫秒；形状不认识就回 null。纯函数，闸在 net.host.test.ts */
+export function parseEtimeMs(text: string): number | null {
+  if (!text) return null;
+  const [days, clock] = text.includes('-') ? text.split('-') : ['0', text];
+  const parts = clock!.split(':').map(Number);
+  if (!parts.length || parts.some((n) => !Number.isFinite(n))) return null;
+  const [h, m, s] = parts.length >= 3 ? parts.slice(-3) : parts.length === 2 ? [0, ...parts] : [0, 0, parts[0]!];
+  return (((Number(days) * 24 + h!) * 60 + m!) * 60 + s!) * 1000;
 }
 
 /**
@@ -180,9 +233,10 @@ function claimLockFile(file: string, body: string): boolean {
 }
 
 /** 占住这份存档，回一句「收桌时把它摘了」；被另一张活着的桌占着就抛人话（两个宿主都念这一句） */
-export function claimSave(save: string, port: number, alive: (pid: number) => boolean = pidAlive): () => void {
+export function claimSave(save: string, port: number, alive: (held: SaveLock) => boolean = lockAlive): () => void {
   const file = lockPathOf(save);
-  const mine: SaveLock = { pid: process.pid, port, save: canonicalSave(save) };
+  // 条上写下「我是谁、什么时候起来的」：pid 判活之外还认得出 pid 复用（见 lockAlive）
+  const mine: SaveLock = { pid: process.pid, port, save: canonicalSave(save), startedAt: Date.now() - Math.round(process.uptime() * 1000) };
   const body = JSON.stringify(mine);
   const release = (): void => {
     // 只摘自己写的那条：这张桌被别人接管过之后，前一个人的收桌不该去拆现在这位的闸
@@ -202,7 +256,7 @@ export function claimSave(save: string, port: number, alive: (pid: number) => bo
     const raw = JSON.parse(readFileSync(file, 'utf8')) as Partial<SaveLock>;
     held =
       Number.isInteger(raw?.pid) && Number.isInteger(raw?.port) && typeof raw?.save === 'string'
-        ? { pid: raw.pid!, port: raw.port!, save: raw.save }
+        ? { pid: raw.pid!, port: raw.port!, save: raw.save, startedAt: typeof raw.startedAt === 'number' ? raw.startedAt : undefined }
         : null;
   } catch {
     held = null;
@@ -210,7 +264,10 @@ export function claimSave(save: string, port: number, alive: (pid: number) => bo
   // 读不懂的一条（半截字、别人随手写的、老代码留的没写存档路径的）当没人占：
   // 宁可让桌开起来，也别拿一条烂字节把门锁死
   if (lockVerdict(held, mine, alive) === 'taken')
-    throw new Error(`这份存档（${save}）已经被 ${held!.port} 端口上那张桌占着（进程 ${held!.pid}）：先关掉那张，或者给这一张另加 --save=另一份文件`);
+    throw new Error(
+      `这份存档（${save}）已经被 ${held!.port} 端口上那张桌占着（进程 ${held!.pid}）：先关掉那张，或者给这一张另加 --save=另一份文件` +
+        `（要是那张桌其实已经没在跑了，删掉 ${file} 再起一次）`,
+    );
   // 该回收这条（死人的留条／读不懂的残条）：摘掉再原子抢一次，不许退回裸写。
   // 裸写＝又回到「读→判→写」三步：两个进程同抢一条死条，双双判 free、双双写，后写的盖前一张，两张桌同写一份账。
   try {
@@ -316,7 +373,26 @@ export interface Room {
   close(): void;
 }
 
-/** 一句线上的字节该怎么办：认下来的一句话、该回的那句拒、或者请这条连接下桌。见 openRoom 里那句 onMessage */
+/**
+ * 一秒一次的表该干的两件事，单拎出来就为了它能被敲：
+ * 桌真动了手（代打那几手、局末退回候场、两分钟收椅子）就落一次盘——原来只有收到客户端话时才 persist，
+ * 一桌全 AI 能连打几局而存档一个字不变；
+ * 桌**把自己散掉了**（一个活人都没连着满两分钟，见 `Table.wiped`）就把存档抹掉，别让下一回起桌
+ * 又把这张没人在用的桌接回来。抹存档走的是跟客户端递 `disband` 同一颗 `discard`——掐掉排队的合批、
+ * 连 `.tmp` 一起抹，不然半秒后那份旧账又躺回硬盘上。
+ * `openRoom` 里那颗表带着真 `setInterval`（两分钟一档，测试等不起），所以判断住在这儿，闸在 `test:net`。
+ */
+export function tickOnce(table: Table, persist: () => void, discard: () => void): void {
+  if (table.tick()) persist();
+  if (table.wiped) {
+    table.wiped = false;
+    discard();
+  }
+}
+
+/**
+ * 一句线上的字节该怎么办：认下来的一句话、该回的那句拒、或者请这条连接下桌。见 openRoom 里那句 onMessage
+ */
 export type Verdict = { msg: ToHost } | { reject: string } | { close: string };
 
 /**
@@ -390,6 +466,14 @@ export function openRoom(argv: string[], port: number): Room {
    * 牌局照打，只是 Ctrl-C 之后接不回来。
    */
   let saveOff = false;
+  /**
+   * 这桌已经散过了（`disband` 或 `sweepEmpty` 走的那条路）：存档当场抹掉，收杆时也不许再写回来。
+   * 2026-10-12 第二轮排查量到的：`close()` 原来只想着「攒着的那一笔当场落盘」，不看这一格，
+   * 于是散桌 → Ctrl-C → 重启，那份**已经散掉的空桌**又躺在硬盘上被 `restore()` 接回来
+   * （`gameNo` 回 1、椅子空，可 `setup.name` 还留着上一桌的名字），
+   * 跟「散了重启接不回来」那句口径正好相反。
+   */
+  let discarded = false;
   function write(): void {
     if (saveOff) return;
     try {
@@ -417,15 +501,26 @@ export function openRoom(argv: string[], port: number): Room {
   /**
    * 散桌：这份存档不留硬盘。合批那颗延时也一起掐掉——不掐，三秒前那一下改变化还排在队里，
    * 半秒后就把刚抹掉的桌子又写回去了；留着一份接得回来的旧账，「散了」就成了「这一秒看不见」。
+   *
+   * 抹这两下**不许抛穿**：这颗是从一秒一次的表里调的（`tickOnce`），从 timer 抛出去就是
+   * uncaughtException 带走全桌——跟上面 `write()` 那条同一个道理（那条早就守着了，这条一直没守）。
+   * `force` 只吞「文件不在」，权限不对（EPERM／EACCES）、那儿恰好是个目录（EISDIR）都会抛。
+   * 抹不掉就念一句人话：牌照打，只是硬盘上那份可能还接得回来。
    */
   function discard(): void {
     if (due) {
       clearTimeout(due);
       due = null;
     }
-    rmSync(savePath, { force: true });
-    // 原子写那颗中转名也一起抹：上回写一半没换上去的，不该在散桌之后还躺在硬盘上等人捡
-    rmSync(`${savePath}.tmp`, { force: true });
+    // 先翻这一格再动手：抹到一半失败也算「这桌散过了」，收杆时同样不该把它写回来
+    discarded = true;
+    try {
+      rmSync(savePath, { force: true });
+      // 原子写那颗中转名也一起抹：上回写一半没换上去的，不该在散桌之后还躺在硬盘上等人捡
+      rmSync(`${savePath}.tmp`, { force: true });
+    } catch (e) {
+      tell(`散桌之后存档没抹干净（${(e as Error).message}）：硬盘上那份可能还接得回来`);
+    }
   }
   // 一开桌就落一次盘：还没人坐过椅子就断掉，重启也接得回这一桌的牌面
   write();
@@ -613,7 +708,8 @@ export function openRoom(argv: string[], port: number): Room {
         return;
       }
       case 'disband': {
-        // 候场厅那颗「返回」在只剩他一个活人时递上来：能不能散归桌查（只有房主、只有没开打、只有他一个活人）
+        // 候场厅那颗「返回」在只剩他一个活人时递上来：能不能散归桌查（这条连接还在桌上、桌上没别人连着）。
+        // 2026-10-12 起不再看「是不是房主」——房主位可能正钉在一个已经掉线的人身上（见 table.ts::disband）
         if (seat === undefined) {
           conn.send(NO_SEAT);
           return;
@@ -656,10 +752,9 @@ export function openRoom(argv: string[], port: number): Room {
    * 一秒一次的表。桌真动了手才落盘：代打那几手、局末退回候场、两分钟收椅子，
    * 原来全都不落（只有收到客户端话时才 persist），一桌全 AI 能连打几局而存档一个字不变。
    * 反过来，全桌都在想牌的那一秒啥也没变，也就不必惊动硬盘。
+   * 两件事都在 `tickOnce` 里（那儿也是它的闸）：落盘，和「桌把自己散掉了」时的抹存档。
    */
-  const ticker = setInterval(() => {
-    if (table.tick()) persist();
-  }, 1000);
+  const ticker = setInterval(() => tickOnce(table, persist, discard), 1000);
 
   return {
     table,
@@ -695,7 +790,9 @@ export function openRoom(argv: string[], port: number): Room {
         clearTimeout(due);
         due = null;
       }
-      write();
+      // 散过的那一桌**不写**：散桌已经把存档抹了，这一写等于把「散了」变成「下次还接得回来」。
+      // 2026-10-12 第二轮排查量的就是这一条（散桌 → Ctrl-C → 那份空桌又躺回硬盘上）
+      if (!discarded) write();
       clearInterval(ticker);
       disc?.close();
       ws.stop();

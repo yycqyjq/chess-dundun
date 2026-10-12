@@ -40,6 +40,27 @@ function hostPart(v: string): string {
   return (s.split('/')[0] ?? '').toLowerCase().replace(/:(80|443)$/, '');
 }
 
+/**
+ * 这个 Origin 是不是「访问者自己那台设备上的页面」——回环那几条。
+ *
+ * App 外壳（APK）里的页面就住在它上头：Capacitor 把打包好的页面从 `http://localhost`
+ * 递进 WebView，人再从那一页去连**另一台机器**上的桌。于是 Origin 是 `http://localhost`、
+ * Host 是桌的地址（`192.168.1.3:5200`），两个天生对不上——照下面那道闸一比就是 403。
+ *
+ * 那道闸要挡的是**别人家的站点**（远程页面让访问者的浏览器悄悄坐上我们的牌桌）；
+ * 回环上的页面不是远程：它跟访问者同在这一台设备里，够不着「别人的站点」那个位置，
+ * 而能往访问者回环上摆页面的，本来就已经能绕开浏览器直接开 socket 了，这道闸对他形同虚设。
+ * 所以回环放行不削弱那道闸挡的东西，只是把 App 自己那条路让开。
+ *
+ * 2026-10-11 实测（`Origin: http://localhost` 对 `Host: 192.168.1.3:5200` → 403）：
+ * 外壳里扫码、同网列表两条路都卡在这儿，屏上写的是「连不上 <地址>」——看着像网络不通，
+ * 其实是桌自己把话掐了。
+ */
+function loopbackOrigin(part: string): boolean {
+  const host = part.split(':')[0] ?? '';
+  return host === 'localhost' || host === '127.0.0.1' || host === '[::1]' || host === '::1';
+}
+
 /** 服务端 → 客户端的帧：不掩码，长度三档各写各的 */
 function frame(opcode: number, payload: Buffer): Buffer {
   const n = payload.length;
@@ -197,9 +218,11 @@ export class WsServer {
       return;
     }
     // 浏览器开 WebSocket 一定带 Origin：不是这一桌自己的页面就握手不成，
-    // 否则别人家的站点能让访问者的浏览器悄悄坐上我们的牌桌。命令行客户端和测试不带这头，空着当自己人放
+    // 否则别人家的站点能让访问者的浏览器悄悄坐上我们的牌桌。命令行客户端和测试不带这头，空着当自己人放。
+    // 「访问者自己那台设备上的页面」（回环）也放——App 外壳走的正是这一条，理由见 loopbackOrigin
     const origin = req.headers.origin;
-    if (origin !== undefined && hostPart(origin) !== hostPart(req.headers.host ?? '')) {
+    const from = origin === undefined ? '' : hostPart(origin);
+    if (origin !== undefined && !loopbackOrigin(from) && from !== hostPart(req.headers.host ?? '')) {
       // end() 而不是 destroy()：先话说完再挂电话，不然这行 403 可能压根没发出去
       socket.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');
       return;

@@ -131,6 +131,16 @@ function checkDealt(total: number, draft: { stackSize: number; ways: AllocWay[] 
     throw new Error(
       `rules.json：${at} 一摞 ${draft.stackSize} 张分给 ${players} 家，一人一层拿牌分不匀（一摞张数＝层数，得是家数的整数倍）`,
     );
+  // 这条原来漏了，只在 ways 里留着 layered 的时候才露出来（2026-10-12 第二轮排查量的）。
+  // 「一人一层拿牌」是「一层＝每摞各一张」，层数取自**第一摞**的长度（`applyAllocate` 的 `draft.stacks[0].length`）；
+  // 末摞短一截时，短的那一摞在缺的那几层上是空位，那几层就往手里推一个 `undefined`——
+  // 牌数守恒当场被破（手牌总数多出短摞缺的那么多），下一个 `legalActions` 里
+  // `byId.get(undefined)` 一取就是 TypeError（摆完牌那一刻就炸，不是打到中局才炸）。
+  // 所以只要 ways 里有 layered，「总数除得尽一摞张数」就是硬要求。
+  if (draft.ways.includes('layered') && total % draft.stackSize !== 0)
+    throw new Error(
+      `rules.json：${at} 一共 ${total} 枚、一摞 ${draft.stackSize} 张，除不尽：末摞短一截，而「一人一层拿牌」按满摞循环，短的那几层会分到空位（要么把一摞张数改成 ${total} 的约数，要么 ways 去掉 layered）`,
+    );
   if (draft.ways.some((way) => way !== 'layered') && (total / draft.stackSize) % players !== 0)
     throw new Error(
       `rules.json：${at} 一共 ${total / draft.stackSize} 摞分给 ${players} 家，整摞轮流拿会拿成不等张：要么改一摞张数，要么 ways 只留 layered`,

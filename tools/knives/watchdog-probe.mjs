@@ -41,5 +41,12 @@ export default {
       to: `    if (!this.probeAt) {`,
       expect: '问一声还不答：拆掉这条重连',
     },
+    {
+      rel: 'src/web/net.ts',
+      note: 'D 手上那条停在 CLOSING 时当场另开一条（旧那条 onclose 随后抹掉新引用、再排一条，两条活连接一起喂）（2026-10-12 第二轮）',
+      from: '    if (ws) {\n      this.ws = null;\n      ws.close();\n      return;\n    }\n    this.open();',
+      to: '    if (ws && ws.readyState <= WebSocket.OPEN) ws.close();\n    else this.open();',
+      expect: '手上那条停在 CLOSING 时不当场另开一条',
+    },
   ],
 };

@@ -259,9 +259,20 @@ export class Link {
     }
     this.tries = 0;
     const ws = this.ws;
-    this.ws = null;
-    if (ws && ws.readyState <= WebSocket.OPEN) ws.close();
-    else this.open();
+    // 手上有条连接就让它自己关，重连交给它的 `onclose` 去排——**别在这儿另开一条**。
+    // 原来这一句是 `ws.readyState <= WebSocket.OPEN ? ws.close() : this.open()`，那个 else 是个坑：
+    // 旧连接正停在 CLOSING（close 握手还没走完）时 `this.ws` 已经在上面被置空了，
+    // 于是当场新建一条 S2 挂到 `this.ws` 上；旧连接那条 `onclose` 随后才到，
+    // 它无条件 `this.ws = null`——抹掉的是**S2** 的引用——并再排一次重连（S3）。
+    // 结果 S2 与 S3 两条活连接一起喂 `onMsg`，而中间那段 `online` 读的是空引用、outbox 补发不出去。
+    // （2026-10-12 第二轮排查量的。触发窗口：连点「刷新」，或者切回标签页那一下撞在 close 握手上。）
+    // 「置空 + close」对 CONNECTING／OPEN／CLOSING 三种都成立：三种都会走到 close 事件，重连只排一次。
+    if (ws) {
+      this.ws = null;
+      ws.close();
+      return;
+    }
+    this.open();
   }
 
   close(): void {

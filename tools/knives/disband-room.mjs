@@ -1,7 +1,7 @@
 /**
  * 批10 散桌在 `src/node/room.ts` 那四步：这四步都只发生在「宿主」这一层，`test:net` 直接拿着一个 Table
  * 对象跑，碰不到硬盘也碰不到连接，所以这张谱子 `via: 'smoke'`（跑 dev 冒烟，量的那份存档是副本根上的
- * `table.json`，永远不是他自己仓库里那一份）。桌里那三道闸（只有房主／只有没开打／只有他一个活人）和
+ * `table.json`，永远不是他自己仓库里那一份）。桌里那两道闸（这条连接还在桌上／只有他一个活人）和
  * 归零那五样在 `disband-table.mjs`，两边不重叠。
  *
  * 冒烟那一段是 2026-09-29 才补的：补之前 `case 'disband'` 整段没有任何闸——拆掉 `discard()`、把「先解绑
@@ -58,13 +58,21 @@ export default {
     {
       rel: 'src/node/room.ts',
       note: 'E 抹归抹，可排队那一下合批没掐：半秒后它把刚抹掉的空桌又写回硬盘',
+      // 刀口 2026-10-12 重锚：抹存档那两下包进了 try（不兜底就会从一秒一次的表里抛穿），
+      // 原锚点（`due = null; }` 紧接 `rmSync`）被 `discarded = true; try {` 隔开了。
       from: `      clearTimeout(due);
       due = null;
     }
-    rmSync(savePath, { force: true });`,
+    // 先翻这一格再动手：抹到一半失败也算「这桌散过了」，收杆时同样不该把它写回来
+    discarded = true;
+    try {
+      rmSync(savePath, { force: true });`,
       to: `      due = null;
     }
-    rmSync(savePath, { force: true });`,
+    // 先翻这一格再动手：抹到一半失败也算「这桌散过了」，收杆时同样不该把它写回来
+    discarded = true;
+    try {
+      rmSync(savePath, { force: true });`,
       expect: '散完硬盘上那份存档真没了（排队的合批也没把它写回来）',
     },
   ],

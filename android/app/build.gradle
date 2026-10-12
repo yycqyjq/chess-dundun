@@ -61,6 +61,13 @@ dependencies {
     implementation "androidx.coordinatorlayout:coordinatorlayout:$androidxCoordinatorLayoutVersion"
     implementation "androidx.core:core-splashscreen:$coreSplashScreenVersion"
     implementation project(':capacitor-android')
+    // 扫码：取景用 CameraX（AndroidX，不碰 Google Play Services），认码用 ZXing core（纯 Java、零传递依赖）。
+    // 版本住在 variables.gradle（那份 cap sync 只读不写，见 cli 的 getVariablesGradleFile）
+    implementation "androidx.camera:camera-core:$androidxCameraVersion"
+    implementation "androidx.camera:camera-camera2:$androidxCameraVersion"
+    implementation "androidx.camera:camera-lifecycle:$androidxCameraVersion"
+    implementation "androidx.camera:camera-view:$androidxCameraVersion"
+    implementation "com.google.zxing:core:3.5.3"
     testImplementation "junit:junit:$junitVersion"
     androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
     androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"

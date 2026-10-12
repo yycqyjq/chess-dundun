@@ -53,6 +53,21 @@ const { port, room } = openTable();
 const { table, setup } = room;
 
 const server = createServer(serve);
+// 端口被占（同机另开着一张桌、或者别的进程占了这号）：listen 抛的是裸栈，从访达点开的人屏幕上什么都不出现。
+// 跟 openTable 那句「参数写歪了就撂一句人话退台」一个口径（2026-10-12 第二轮排查量的：原来只有参数解析那头兜住了）。
+server.on('error', (e: NodeJS.ErrnoException) => {
+  console.error(
+    e.code === 'EADDRINUSE'
+      ? `端口 ${port} 已经被占着（同机另一张桌，或者别的进程）：先关掉那个，或者给这一张另加 --port=另一个端口`
+      : `这桌起不来：${e.message}`,
+  );
+  try {
+    room.close();
+  } catch {
+    /* 收尾失败不该盖住上面那句实话 */
+  }
+  process.exit(1);
+});
 server.on('upgrade', (req, socket, head) => {
   if (!room.handleUpgrade(req, socket, head)) socket.destroy();
 });

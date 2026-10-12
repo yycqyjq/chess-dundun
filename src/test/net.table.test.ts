@@ -3,7 +3,7 @@
  * 原 net.test.ts 一拆三：桌的生命周期 / 宿主与账 / 形闸·快照·WS 服务端。
  */
 import { pendingSeats, type Action } from '../core/game.ts';
-import { Table, IDLE_MS, NICK_MAX, TAKEOVER_MS } from '../node/table.ts';
+import { Table, EMPTY_MS, IDLE_MS, NICK_MAX, TAKEOVER_MS } from '../node/table.ts';
 import { fullWire } from '../net/wire.ts';
 import {
   finishDraft,
@@ -237,6 +237,58 @@ function keyOf(push: StatePush): string {
     `动手 ${moved} 秒，桌上收了 ${table.state.won[0]}+${table.state.won[1]} 枚`,
   );
   ok('一局打完桌自己退回候场厅', table.lobby().status === 'waiting');
+}
+
+// ───────────────────────── 掉线那三十秒：给客户端一个倒计时的锚点 ─────────────────────────
+
+{
+  // 快照不是每秒一份（掉线那一刻一份、到点接手再一份），屏上那条倒计时得有个数才走得动：
+  // 桌把这个「还剩多久」当锚点发下来，客户端收到那一刻起本地往下数（2026-10-11 用户点名要看倒计时）。
+  const { table, clock } = makeTable({ mode: 'kou' });
+  table.join(0, '');
+  table.join(1, '');
+  table.start(0);
+  finishDraft(table);
+  ok('开局那一刻谁都连着：没有谁在等代打', table.seatInfo().every((s) => s.takeoverIn === 0));
+
+  table.leave(1);
+  ok(
+    '刚掉线：锚点就是那整整三十秒',
+    table.seatInfo()[1]!.takeoverIn === TAKEOVER_MS,
+    String(table.seatInfo()[1]!.takeoverIn),
+  );
+
+  clock.step(10_000);
+  ok(
+    '过了十秒：锚点跟着少十秒（客户端从它往下数）',
+    table.seatInfo()[1]!.takeoverIn === TAKEOVER_MS - 10_000,
+    String(table.seatInfo()[1]!.takeoverIn),
+  );
+
+  clock.step(TAKEOVER_MS);
+  table.tick();
+  ok('到点接了手：倒计时归零，别再倒数', table.seatInfo()[1]!.takeoverIn === 0 && table.seatInfo()[1]!.ai);
+}
+
+{
+  // 候场期压根不开这一档（那把椅子归另一条路：闲置两分钟还回桌上），别拿「几秒后代打」去吓人。
+  // 这里得**先打完一局**：`human` 是开局那一刻定下的，一局打完退回候场厅时它**还留着**——
+  // 光看 human 不看 status，这会儿掉线就会被念成「几秒后代打」；新开一张桌时 human 全是假，试不出来。
+  const { table, clock } = makeTable({ mode: 'kou' });
+  table.join(0, '');
+  table.join(1, '');
+  table.start(0);
+  playToEnd(table, clock);
+  ok('一局打完桌自己退回候场厅', table.lobby().status === 'waiting');
+  ok('退回候场厅时那把椅子仍是真人位（human 留着）', table.seatInfo()[1]!.human);
+
+  table.leave(1);
+  clock.step(5_000);
+  ok('候场期掉线：不给代打倒计时（那一档压根不开）', table.seatInfo()[1]!.takeoverIn === 0);
+  ok(
+    '同一份表里那把椅子仍是「有主、掉线」：收椅子归另一条路',
+    table.seatInfo()[1]!.taken && !table.seatInfo()[1]!.online,
+  );
 }
 
 
@@ -488,6 +540,102 @@ function keyOf(push: StatePush): string {
   table.tick();
   ok('局末再过两分钟，那把椅子才还给这桌', table.seatInfo()[1]!.taken === false);
   ok('旧令牌坐不回去了', table.join(1, tk1).ok && table.seatInfo()[1]!.nick === '');
+}
+
+// ───────────────────────── 一个活人都没连着：这桌自己散掉 ─────────────────────────
+
+{
+  // 用户 2026-10-12 报的：「这两个人都掉线了 这桌还留着干啥呢」。桌那头原来只有一档「人走了就散」——
+  // 最后一个人主动递 `disband`；**一个活人都不剩时没人递得上那句话**，于是两位都掉线的桌挂着
+  // 'playing' 由电脑替双方一直打下去，桌和存档都留在那儿（`sweepIdle` 开打中不单收椅子）。
+  const { table, clock, logs } = makeTable({ mode: 'kou' });
+  table.join(0, '');
+  table.join(1, '');
+  table.start(0);
+  finishDraft(table);
+  table.leave(0);
+  table.leave(1);
+  ok('两位都掉线：掉线那一刻不散（路由器抖一下、人锁一下屏，都还得坐得回来）', table.tick() === false);
+  clock.step(EMPTY_MS - 1);
+  table.tick();
+  ok(
+    '差一毫秒不到：桌还在，椅子还挂在他们名下',
+    table.status === 'playing' && table.seatInfo().every((s) => s.taken) && !table.wiped,
+  );
+  clock.step(2);
+  table.tick();
+  ok(
+    '满两分钟一个活人都没回来：这桌自己散了（局号回 1、回候场、椅子连令牌一起收）',
+    table.gameNo === 1 && table.status === 'waiting' && table.seatInfo().every((s) => !s.taken && !s.online),
+    JSON.stringify([table.gameNo, table.status, table.seatInfo().map((s) => s.taken)]),
+  );
+  ok('散桌那句念得出来，终端上看得见为什么', logs.some((l) => l.includes('自己散了')), logs.join('｜'));
+  ok('桌真等的那段时长，和收椅子那把尺子是同一个数', EMPTY_MS === IDLE_MS && EMPTY_MS === 120_000, `EMPTY_MS=${EMPTY_MS}`);
+  ok('桌把「我刚散了」这一格翻起来：宿主看见才知道要抹存档', table.wiped === true);
+  // 散完这张桌还得是一张能用的桌：归零不是把它换成一张不会开局的照片
+  const back = table.join(0, '', 'NEW1');
+  ok('散完这桌照用得动：坐得下、开得了局', back.ok && table.start(0).ok && table.status === 'playing');
+}
+
+{
+  // 截图里那张桌就是候场期（第 1 局还没开、两个位子都掉线、第三台设备进不来）：
+  // 这一档也一样得散——候场期连「那一局」都没有，更没理由把这张桌留在同网列表上
+  const { table, clock } = makeTable({ mode: 'ming', players: 2 });
+  table.join(0, '', 'EU67');
+  table.join(1, '', 'JYZB');
+  table.leave(0);
+  table.leave(1);
+  table.tick();
+  clock.step(EMPTY_MS + 1);
+  table.tick();
+  ok(
+    '候场期两个位子都掉线：满两分钟这桌也自己散（椅子连令牌一起收，谁都能重新坐）',
+    table.wiped === true && table.seatInfo().every((s) => !s.taken && !s.online),
+    JSON.stringify([table.wiped, table.seatInfo().map((s) => s.taken)]),
+  );
+}
+
+{
+  // 掉线一下又回来的人不该把桌赔进去：起算点是「最后一个活人掉线」那一刻。
+  // 量法得让**桌看见有人在线的那些秒**掺进来（清零发生在那一秒）——不掺，起算点压根没机会被清，
+  // 这条断言就等于没量（人一走光桌就散，看上去还是对的）
+  const { table, clock } = makeTable({ mode: 'kou' });
+  const w0 = table.join(0, '').msg;
+  const tk0 = w0?.t === 'welcome' ? w0.token : '';
+  table.join(1, '');
+  table.start(0);
+  finishDraft(table);
+  table.leave(0);
+  table.leave(1);
+  table.tick(); // 起算
+  clock.step(EMPTY_MS - 10_000);
+  table.tick(); // 差十秒
+  table.join(0, tk0); // 人回来了
+  table.tick(); // 这一秒桌看见有活人：起算点清零
+  table.leave(0); // 又走了
+  clock.step(11_000);
+  table.tick();
+  ok(
+    '人回来过就把起算点清零：他再走之后重新数两分钟，不是接着上一次那笔账',
+    !table.wiped && table.seatInfo()[0]!.taken && !table.seatInfo()[0]!.online && table.status === 'playing',
+    JSON.stringify([table.wiped, table.seatInfo()[0], table.status]),
+  );
+}
+
+{
+  // 桌上还有别人连着就不散：那不是我该替全桌做的决定（跟 `disband` 那道 `aliveSeats` 闸同一口径）
+  const { table, clock } = makeTable({ mode: 'kou' });
+  table.join(0, '');
+  table.join(1, '');
+  table.start(0);
+  table.leave(1);
+  clock.step(EMPTY_MS * 3);
+  table.tick();
+  ok(
+    '还有一位连着：桌不许自己散',
+    !table.wiped && table.status === 'playing' && table.seatInfo()[0]!.online,
+    JSON.stringify([table.wiped, table.status, table.seatInfo()[0]!.online]),
+  );
 }
 
 // ───────────────────────── 超时代打 ─────────────────────────

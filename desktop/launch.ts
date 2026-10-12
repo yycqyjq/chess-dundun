@@ -28,8 +28,12 @@ export function portCandidates(preferred = DEFAULT_PORT): number[] {
  * `--watch-parent` 那条是给 `room.ts::orphanWatch` 的：外壳挨强退／崩了，这张桌自己存档退出，
  * 不赖在端口和占位条上（2026-10-02 量到的：那时再点图标就是永远起不来，屏幕上什么都不出现）。
  */
-export function hostArgs(userData: string, port: number): string[] {
-  return [`--port=${port}`, `--save=${join(userData, 'table.json')}`, '--watch-parent'];
+export function hostArgs(userData: string, port: number, selftest = false): string[] {
+  // selftest 用**另一份存档**：它跳过了单实例锁（见 main.ts），可它跟开发时开着的那个窗口共用同一个
+  // `userData`——存档不分开的话，开着窗口跑 `desktop:selftest` 会被 claimSave 按「pid 存活」拒掉，
+  // 跟 main.ts 那句「不该互相挤掉」的承诺正好相反（2026-10-12 第二轮排查量的）。
+  const file = selftest ? 'table-selftest.json' : 'table.json';
+  return [`--port=${port}`, `--save=${join(userData, file)}`, '--watch-parent'];
 }
 
 export function entryUrl(port: number): string {

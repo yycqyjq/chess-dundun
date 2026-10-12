@@ -127,6 +127,13 @@ export function openDiscovery(o: DiscOpts, sock?: Sock, wait: (ms: number) => Pr
       // 这张桌不寻也不答，牌照照样打——寻呼只是省一次敲地址，不是进桌的路
       why = `这台机器上 ${port} 那个寻呼口占不住（${String(e.message)}）：给其中一张桌加 --discover-slot=1 到 7 换个槽`;
       o.log(why);
+      // 先把这条 socket 关掉再撒手：只把引用置空的话，底下那句 `close()` 拿到的已经是 null，
+      // 这条 dgram socket 就再没人关了（一次错误漏一条，2026-10-12 第二轮排查量的）。
+      try {
+        s.close();
+      } catch {
+        /* 已经关上了、或者关不掉：都算了，置空才是这一步的正事 */
+      }
       socket = null;
     });
     // 绑上了才开广播：没 bind 就调 setBroadcast 是 EBADF（2026-09-29 量的）。
