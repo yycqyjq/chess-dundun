@@ -142,6 +142,17 @@ console.log('\n钉底：滚的是内容，不是整张卡');
   ok('空的底栏不占缝（.sheet-foot:empty 收起来）', val('.sheet-foot:empty', 'display') === 'none');
   ok('空的底栏那一排也不占缝（.sheet-foot .sheet-row:empty）', val('.sheet-foot .sheet-row:empty', 'display') === 'none');
   ok('按得动的东西还是至少 40 高', val('.btn', 'min-height') === '40px');
+  // 顶栏那两颗图标按钮（2026-10-13）：只把宽度压到跟高度一样，点击高度仍是上面那条 40px 底线
+  ok(
+    '顶栏图标按钮宽度＝40（跟 .btn 的高度一般大，点击面积不缩水）',
+    val('.btns .btn.icon', 'width') === '40px' && val('.btns .btn.icon', 'min-width') === '40px',
+    `width=${val('.btns .btn.icon', 'width')} min-width=${val('.btns .btn.icon', 'min-width')}`,
+  );
+  ok('顶栏图标按钮不靠 padding 撑宽（padding: 0，字形居中）', val('.btns .btn.icon', 'padding') === '0');
+  // 顶栏三行（2026-10-13 用户点名：移动端把配置那段挪到品牌下面、图标放右上角）：
+  // .meta 靠 basis 100% 独占一行，.btns 靠 margin-left:auto 钉右上——两条各拆一条，布局就散
+  ok('顶栏配置那段整条独占一行（.meta basis 100%）', val('.meta', 'flex') === '1 1 100%', val('.meta', 'flex') ?? '‹没写›');
+  ok('顶栏那两颗图标钉在右上角（.btns margin-left: auto）', val('.btns', 'margin-left') === 'auto', val('.btns', 'margin-left') ?? '‹没写›');
 }
 
 // ---------- 手机单列、宽屏两栏 ----------

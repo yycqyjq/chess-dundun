@@ -26,8 +26,6 @@ export interface Shell {
   meta: HTMLElement;
   /** 系列战绩那行（结算卡上那条的同源文案）。一局都没打完时整条藏掉 */
   stand: HTMLElement;
-  /** 顶栏的声音开关，文字由 app.ts 写（「声音 开」/「声音 关」） */
-  sound: HTMLElement;
 }
 
 export interface ChipEls {
@@ -50,26 +48,27 @@ export function buildShell(
   maxStacks: number,
   onSetup: () => void,
   onLog: () => void,
-  onSound: () => void,
 ): Shell {
   root.innerHTML = '';
   const bar = div('bar');
   const brand = div('brand');
   brand.textContent = '棋墩墩';
   const meta = div('meta');
-  // 系列战绩：整条独占顶栏一行（CSS 里 flex-basis 100%）。排在按钮后面是为了让它在按钮那条下面另起一行，
-  // 不然它会跟按钮挤同一行、把右上角那三颗顶得忽左忽右。文字由 app.ts 写，一局没打完时藏掉
+  // 系列战绩：整条独占顶栏一行（CSS 里 flex-basis 100%），排在最后。文字由 app.ts 写，一局没打完时藏掉
   const stand = div('stand');
   stand.hidden = true;
   const btns = div('btns');
-  const btnLog = button('复盘');
-  const btnSetup = button('换桌');
-  const btnSound = button('声音');
-  btnLog.addEventListener('click', onLog);
-  btnSetup.addEventListener('click', onSetup);
-  btnSound.addEventListener('click', onSound);
-  btns.append(btnSound, btnLog, btnSetup);
-  bar.append(brand, meta, btns, stand);
+  // 顶栏只剩两颗图标按钮：复盘（≡）和离开这张桌（✕）。
+  // 声音开关不在牌桌上——它住在首页「设置」那一屏，两处一个状态，牌桌再摆一颗是重复入口
+  // （2026-10-13 用户：这桌子里面之后声音开关没必要了）。文字换成图标只把宽度压窄，
+  // 点击高度仍是 .btn 那 40px 的无障碍底线（style.test 钉着）。
+  const btnLog = iconButton('≡', '复盘', onLog);
+  const btnSetup = iconButton('✕', '换桌', onSetup);
+  btns.append(btnLog, btnSetup);
+  // 顶栏分三行：① 品牌在左、那两颗图标钉右上角；② 这桌的配置（.meta）；③ 系列战绩（.stand）。
+  // 顺序 品牌 → 图标 → 配置 → 战绩：2026-10-13 用户点名「移动端把配置那段挪到品牌下面、图标放右上角」
+  // ——.meta 靠 CSS 的 basis 100% 另起一行，图标靠 margin-left:auto 钉在右上
+  bar.append(brand, btns, meta, stand);
 
   const stage = div('stage');
   const board = div('board');
@@ -127,7 +126,6 @@ export function buildShell(
     lines,
     meta,
     stand,
-    sound: btnSound,
   };
 }
 
@@ -151,6 +149,17 @@ export function button(text: string, onClick?: () => void, cls = 'btn'): HTMLBut
   el.type = 'button';
   el.textContent = text;
   if (onClick) el.addEventListener('click', onClick);
+  return el;
+}
+
+/**
+ * 顶栏那种只画一个字形的小按钮：字形当正文，说明挂 title／aria-label（鼠标悬停看得见、
+ * 读屏念得出）。宽度由 `.btns .btn.icon` 压到跟高度一样，点击面积不缩水。
+ */
+export function iconButton(glyph: string, label: string, onClick?: () => void): HTMLButtonElement {
+  const el = button(glyph, onClick, 'btn icon');
+  el.title = label;
+  el.setAttribute('aria-label', label);
   return el;
 }
 

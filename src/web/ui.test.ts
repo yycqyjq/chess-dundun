@@ -92,6 +92,8 @@ class FEl {
   hidden = false;
   disabled = false;
   type = '';
+  /** iconButton 给图标按钮挂的悬停说明：跟 aria-label 同一份值 */
+  title = '';
   /** 手填那一格当前的字：只有 fillAddr 那条路使到，别的元素不碰 */
   value = '';
   placeholder = '';
@@ -232,7 +234,7 @@ G.window = { setTimeout: () => ++timerSeq, clearTimeout: (id: number) => void cl
 
 {
   const root = new FEl('div');
-  const shell = buildShell(H(root), 2, 4, 10, () => {}, () => {}, () => {});
+  const shell = buildShell(H(root), 2, 4, 10, () => {}, () => {});
   const v = seen(shell);
   ok(
     '台面建足四把名字条，只亮这桌两人在的那两条',
@@ -258,17 +260,40 @@ G.window = { setTimeout: () => ++timerSeq, clearTimeout: (id: number) => void cl
     v.stand.names.has('stand') && v.stand.hidden && bar.children[bar.children.length - 1] === v.stand,
     `${v.stand.className}｜hidden=${v.stand.hidden}｜顶栏第 ${bar.children.indexOf(v.stand) + 1}/${bar.children.length} 个`,
   );
+  // 顶栏三行的顺序（2026-10-13 用户点名：移动端把配置那段挪到品牌下面、图标放右上角）：
+  // 品牌 → 图标 → 配置 → 战绩。顺序写反了，CSS 那两条（.meta 的 basis 100%／.btns 的 margin-left:auto）全落空
+  ok(
+    '顶栏顺序是 品牌 → 图标 → 配置 → 战绩（图标排在品牌后面、配置前面）',
+    bar.children.map((c) => [...c.names][0]).join(',') === 'brand,btns,meta,stand',
+    bar.children.map((c) => [...c.names].join('+')).join('｜'),
+  );
   ok(
     '整台壳子里唯一一次 HTML 写入是把 root 清空',
     root.allHtml.length === 1 && root.allHtml[0] === '',
     root.allHtml.join('｜'),
+  );
+  // 顶栏按钮区（.btns）2026-10-13 起只剩两颗图标：复盘（≡）与离开（✕）。
+  // 声音开关搬回首页「设置」那一屏——牌桌上再摆一颗是重复入口（用户点名）
+  const btnsBox = bar.find('btns')!;
+  const topBtns = btnsBox.findAll('button');
+  ok(
+    '顶栏按钮区只剩两颗（复盘／离开），牌桌上不再摆声音开关',
+    topBtns.length === 2 && topBtns.every((b) => b.names.has('icon')),
+    topBtns.map((b) => `${b.textContent}[${[...b.names].join('+')}]`).join('｜'),
+  );
+  ok(
+    '两颗都是图标按钮：字形当正文，说明挂 title 与 aria-label（读屏／长按认得出）',
+    topBtns.map((b) => b.textContent).join(',') === '≡,✕' &&
+      topBtns.map((b) => b.title).join(',') === '复盘,换桌' &&
+      topBtns.map((b) => b.attrs['aria-label']).join(',') === '复盘,换桌',
+    topBtns.map((b) => `${b.textContent}→${b.title}/${b.attrs['aria-label']}`).join('｜'),
   );
 }
 
 // ---------- 座位标记写进对的格子 ----------
 
 {
-  const v = seen(buildShell(H(new FEl('div')), 4, 4, 10, () => {}, () => {}, () => {}));
+  const v = seen(buildShell(H(new FEl('div')), 4, 4, 10, () => {}, () => {}));
   const chip = v.chips[2]!;
   const parts = v.chipEls[2]!;
   const paint = (who: string, tag: string, count: number, won: number, ord: number | null): void =>

@@ -1450,10 +1450,11 @@ export class App {
       maxStacks(rules),
       () => this.resign(),
       () => this.toggleLog(),
-      () => this.toggleSound(),
     );
-    this.shell.setup.textContent = this.link ? '离桌' : '换桌';
-    this.paintSound();
+    // 那颗离开按钮只剩个 ✕：说明改挂 title／aria-label——联机念「离桌」、单机念「换桌」
+    const leave = this.link ? '离桌' : '换桌';
+    this.shell.setup.title = leave;
+    this.shell.setup.setAttribute('aria-label', leave);
     this.pieces = new Pieces(this.shell.board, deck);
     // 按钮池里那几颗挂在旧壳子上，壳子换了它们就是孤儿——重搭一次台面就整个忘掉
     this.btnPool = [];
@@ -2260,16 +2261,6 @@ export class App {
   private toggleLog(): void {
     this.shell.drawer.hidden = !this.shell.drawer.hidden;
     this.paintLog();
-  }
-
-  private toggleSound(): void {
-    this.sound.toggle();
-    this.paintSound();
-  }
-
-  private paintSound(): void {
-    this.shell.sound.textContent = `声音 ${this.sound.enabled ? '开' : '关'}`;
-    this.shell.sound.classList.toggle('mute', !this.sound.enabled);
   }
 
   /** 桌面在视口里的位置：只随尺寸变化重算（ResizeObserver）。pointermove 里现量 DOM 会把「改 transform → 强制重排」串成每帧一次 */
