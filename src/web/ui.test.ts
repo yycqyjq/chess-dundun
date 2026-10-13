@@ -70,11 +70,15 @@ let failures = 0;
 /** 这一拍里问了DOM多少次布局（每次都是一场强制重排） */
 let reads = 0;
 function ok(name: string, condition: boolean, detail = ''): void {
-  if (condition) console.log(`  ✓ ${name}`);
-  else {
-    failures++;
-    console.log(`  ✗ ${name}${detail ? ` —— ${detail}` : ''}`);
+  if (condition) {
+    console.log(`  ✓ ${name}`);
+    return;
   }
+  failures++;
+  // 失败第一件事是知道挂在哪：栈帧 0 是 ok 自己，帧 1 才是调用处 —— 取「文件名：行：列」缀在名字后
+  const at = new Error().stack?.split('\n')[2]?.trim().split(/[\\/]/).pop() ?? '';
+  // 定位缀在整行末尾：名字和 detail 的前缀保持原样，别把按名字找钉子的刀谱匹配弄瞎
+  console.log(`  ✗ ${name}${detail ? ` —— ${detail}` : ''}${at ? `（${at}）` : ''}`);
 }
 
 /** 一个假元素：ui.ts 用到哪几个洞就挖哪几个洞，别多 */

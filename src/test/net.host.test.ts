@@ -765,6 +765,9 @@ console.log('ps -o etime= 那串怎么读（mac 与 linux 都打这个形状）'
   writeFileSync(lock, lockBody({ pid: 999999, port: 7777, save: canonicalSave(save) }));
   ok('不注入 alive 也认得死人：那条留条拦不住新桌（真进程号问出来的）', refuse(() => claimSave(save, 5199)) === '', peekLock(lock));
 
+  // mineNow 这一趟得真写上条（条上先搁一条死人的让它接管）——收桌摘闸摘的是**自己写过**的那条，
+  // 没写过的不许碰（wrote 闸；2026-10-12 探针：同一进程两趟条内容逐字节相同，不认这条就会摘掉别人的闸）
+  writeFileSync(lock, lockBody({ pid: 999999, port: 7777, save: canonicalSave(save) }));
   const mineNow = claimSave(save, 5199, () => false);
   ok('收桌摘闸：摘掉之后这份存档空出来了', (mineNow(), !existsSync(lock)), peekLock(lock));
   ok('再摘一次不抛（close 走两趟也不该炸）', refuse(() => mineNow()) === '');
@@ -773,6 +776,22 @@ console.log('ps -o etime= 那串怎么读（mac 与 linux 都打这个形状）'
   mineNow();
   ok('别人的那条不许摘：接管过这张桌的人的闸，拆了等于没闸', peekLock(lock) === theirs, peekLock(lock));
   release();
+
+  // vite 改配置重启的形状：同一进程、同一端口、前后两趟起桌（2026-10-12 探针量过，
+  // 两趟条的内容一模一样，字节比对分不出谁是谁）。闸的归属认票不认字节：
+  // 后一趟起桌把前一趟的票顶掉，前一趟收桌就摸不到条；条被外人重写过，现任也不许摘。
+  const firstClaim = claimSave(save, 5199, () => false);
+  const secondClaim = claimSave(save, 5199, () => false);
+  firstClaim();
+  ok('同进程同端口两趟起桌，先收的那趟不摘闸（票已让给后一趟）', existsSync(lock), peekLock(lock));
+  // 票还在现任手里、条却被别人手动重写了（接管之后又来过人）：一样不许摘——E 刀钉的就是这条
+  const foreign = lockBody({ pid: 424242, port: 7000, save: canonicalSave(save) });
+  writeFileSync(lock, foreign);
+  secondClaim();
+  ok('条被别人重写过就不许摘：接管过这张桌的人的闸，拆了等于没闸', peekLock(lock) === foreign, peekLock(lock));
+  const thirdClaim = claimSave(save, 5199, () => false);
+  thirdClaim();
+  ok('现任那一趟收桌才真把闸摘了', !existsSync(lock), peekLock(lock));
 }
 
 {
@@ -908,7 +927,6 @@ console.log('ps -o etime= 那串怎么读（mac 与 linux 都打这个形状）'
   // D5：`discard()` 里那两下 `rmSync` 原来没兜底——它跑在一秒一次的表里（`tickOnce`），
   // 从 timer 抛出去就是 uncaughtException 带走全桌。
   // 这儿用真 `openRoom` 一次量齐两件：正常文件（D1）与「存档位恰好是个目录」（D5，`rmSync` 不带 recursive 删目录必抛 EISDIR）。
-  const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
   const dir = mkdtempSync(join(tmpdir(), 'qdd-revive-'));
   const save = join(dir, 'table.json');
   const asDir = join(dir, '存档位');
@@ -928,7 +946,14 @@ console.log('ps -o etime= 那串怎么读（mac 与 linux 都打这个形状）'
   alive.table.wiped = true;
   stuck.table.wiped = true;
   console.log = cap(said);
-  await sleep(1200); // room 里那颗一秒一次的表各跑一次 tickOnce：看见 wiped 就走 discard
+  // 一秒一次的表看见 wiped 就走 discard：事件到了就走，不等死窗（两条都在等——
+  // 存档抹掉 + 那句人话；D5 那桌的 tickOnce 本身也会念，所以捕日志的窗口一直开着）
+  {
+    const t0 = Date.now();
+    while (!(!existsSync(save) && said.some((l) => l.includes('散桌之后存档没抹干净'))) && Date.now() - t0 < 5000) {
+      await new Promise((r) => setTimeout(r, 50)); // 轮询间隙里一秒表才跑得起来，tickOnce 念的话由 cap 收进 said
+    }
+  }
   console.log = rawLog;
   ok('散桌之后存档当场抹了（`discard` 掐掉排队的合批、连 .tmp 一起抹）', !existsSync(save), '存档还在');
   ok('抹不掉时念一句人话，别让全桌跟着抛（那儿恰好是个目录：rmSync 删目录必抛 EISDIR）', said.some((l) => l.includes('散桌之后存档没抹干净')), said.join('｜'));

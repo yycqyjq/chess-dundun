@@ -13,6 +13,8 @@
  * L 钉「抢位那一步不原子」（2026-10-02 加）：退回「读→判→写」三步，同起的两张桌双双读到空条双双放行，后写的条盖前一张，两张桌同写一份 table.json。
  * M 钉「判活只看 pid」（2026-10-12 第二轮加）：pid 复用那条老坑——持锁那张桌挨 SIGKILL 走了，号被系统发给一个无关的新进程，
  *   于是「pid 活着」为真、这张桌永远起不来，而提示里那个进程其实早不存在（`sameHolder` 拿条上的出生证认出前人留条）。
+ * N 钉「收桌认票不认字节」（2026-10-13 第三批加）：同一进程前后两趟起桌（vite 改配置重启就是这个形状，两趟条的内容
+ *   逐字节相同），收桌只许摘「自己那趟的票还挂在文件上」的条——不然前一趟的收桌把后一趟正用着的闸拆了。
  * 跑法：npm run knives -- save-lock（全跑就 npm run knives；要看每刀全红几句加 --verbose）
  */
 export default {
@@ -51,10 +53,10 @@ export default {
     },
     {
       rel: 'src/node/room.ts',
-      note: 'E 收桌无条件摘条：这张桌被别人接管过之后，前一个人的收桌把现在这位的闸拆了，等于没闸',
+      note: 'E 收桌无条件摘条：这张桌被别人接管过之后，前一个人的收桌把现在这位的闸拆了，等于没闸（2026-10-12 闸改认票不认字节，那条断言改名「条被别人重写过就不许摘」）',
       from: "      if (readFileSync(file, 'utf8') === body) rmSync(file, { force: true });",
       to: '      rmSync(file, { force: true });',
-      expect: '别人的那条不许摘：接管过这张桌的人的闸，拆了等于没闸',
+      expect: '条被别人重写过就不许摘：接管过这张桌的人的闸，拆了等于没闸',
     },
     {
       rel: 'src/node/room.ts',
@@ -111,6 +113,13 @@ export default {
       from: "    writeFileSync(file, body, { flag: 'wx' });",
       to: '    writeFileSync(file, body);',
       expect: '另一张活桌抢同一份存档：当场拒，不悄悄把人家的账盖了',
+    },
+    {
+      rel: 'src/node/room.ts',
+      note: 'N 收桌不认票（谁收桌都能摘条）：vite 改配置重启那种「同进程两趟起桌」——前后两趟条的内容逐字节相同，只比字节分不出谁是谁，前一趟的收桌就把后一趟正用着的闸拆了（2026-10-13 第三批）',
+      from: '    if (lockTickets.get(file) !== seq) return;\n    lockTickets.delete(file);\n',
+      to: '',
+      expect: '同进程同端口两趟起桌，先收的那趟不摘闸（票已让给后一趟）',
     },
   ],
 };

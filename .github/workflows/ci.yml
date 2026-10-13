@@ -1,5 +1,5 @@
 # 验证一条龙：类型 + 规则自检 + 全部套件 + 构建 + 两桌端到端。
-# 刀架（298 把）太重，不上 CI，留在本机跑；electron 的二进制这条链用不到，跳过下载省几分钟。
+# 刀架（389 把）太重，不上 CI，留在本机跑；electron 的二进制这条链用不到，跳过下载省几分钟。
 name: CI
 
 on:
@@ -8,18 +8,33 @@ on:
   pull_request:
   workflow_dispatch:
 
+# 同一条分支连推 commit 时取消还在跑的旧一轮：verify 一整套不便宜，旧结果对新 commit 已经没意义。
+# 挂死也别吃满 GitHub 默认的 6 小时：job 级 timeout-minutes 兑住（本机全套 verify 只要几分钟）。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   verify:
     runs-on: ubuntu-latest
-    env:
-      ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: ${{ matrix.node }}
           cache: npm
+      # electron 的二进制只有装依赖这一步用得到（跳下载省几分钟）；
+      # 挂在 step 级而不是 job 级：哪天 smoke 接进桌面自测，别让它静默缺二进制
       - run: npm ci
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
       - run: npm run verify
       - run: npm run build
       - run: npm run smoke
+    strategy:
+      fail-fast: false
+      # 22 是 engines 的下限（--experimental-strip-types 那条链）；24 里类型直跑已默认开启，
+      # 行为有分叉，值得单开一档兑住「本机能过 CI 不能过」那一类问题
+      matrix:
+        node: ['22', '24']

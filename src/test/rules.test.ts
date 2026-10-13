@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process';
 import {
   ALL_WAYS,
   apply,
@@ -24,11 +25,15 @@ import { indexedHand, pickByIndices, sizesOf, tooLong } from '../cli/menu.ts';
 
 let failures = 0;
 function ok(name: string, condition: boolean, detail = ''): void {
-  if (condition) console.log(`  ✓ ${name}`);
-  else {
-    failures++;
-    console.log(`  ✗ ${name}${detail ? ` —— ${detail}` : ''}`);
+  if (condition) {
+    console.log(`  ✓ ${name}`);
+    return;
   }
+  failures++;
+  // 失败第一件事是知道挂在哪：栈帧 0 是 ok 自己，帧 1 才是调用处 —— 取「文件名：行：列」缀在名字后
+  const at = new Error().stack?.split('\n')[2]?.trim().split(/[\\/]/).pop() ?? '';
+  // 定位缀在整行末尾：名字和 detail 的前缀保持原样，别把按名字找钉子的刀谱匹配弄瞎
+  console.log(`  ✗ ${name}${detail ? ` —— ${detail}` : ''}${at ? `（${at}）` : ''}`);
 }
 
 const base = loadRules();
@@ -837,6 +842,27 @@ for (const mode of ['ming', 'kou'] as const) {
     `4人 ${mode}：收牌占比 ${shares.map((s) => (s * 100).toFixed(0) + '%').join(' ')}｜胜率 ${rates.map((s) => (s * 100).toFixed(0) + '%').join(' ')}`,
     shares.every((s) => s > 0.15 && s < 0.35) && rates.every((s) => s > 0.1 && s < 0.4),
   );
+}
+
+// ── CLI 参数闸：--seed 只认 0～4294967295 的整数（2026-10-13 第三批补）──
+// mulberry32 那头是 `seed >>> 0`：写负数会被折回正数——终端横幅印「种子 -1」，
+// 别人照着敲 -1 摇出来的是 4294967295 那副，README 那句「--seed=N 复现同一副牌」当场作废。
+// room.ts::setupFrom 的 intFlag 早有这道闸，命令行 play/selfplay 这条路一直漏着。
+// main.ts 是入口（import 它就当场跑、还会 process.exit），只能起真进程问一次，顺带把退出码也钉住。
+{
+  const run = (args: string[]): { status: number | null; out: string } => {
+    const r = spawnSync(process.execPath, ['--experimental-strip-types', 'src/cli/main.ts', ...args], { encoding: 'utf8' });
+    return { status: r.status, out: `${r.stdout ?? ''}${r.stderr ?? ''}` };
+  };
+  const neg = run(['play', '--seed=-1']);
+  ok('--seed 负数当场拒：念人话退 2，不让它静默折回 4294967295 那副牌',
+    neg.status === 2 && neg.out.includes('只能在 0 到 4294967295 之间'), `exit=${neg.status}｜${neg.out.trim().slice(0, 70)}`);
+  const nan = run(['play', '--seed=abc']);
+  ok('--seed 不是整数也拒（念的是「得是个整数」那句）',
+    nan.status === 2 && nan.out.includes('得是个整数'), `exit=${nan.status}｜${nan.out.trim().slice(0, 70)}`);
+  const over = run(['play', '--seed=4294967296']);
+  ok('--seed 越过上界一样拒（4294967296 折回 0 那副）',
+    over.status === 2 && over.out.includes('只能在 0 到 4294967295 之间'), `exit=${over.status}｜${over.out.trim().slice(0, 70)}`);
 }
 
 console.log(failures === 0 ? '\n全部通过\n' : `\n${failures} 项失败\n`);

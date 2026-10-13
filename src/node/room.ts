@@ -233,13 +233,25 @@ function claimLockFile(file: string, body: string): boolean {
 }
 
 /** 占住这份存档，回一句「收桌时把它摘了」；被另一张活着的桌占着就抛人话（两个宿主都念这一句） */
+/**
+ * 本进程现正持有的存档闸，按存档文件记谁的票：同一进程前后两趟起桌（vite 改配置重启就是这个形状，
+ * 探针量过——两趟条的内容一模一样，字节比对分不出谁是谁），收桌只许摘「自己这趟的票还挂在文件上」
+ * 的条：前一趟的收桌摸不到后一趟正用着的闸，接管过的闸也不许拆。
+ */
+const lockTickets = new Map<string, number>();
+let lockTicketSeq = 0;
+
 export function claimSave(save: string, port: number, alive: (held: SaveLock) => boolean = lockAlive): () => void {
   const file = lockPathOf(save);
   // 条上写下「我是谁、什么时候起来的」：pid 判活之外还认得出 pid 复用（见 lockAlive）
   const mine: SaveLock = { pid: process.pid, port, save: canonicalSave(save), startedAt: Date.now() - Math.round(process.uptime() * 1000) };
   const body = JSON.stringify(mine);
+  const seq = ++lockTicketSeq; // 这一趟的票：抢上了才登记，收桌时对票不认人
+  const own = (): void => void lockTickets.set(file, seq);
   const release = (): void => {
-    // 只摘自己写的那条：这张桌被别人接管过之后，前一个人的收桌不该去拆现在这位的闸
+    // 票已易主（后一趟接了同一道闸）或压根没抢上：这两条都不许碰条上的字
+    if (lockTickets.get(file) !== seq) return;
+    lockTickets.delete(file);
     try {
       if (readFileSync(file, 'utf8') === body) rmSync(file, { force: true });
     } catch {
@@ -249,7 +261,10 @@ export function claimSave(save: string, port: number, alive: (held: SaveLock) =>
   // 抢位这一步必须原子：`wx`＝不存在才创建，同时起的两张桌 OS 只放一张过去。
   // 旧写法「读→判→写」三步中间有窗口——两张桌同起，双双读到没人占、双双放行，
   // 后写的条盖掉前一张，然后各写各的 table.json（README 立这道闸挡的就是 2026-09-30 那次双写）。
-  if (claimLockFile(file, body)) return release;
+  if (claimLockFile(file, body)) {
+    own();
+    return release;
+  }
   // 没抢到：条已在——读回来判活，「接管死人留条」和「被活人拒」都从这条走
   let held: SaveLock | null = null;
   try {
@@ -263,7 +278,14 @@ export function claimSave(save: string, port: number, alive: (held: SaveLock) =>
   }
   // 读不懂的一条（半截字、别人随手写的、老代码留的没写存档路径的）当没人占：
   // 宁可让桌开起来，也别拿一条烂字节把门锁死
-  if (lockVerdict(held, mine, alive) === 'taken')
+  const verdict = lockVerdict(held, mine, alive);
+  if (verdict === 'mine') {
+    // 同进程同端口（vite 重启、桌面重开）：接回同一道闸，这一趟的票把前一趟顶掉——
+    // 前一趟手里那个 release 从此摸不到条，但条照样在、闸照样管事
+    own();
+    return release;
+  }
+  if (verdict === 'taken')
     throw new Error(
       `这份存档（${save}）已经被 ${held!.port} 端口上那张桌占着（进程 ${held!.pid}）：先关掉那张，或者给这一张另加 --save=另一份文件` +
         `（要是那张桌其实已经没在跑了，删掉 ${file} 再起一次）`,
@@ -275,8 +297,12 @@ export function claimSave(save: string, port: number, alive: (held: SaveLock) =>
   } catch {
     /* 摘不掉也接着抢，下面 wx 会如实报 EEXIST */
   }
-  if (claimLockFile(file, body)) return release;
+  if (claimLockFile(file, body)) {
+    own(); // 接管重抢也算这一趟占住了：收桌时由这一趟把条摘掉
+    return release;
+  }
   // 摘与抢之间被第三张桌插进来占了：活人就该让它，死条下回再走一遍判活——这一趟先让开，别硬写
+  // （这一趟没写上条：没走到 own()，票没登记在它名下，条上那一格还是别人写的，抛出去就完了）
   throw new Error(`这份存档（${save}）的占位条刚被别的进程接管，这一趟没抢上——稍后重试，或给这一张另加 --save=另一份文件`);
 }
 

@@ -385,7 +385,26 @@ if (counts.length > 0 && !counts.includes(Number(playersArg))) {
   process.exit(2);
 }
 const players = Number(playersArg);
-const seed = Number(flag(rest, 'seed', '7'));
+/**
+ * --seed 只认 0 ～ 4294967295 的整数：mulberry32 那头是 `seed >>> 0`，写负数会被折回正数——
+ * 终端横幅印「种子 -1」，别人照着敲 -1 摇出来的是另一副牌（4294967295 那副），
+ * README 那句「--seed=N 复现同一副牌」当场作废。room.ts::setupFrom 的 intFlag 早就有这道闸，
+ * 命令行这条 play/selfplay 的路一直漏着，这儿补齐同一个口径：非整数、越界都当场念人话退出。
+ */
+function seedArg(rest: string[]): number {
+  const raw = flag(rest, 'seed', '7');
+  if (!/^-?\d+$/.test(raw)) {
+    console.log(`--seed 得是个整数，你给的是「${raw}」`);
+    process.exit(2);
+  }
+  const n = Number(raw);
+  if (n < 0 || n > 0xffffffff) {
+    console.log(`--seed 只能在 0 到 4294967295 之间，你给的是 ${n}`);
+    process.exit(2);
+  }
+  return n;
+}
+const seed = seedArg(rest);
 
 if (cmd === 'check') process.exit(check() === 0 ? 0 : 1);
 const chain = !rest.includes('--independent');

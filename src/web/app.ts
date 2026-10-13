@@ -176,7 +176,9 @@ export class App {
   private seqDone = 0;
   /** welcome 到手之前，快照连自己是几号都还不知道，只能先攒着 */
   private seated = false;
-  private myToken = '';
+  private seatAuth = '';
+  /** 让座那一手递出去了、桌还没点头：按钮锁着，座位表（桌真收回了）或 welcome/reject（桌没认）来了解锁 */
+  private standing = false;
   private hostSeat = 0;
   /** 演过拍子的那一局。换一个种子就是开新局，整套画面跟着重来 */
   private openedSeed = -1;
@@ -197,6 +199,8 @@ export class App {
    */
   private list: { veil: HTMLElement; rows: HTMLElement; note: HTMLElement } | null = null;
   private findTimer = 0;
+  /** 原生寻呼那一趟还在天上飞：忙时跳过 interval 轮到的那轮，别让迟到的回包把新清单画旧 */
+  private sweepBusy = false;
   /** 寻呼还没发出去（那一刻线还没连上）时挂起的那一趟：握手一成由 onReady 补发 */
   private awaitFind = false;
   /** 这一屏拿到过一份清单了没：拿到之后就不在每轮寻呼时摆「正在寻」，省得那行字每五秒闪一下 */
@@ -417,11 +421,18 @@ export class App {
    * 收包回来时人可能已经走了（list 撤了）：那就一个字都不写，别往一块撤了的屏上画。
    */
   private async findNative(): Promise<void> {
+    // 在飞闸：原生那一路收包窗口有 SWEEP_MS 那么长，慢设备上一圈没完、下一轮 interval 就到了——
+    // 不闸的话两趟广播叠着飞，先飞的那趟晚归，回包错序把刚画上的清单又画回旧账。
+    // 忙着就跳过这一轮：下一轮自然补上，UI 那行「正在寻」由上一趟照常收尾。
+    if (this.sweepBusy) return;
+    this.sweepBusy = true;
     let found: FoundRoom[] | null = null;
     try {
       found = await nativeSweep(SWEEP_MS);
     } catch {
       found = null;
+    } finally {
+      this.sweepBusy = false;
     }
     if (!this.list) return;
     if (found === null) {
@@ -918,12 +929,23 @@ export class App {
     room.note.textContent = '正往那把椅子上坐……';
   }
 
-  /** 让座：椅子还回候场厅，本地也跟着站起来——不然按钮还挂着「你已坐下」，人以为坐着的还是自己 */
+  /**
+   * 让座：先递话，等桌点头再本地站起来。旧写法把本地态当场拆光——那句 stand 没递上去的话，
+   * 桌还认你坐着，而你手里已经没有令牌：那把椅子既不能「坐回」（rejoin 要 own/back），
+   * 也没法再让（this.seated 已 false），只能等满两分钟被 sweepIdle 被动收椅。
+   * 确认之前把 standing 闩上，别让人连点两趟。
+   */
   private standUp(): void {
     const link = this.link;
-    if (!link || !this.seated) return;
-    link.send({ t: 'stand' });
-    this.standLocal('');
+    if (!link || !this.seated || this.standing) return;
+    this.standing = true;
+    if (!link.send({ t: 'stand' })) {
+      // 没递上去（这句会进 Link 的补发队列，但桌子还没点头）：本地态不能拆。
+      // 按钮先松开，那句「和桌断了」由 Link 的 onStatus 报，不在这儿重复
+      this.standing = false;
+      return;
+    }
+    if (!this.room) this.openRoom(); // 等点头那会儿先站回候场厅（本地态没拆，座位行照旧念「你在这儿」）
     link.askLobby();
   }
 
@@ -934,7 +956,7 @@ export class App {
   private standLocal(why: string): void {
     this.breakTableLoop(); // 万一那条循环还挂着，让它散（连还吊着的 pull/ask 一起收场）
     this.seated = false;
-    this.myToken = '';
+    this.seatAuth = '';
     this.liveActs = [];
     // 令牌是桌发的，桌既然不认这把椅子，这份就该跟着还回去，别留着下次再撞
     forget();
@@ -957,7 +979,7 @@ export class App {
     this.queue.length = 0;
     this.seqDone = 0;
     this.reseat = true;
-    this.link?.send({ t: 'join', seat: this.me, token: this.myToken, nick: deviceNick() });
+    this.link?.send({ t: 'join', seat: this.me, token: this.seatAuth, nick: deviceNick() });
   }
 
   private onNet(text: string): void {
@@ -988,13 +1010,20 @@ export class App {
     switch (m.t) {
       case 'seats':
         this.hostSeat = m.hostSeat;
+        // 让座等点头的那一趟：座位表里自己那把已经空了，桌真的收回去了，本地这才站起来
+        if (this.standing && this.seated && !m.seats[this.me]?.taken) this.standLocal('');
+        // 还没等到：座位行照旧念「你在这儿」，按钮锁着（standing 仍 true）
+        else this.standing = this.standing && this.seated && !!m.seats[this.me]?.taken;
         this.room?.fill(m);
         return;
       case 'welcome': {
         this.reseat = false;
+        // 让座那趟没成（桌不认 stand，多半是开打后不让让）：椅子还是你的、凭据重发了，
+        // 本地态从没动过——把按钮解锁就走，下面照旧「重连认回原座」
+        this.standing = false;
         remember(m.seat, m.token);
         this.me = m.seat;
-        this.myToken = m.token;
+        this.seatAuth = m.token;
         this.status = m.status;
         if (this.seated) return; // 重连认回原座，牌桌那边不用重开
         this.seated = true;
@@ -1020,6 +1049,8 @@ export class App {
         return;
       case 'reject': {
         const why = m.why;
+        // 让座那趟被拒：椅子还在你名下，本地态没动过——只把按钮解锁，那句话照下面几条路摆出来
+        this.standing = false;
         // 这一句是冲着椅子来的：断线那会儿位子被人坐了、或者这桌减了人。
         // 那条循环还卡在等入座后的第一份快照，等不到就会死在这儿——站起来回候场厅重挑一把
         if (this.reseat) {

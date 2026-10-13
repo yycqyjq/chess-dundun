@@ -14,11 +14,15 @@ const web = (file: string): string => readFileSync(new URL(`../web/${file}`, imp
 
 let failures = 0;
 function ok(name: string, condition: boolean, detail = ''): void {
-  if (condition) console.log(`  ✓ ${name}`);
-  else {
-    failures++;
-    console.log(`  ✗ ${name}${detail ? ` —— ${detail}` : ''}`);
+  if (condition) {
+    console.log(`  ✓ ${name}`);
+    return;
   }
+  failures++;
+  // 失败第一件事是知道挂在哪：栈帧 0 是 ok 自己，帧 1 才是调用处 —— 取「文件名：行：列」缀在名字后
+  const at = new Error().stack?.split('\n')[2]?.trim().split(/[\\/]/).pop() ?? '';
+  // 定位缀在整行末尾：名字和 detail 的前缀保持原样，别把按名字找钉子的刀谱匹配弄瞎
+  console.log(`  ✗ ${name}${detail ? ` —— ${detail}` : ''}${at ? `（${at}）` : ''}`);
 }
 
 interface Rule {
@@ -32,7 +36,32 @@ const raw = web('style.css');
 // 注释里那些「上一版是 min-width」之类的话是给读的人看的，别让它们混进断言
 const css = raw.replace(/\/\*[\s\S]*?\*\//g, '');
 
-function parseBody(src: string, media: string, out: Rule[]): void {
+/** 字符串与注释先剔掉再数花括号：content 里写花括号、注释里藏花括号，
+ *  都不该被当成块结构（不认这些就会把后面的选择器集体切错位）。抹成等长空白，偏移不变。 */
+function maskNoise(src: string): string {
+  let out = '';
+  let i = 0;
+  while (i < src.length) {
+    const rest = src.slice(i);
+    const str = /^["']/.test(rest) ? rest.match(/^["'](?:[^"'\\\\]|\\\\.)*["']|^$/) : null;
+    const com = rest.startsWith('/*') ? rest.match(/^\/[\s\S]*?\*\//) : null;
+    if (str && str[0]) {
+      // 字符串体抹成空白，首尾引号也一并抹掉（括号计数用不上它们）
+      out += ' '.repeat(str[0].length);
+      i += str[0].length;
+    } else if (com && com[0]) {
+      out += ' '.repeat(com[0].length);
+      i += com[0].length;
+    } else {
+      out += src[i]!;
+      i++;
+    }
+  }
+  return out;
+}
+
+function parseBody(srcRaw: string, media: string, out: Rule[]): void {
+  const src = maskNoise(srcRaw); // 结构（找括号、配对）只看这份；下标与原文对齐（等长遮蔽）
   let i = 0;
   for (;;) {
     const open = src.indexOf('{', i);
@@ -45,7 +74,7 @@ function parseBody(src: string, media: string, out: Rule[]): void {
       else if (src[j] === '}') depth--;
       j++;
     }
-    const body = src.slice(open + 1, j - 1);
+    const body = srcRaw.slice(open + 1, j - 1); // 内容取原文：字符串里的值（content: '{'）不能被抹掉
     if (sel.startsWith('@media')) parseBody(body, sel.slice(6).trim(), out);
     else if (!sel.startsWith('@')) {
       const decls = new Map<string, string>();
@@ -65,6 +94,13 @@ function parseBody(src: string, media: string, out: Rule[]): void {
 const RULES: Rule[] = [];
 parseBody(css, '', RULES);
 ok('这份 CSS 拆得开：条数对得上花括号', RULES.length > 60, `只有 ${RULES.length} 条`);
+
+// 解析器自身的钉子：字符串里藏花括号、注释里藏花括号，都不能被当成块结构
+{
+  const probe: Rule[] = [];
+  parseBody(`.a { content: '{'; top: 1px; } .b { /* 座位行 { 逃过 */ bottom: 2px; } .c { left: 3px; }`, '', probe);
+  ok('字符串里藏的花括号不炸块结构：三条规则都拆得出', probe.length === 3 && probe[0]!.decls.get('content') === "'{'" && probe[1]!.sel === '.b' && probe[2]!.decls.get('left') === '3px', JSON.stringify(probe.map((r) => [r.sel, [...r.decls.keys()]])));
+}
 
 /** 某个选择器的那几条规则（可限定 media） */
 const at = (sel: string, media?: string): Rule[] =>
@@ -860,6 +896,54 @@ console.log('\n口径卫生：起桌失败撂人话、寻呼那次错误不漏 s
   const pkg = readFileSync(new URL('../../package.json', import.meta.url), 'utf8');
   const hits = (pkg.match(/"release"\s*:/g) ?? []).length;
   ok('package.json 里 "release" 这个键只出现一次（写两遍时后一个静默顶掉前一个）', hits === 1, `出现 ${hits} 次`);
+}
+
+// ---------- 第三批（测试基建与在飞闸）：三处新闸的源码级守卫（2026-10-13） ----------
+// 这三处都在浏览器/构建工具那一侧，node 测试进不去（见 README「测试为什么有两个家」），
+// 跟上面 copyReport、host.ts 那几条一个路子：读源码本身，钉住那几句判据还在。
+
+console.log('\n第三批：让座等点头、原生寻呼在飞闸、vite 重启接回同一张桌');
+{
+  const app = web('app.ts');
+
+  // 让座：先递话、等桌点头再拆本地态（旧写法是当场拆，那句 stand 没递上去时桌还认你坐着而令牌已没）
+  const standAt = app.indexOf('private standUp(): void {');
+  const standUp = standAt > 0 ? app.slice(standAt, app.indexOf('private standLocal(', standAt)) : '';
+  ok('让座先递话、等桌点头：standUp 里是 send 之后才站着等，不是当场拆本地态',
+    standUp.includes("if (!link.send({ t: 'stand' }))") && standUp.includes('this.standing = true;') && !standUp.includes('this.standLocal('),
+    standUp.replace(/\s+/g, ' ').slice(0, 110));
+  ok('递不上去（线断着）就复位：本地态一个字不动，那句 stand 已进补发队列',
+    /this\.standing = false;\s*\n\s*return;/.test(standUp),
+    standUp.replace(/\s+/g, ' ').slice(0, 110));
+  // 三处解锁各在各自的分支里：seats（桌真收了椅子）→ welcome（桌不认 stand）→ reject（这局不让让）。
+  // 钉「三处都在、且是这个先后」——只数总数（>=3）挡不住「删一处、又在别处加一处」那种假绿
+  const seatsFix = app.indexOf('this.standing && this.seated && !m.seats[this.me]?.taken');
+  const welcomeFix = app.indexOf("case 'welcome'");
+  const rejectFix = app.indexOf("case 'reject'");
+  const fixes = (app.match(/this\.standing = false;/g) ?? []).length;
+  ok('等点头的闩挂在三处解锁：seats 分支／welcome／reject 各一处，少一处按钮就永远锁着',
+    seatsFix > 0 && welcomeFix > seatsFix && rejectFix > welcomeFix && fixes >= 3,
+    `seats=${seatsFix}｜welcome=${welcomeFix}｜reject=${rejectFix}｜复位点=${fixes}`);
+
+  // 原生寻呼在飞闸：一圈没回来，下一轮 interval 到点也不许叠着发（迟归的回包会把新清单画回旧账）
+  const findAt = app.indexOf('private async findNative(): Promise<void> {');
+  const findNative = findAt > 0 ? app.slice(findAt, app.indexOf('\n  private ', findAt + 10)) : '';
+  ok('原生寻呼在飞闸：findNative 头一句忙着就返回，不叠着发第二趟',
+    findNative.includes('if (this.sweepBusy) return;') && findNative.includes('this.sweepBusy = true;'),
+    findNative.replace(/\s+/g, ' ').slice(0, 110));
+  ok('那趟飞完必松闸：复位在 finally 里（半路抛也不许把闸锁死、寻呼永久停摆）',
+    /finally\s*\{\s*this\.sweepBusy = false;/.test(findNative),
+    findNative.replace(/\s+/g, ' ').slice(0, 110));
+
+  // vite 改配置重启：先建新 server 再关旧的，桌跟的是配置不是 server 实例——
+  // 端口没变就接回同一张桌（不然前后两桌抢同一份存档）；收尾只认自己那一代，别去收新 server 正用着的桌
+  const vite = readFileSync(new URL('../../vite.config.ts', import.meta.url), 'utf8');
+  ok('vite 重启接回同一张桌：端口没变就不新开一张（改配置重启牌局还在）',
+    vite.includes('if (live && live.port !== port)') && vite.includes('const room = live?.room ?? openRoom('),
+    '‹找不到「接回同一张桌」那两句›');
+  ok('收尾只认自己那一代：旧 server 关闭时别去收新 server 正用着的那张桌',
+    vite.includes('const gen = ++genSeq;') && /if \(live\?\.gen === gen\) \{/.test(vite),
+    '‹找不到代号那一手›');
 }
 
 console.log(failures ? `\n${failures} 条没过` : '\n全部通过');

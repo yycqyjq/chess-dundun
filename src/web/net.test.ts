@@ -13,11 +13,15 @@ import { deviceNick, forget, Link, PROBE_MS, QUIET_MS, recall, remember, setTabl
 
 let failures = 0;
 function ok(name: string, condition: boolean, detail = ''): void {
-  if (condition) console.log(`  ✓ ${name}`);
-  else {
-    failures++;
-    console.log(`  ✗ ${name}${detail ? ` —— ${detail}` : ''}`);
+  if (condition) {
+    console.log(`  ✓ ${name}`);
+    return;
   }
+  failures++;
+  // 失败第一件事是知道挂在哪：栈帧 0 是 ok 自己，帧 1 才是调用处 —— 取「文件名：行：列」缀在名字后
+  const at = new Error().stack?.split('\n')[2]?.trim().split(/[\\/]/).pop() ?? '';
+  // 定位缀在整行末尾：名字和 detail 的前缀保持原样，别把按名字找钉子的刀谱匹配弄瞎
+  console.log(`  ✗ ${name}${detail ? ` —— ${detail}` : ''}${at ? `（${at}）` : ''}`);
 }
 
 /** 测试要替浏览器装的这几样，全挂在 globalThis 上；不带 node 的 types，所以一律这么绕 */
@@ -103,6 +107,22 @@ G.window = {
   clearTimeout: (id: number) => clearTimeout(id),
 };
 
+/**
+ * 真钟调度的重连到点就走：轮询条件成立即回，不等死窗。上限留足（退避表 400ms 起，
+ * 轮到下一次重连至少 400ms，负载抖动也不至于误报）；上限到了就当场记一条失败，别挂在下一行断言上让人猜。
+ */
+async function waitFor(what: string, probe: () => boolean, ms = 5000): Promise<void> {
+  const t0 = Date.now();
+  while (!probe()) {
+    if (Date.now() - t0 > ms) {
+      ok(what, false, `等了 ${ms}ms 条件还没成立`);
+      return;
+    }
+    await sleep(50);
+  }
+  ok(what, true);
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
@@ -183,9 +203,11 @@ function make(now?: () => number): { link: Link; sock: () => FakeSocket; log: st
     second.sent.length === 1 && JSON.parse(second.sent[0]!).t === 'stand',
     second.sent.join(),
   );
-  // 旧那条排的重连要是没撤掉，这会儿会再多开一条，越连越快
+  // 旧那条排的重连要是没撤掉，这会儿会再多开一条，越连越快——所以还得再等一窗：
+  // 条件成立后再给「本来不该有的一条」留足观察窗，免得并行误报被当通过
+  await waitFor('重连只有一条在跑：retry 把旧那轮的等待撤了', () => made.length === 2);
   await sleep(900);
-  ok('重连只有一条在跑：retry 把旧那轮的等待撤了', made.length === 2, `一共开了 ${made.length} 条`);
+  ok('重连只有一条在跑：观察窗过完还是那两条', made.length === 2, `一共开了 ${made.length} 条`);
   link.close();
 }
 
@@ -211,8 +233,9 @@ function make(now?: () => number): { link: Link; sock: () => FakeSocket; log: st
   );
   ok('这条被就地 close 掉了：置空 + close 对 CONNECTING/OPEN/CLOSING 三种都成立，重连只排一次', s.readyState === 3, `readyState=${s.readyState}`);
   // close 之后 onclose 排的那条重连到点，才真正新开——而且只有一条
-  await sleep(1200);
-  ok('旧那条的 onclose 排了一条重连，且只有一条', made.length === before + 1, `一共开了 ${made.length} 条`);
+  await waitFor('旧那条的 onclose 排了一条重连', () => made.length === before + 1);
+  await sleep(900);
+  ok('观察窗过完：还是只有一条', made.length === before + 1, `一共开了 ${made.length} 条`);
   link.close();
 }
 
@@ -261,8 +284,7 @@ function make(now?: () => number): { link: Link; sock: () => FakeSocket; log: st
   }
   ok('问一声还不答：拆掉这条重连', s.readyState === 3 && made.length === 1, `开了 ${made.length} 条`);
   ok('拆线那一下报了断线，人看得见', log.some((x) => x.startsWith('status:和桌断了')), log.join('|'));
-  await sleep(900);
-  ok('拆完真的又去敲了门', made.length === 2, `一共开了 ${made.length} 条`);
+  await waitFor('拆完真的又去敲了门', () => made.length === 2);
   link.close();
 }
 

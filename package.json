@@ -1,6 +1,6 @@
 {
   "name": "chess-dundun",
-  "version": "0.4.9",
+  "version": "0.4.10",
   "private": true,
   "description": "棋墩墩 — 掀棋/打棋摞 的规则引擎与人机对战",
   "license": "MIT",
@@ -12,11 +12,12 @@
   "scripts": {
     "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.web.json",
     "check": "node --experimental-strip-types src/cli/main.ts check",
-    "test": "npm run test:rules && npm run test:layout && npm run test:style && npm run test:net && npm run test:link && npm run test:discover && npm run test:native && npm run test:scan && npm run test:local && npm run test:ui && npm run test:qr && npm run test:desktop",
+    "test": "node tools/test-all.mjs",
     "test:rules": "node --experimental-strip-types src/test/rules.test.ts",
+    "test:guards": "node --experimental-strip-types src/test/guards.test.ts",
     "test:layout": "node --experimental-strip-types src/test/layout.test.ts",
     "test:style": "node --experimental-strip-types src/test/style.test.ts",
-    "test:net": "node --experimental-strip-types src/test/net.table.test.ts; s=$?; node --experimental-strip-types src/test/net.host.test.ts; t=$?; node --experimental-strip-types src/test/net.wire.test.ts; u=$?; exit $((s+t+u))",
+    "test:net": "node tools/test-net.mjs",
     "test:link": "node --experimental-strip-types src/web/net.test.ts",
     "test:discover": "node --experimental-strip-types src/test/discover.test.ts",
     "test:native": "node --experimental-strip-types src/web/nativeDiscover.test.ts",

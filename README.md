@@ -66,7 +66,7 @@ npm run play -- --players=2 --mode=kou --level=hard       # 人机对战
 npm run selfplay -- --players=4 --mode=ming --games=400   # 电脑对电脑出统计
 ```
 
-`--mode=ming|kou` 选明棋暗棋，`--players=2|4` 选人数，`--level=easy|greedy|hard` 选电脑难度，`--seed=N` 复现同一副牌。
+`--mode=ming|kou` 选明棋暗棋，`--players=2|4` 选人数，`--level=easy|greedy|hard` 选电脑难度，`--seed=N` 复现同一副牌（N 只认 0～4294967295 的整数，写负数或越界当场拒——`mulberry32` 那头是 `seed >>> 0`，折回之后摇出来的是另一副牌，那句「复现」就落空了）。
 
 上面这些规则一条一条都写在 [`rules.json`](rules.json) 里——职级、每级几张、一摞几张、明暗两栏怎么比、并列怎么判，改它就行，不用动代码。改坏了**当场拒**（`parseRules` 逐档校验，一档都跑不掉）：枚数除得尽家数、一摞张数除得尽家数；**留了「一人一层拿牌」还要求总数除得尽一摞张数**（2026-10-12 补的那条——末摞短一截时，短的那几层会分到空位，摆完牌那一刻 `legalActions` 里 `byId.get(undefined)` 就抛 `TypeError`）；只留整摞轮流拿则要求摞数除得尽家数。拒绝时念的是哪一档、错在哪、怎么改，别抱着一副坏牌组打到中局。
 
@@ -109,14 +109,14 @@ npm run selfplay -- --players=4 --mode=ming --games=400   # 电脑对电脑出�
 ## 改动怎么验
 
 ```bash
-npm run verify        # 类型检查 + 规则自检 + 十二套测试，一条命令
+npm run verify        # 类型检查 + 规则自检 + 十五套测试，一条命令
 npm run smoke         # 端到端冒烟：host 和 dev 各起一桌，两条 WebSocket 当两台设备走完一整局
 npm run knives        # 负向验证：一处一处把闸拆掉，看那套测试红不红、红的是不是它该红的那句
 ```
 
 后两条都只在系统临时目录里抄一份仓库再跑，绝不往仓库根的 `table.json` 上落一笔（连旁边那颗 `table.json.lock` 也落在副本里）——那张桌一开桌就会写存档（`src/node/room.ts` 的 `openRoom`），拿仓库本体量等于拿你正在打的那一桌当试验品。
 
-verify 全绿这条挂了自动挡：push / PR 会跑 `.github/workflows/ci.yml`（verify + build + smoke，electron 二进制跳过下载）；刀架（64 张谱、386 把）太重不上 CI，留在本机按批跑。发布走 `npm run release`（改版本号 → verify → 三端出包 → 提交打 tag），口径见 [RELEASE.md](RELEASE.md)。
+verify 全绿这条挂了自动挡：push / PR 会跑 `.github/workflows/ci.yml`（verify + build + smoke，electron 二进制跳过下载）；刀架（65 张谱、389 把）太重不上 CI，留在本机按批跑。发布走 `npm run release`（改版本号 → verify → 三端出包 → 提交打 tag），口径见 [RELEASE.md](RELEASE.md)。
 
 副本抄什么、回档什么都写在 `tools/lib.mjs` 两处，**加新源码目录时两处都要看一眼**：`NOT_COPIED` 那份名单把 `release/`（一份 dmg 就 123 MB）和 `android/` 的 gradle 产物挡在副本外面，`syncSrc` 每把刀开拆前把 `src/`、`desktop/` 和 `package.json` 各自 rsync 回副本一次（最后那份 2026-10-12 补的：`housekeeping` 那把拆脚本键的刀改的就是它，不盖回的话同一张谱子里后面每把刀都砍在它的伤口上、红字里凭空多一条不属于它的 ✗）——只回 `src/` 的话，同一张谱子里下一把刀就砍在上一把的伤口上，红字对不上那句 `expect`，看起来像「刀钝了」，其实是上一把没还回去。
 
@@ -130,7 +130,7 @@ verify 全绿这条挂了自动挡：push / PR 会跑 `.github/workflows/ci.yml`
 - **改了源码记得回刀谱看一眼那把刀还利不利**：刀口（`from`）抄的是源码里的字面量，源码一改它就跟着动。2026-10-02 给占位条加「认软链」那一档时，`save-lock` 的 D 把当场**变绿**——它的 `to` 里写的是 `resolve(save)`，而 `claimSave` 那格改成了 `canonicalSave(save)`，两条串不再相等，刀拆的闸被自己的比对绕过去了。这不是「闸冗余」（belt 要求旁边另有闸挡着），是**刀钝了**：判据得跟着源码那一行一起改（D 的 `to` 换成 `canonicalSave(save)` 就又钉得住那句了）。所以补完闸顺手单跑一遍相关谱子（`npm run knives -- save-lock --verbose`），看红的把数跟改前对得上。
   同一天又磨绿两把，两种磨法各记一条：① **判据不许蹭随机流位**——`table-over` 的 6 号刀拆掉换牌面那趟的 `settleOver`，起抽人就退给新牌面的种子掷出来，而那条测试单看一局「赢家是不是起抽人」，撞中就是二分之一的运气；椅子令牌改走 `node:crypto` 之后桌那条流少走了两步，恰好撞中，刀当场变绿。现在钉的是连翻六局那一条（每局换 `setup.seed`，全撞中 1/64）。② **前提本身也得有断言**——`book-save` 的 7 号刀（存档不写 `rngSteps`）拆的是一串 0：那段测试只打一局就存档，而头一副牌用的就是 `setup.seed`，那条流一步没走，所以「不写流位」跟「写 0」没区别，谁都看不见。改成存前打满两局，并加一句「打到存档这一刻，那条流确实走过几步」，前提塌了会自己念出来。
 - **`vite.config.ts` 也在类型检查里**（`tsconfig.json` 的 `include` 带着它）：那 56 行不是配置装饰，它 `openRoom(...)` 起了真桌、把 `/whoami` 排在 Vite 自己的中间件前面、把 `/ws` 挂在 `httpServer.on('upgrade')` 上——是全仓库唯一一块「有真行为、归构建工具管」的代码，早前两份 tsconfig 都不 include 它，`tsc` 一个字没查过它，只有 `smoke:dev` 端到端跑得到。查它零成本（0 处要改），所以钉在这儿，别再让它裸奔。
-- **测试为什么有两个家**：`src/test/*.test.ts` 七套走 `tsconfig.json`（`types: ["node"]`，能 `import 'node:fs'`），`src/web/net.test.ts`（`test:link`）和 `src/web/ui.test.ts`（`test:ui`）住在出货源码那一侧，是因为它们要的是 `tsconfig.web.json` 那套 DOM 类型——搬进 `src/test/` 就换了一套 `types`，`HTMLElement` 当场编不过。同一侧还有 `src/web/nativeDiscover.test.ts`（`test:native`）和 `src/web/nativeScan.test.ts`（`test:scan`）：它们量的是外壳里那两条（原生寻呼／扫码）的 JS 包装，环境是 `globalThis.Capacitor` 上挂的一个假插件，跟 `ui.test.ts` 一样自己搭。它们也不进 bundle：`vite build` 只收 `src/web/main.ts` 引得到的那一块。跑起来还是同一套 `node --experimental-strip-types`，浏览器那两头是自己搭了个假 `document`。
+- **测试为什么有两个家**：`src/test/*.test.ts` 十套走 `tsconfig.json`（`types: ["node"]`，能 `import 'node:fs'`），`src/web/net.test.ts`（`test:link`）和 `src/web/ui.test.ts`（`test:ui`）住在出货源码那一侧，是因为它们要的是 `tsconfig.web.json` 那套 DOM 类型——搬进 `src/test/` 就换了一套 `types`，`HTMLElement` 当场编不过。同一侧还有 `src/web/nativeDiscover.test.ts`（`test:native`）和 `src/web/nativeScan.test.ts`（`test:scan`）：它们量的是外壳里那两条（原生寻呼／扫码）的 JS 包装，环境是 `globalThis.Capacitor` 上挂的一个假插件，跟 `ui.test.ts` 一样自己搭。它们也不进 bundle：`vite build` 只收 `src/web/main.ts` 引得到的那一块。跑起来还是同一套 `node --experimental-strip-types`，浏览器那两头是自己搭了个假 `document`。
 - `src/test/desktop.test.ts`（`test:desktop`）测的东西在 `src/` 外面——它引的是 `desktop/launch.ts`，所以 `tsconfig.json` 的 `include` 现在带着 `desktop`（那里面 `main.ts` 也一起被类型检查，它引 electron）。**这条链的口径是「判断住进 launch.ts、`main.ts` 只剩 Electron 的活」**：一旦哪句判断被搬回 `main.ts`，它就同时离开类型检查和测试（`main.ts` 引 electron，进不了 node 测试），所以那套测试里专门钉了一条「判断确实住在 launch.ts」——刀谱 `tools/knives/desktop-launch.mjs` 的 L、M 两把拆的就是「引回 electron」和「在 `main.ts` 里再拼一条地址」。
 - 画面到底长什么样（手机竖屏摊开、二维码扫开、真机上寻不寻得到别的桌）这里量不到，只有浏览器自动化那条路是拦着的——得你自己开 `npm run dev` 拿设备看。
 

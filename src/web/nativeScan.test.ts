@@ -12,11 +12,15 @@ import { nativeScan, nativeScanAvailable } from './nativeScan.ts';
 
 let failures = 0;
 function ok(name: string, condition: boolean, detail = ''): void {
-  if (condition) console.log(`  ✓ ${name}`);
-  else {
-    failures++;
-    console.log(`  ✗ ${name}${detail ? ` —— ${detail}` : ''}`);
+  if (condition) {
+    console.log(`  ✓ ${name}`);
+    return;
   }
+  failures++;
+  // 失败第一件事是知道挂在哪：栈帧 0 是 ok 自己，帧 1 才是调用处 —— 取「文件名：行：列」缀在名字后
+  const at = new Error().stack?.split('\n')[2]?.trim().split(/[\\/]/).pop() ?? '';
+  // 定位缀在整行末尾：名字和 detail 的前缀保持原样，别把按名字找钉子的刀谱匹配弄瞎
+  console.log(`  ✗ ${name}${detail ? ` —— ${detail}` : ''}${at ? `（${at}）` : ''}`);
 }
 
 /** 测试要替 Capacitor 装的那一个全局；不带 node 的 types，一律这么绕 */

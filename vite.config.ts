@@ -9,31 +9,56 @@ const version = (JSON.parse(readFileSync(new URL('./package.json', import.meta.u
  * 把那张牌桌直接挂进开发服务器：npm run dev 一条命令就能联机，不用再单开一个
  * npm run host——页面和 /ws 同源于这个端口，终端印出来的那条局域网地址扫开就是候场厅。
  * host 那边还留着：那是「不装开发工具、只端 dist/」的跑法。
+ *
+ * 重启怎么算（2026-10-12 探针量的）：vite 改配置重启时**先建新 server、再关旧 server**，
+ * configureServer 会再跑一趟。桌跟的是配置不是 server 实例——端口没变就把**同一张桌**
+ * 接给新 server 接着用（改配置重启牌局还在，存档锁也只占一趟，不存在前后两桌抢同一份）；
+ * 端口变了才收旧开新。每张 httpServer 的收尾只认**自己这一代**的代号：
+ * 旧 server 关闭那一刻 live 已经记成新的一代，就别去收新 server 正用着的那张桌——
+ * 原来的写法 `once('close', () => room?.close())` 摸的是外层变量，重启时那变量已经被
+ * 后一趟覆盖，关掉的是新桌，旧桌的寻呼 socket 和存档闸从没人收。
  */
 function tableRoom(): Plugin {
-  let room: Room | null = null;
+  /** 还活着的桌＋它的代数：configureServer 每跑一趟记一代，httpServer 收尾只认自己那一代 */
+  let live: { room: Room; gen: number; port: number } | null = null;
+  let genSeq = 0;
   return {
     name: 'chess-dundun-table',
     configureServer(server: ViteDevServer) {
-      room = openRoom(process.argv.slice(2), Number(server.config.server.port));
+      const gen = ++genSeq;
+      const port = Number(server.config.server.port);
+      // 端口没变就接回同一张桌（重启＝改配置，桌本身没理由换）；端口变了才收旧开新
+      if (live && live.port !== port) {
+        live.room.close();
+        live = null;
+      }
+      const room = live?.room ?? openRoom(process.argv.slice(2), port);
+      live = { room, gen, port };
+      const http = server.httpServer;
       // GET /whoami 排在 Vite 自己的中间件前面：这条路径 Vite 本来也没有，占不着谁
       server.middlewares.use((req, res, next) => {
-        if (!room?.handleHttp(req, res)) next();
+        if (!room.handleHttp(req, res)) next();
       });
-      server.httpServer?.on('upgrade', (req, socket, head) => {
-        room?.handleUpgrade(req, socket, head); // 不是 /ws 的一条字节不碰，留给 Vite 自己的 HMR
+      http?.on('upgrade', (req, socket, head) => {
+        room.handleUpgrade(req, socket, head); // 不是 /ws 的一条字节不碰，留给 Vite 自己的 HMR
       });
-      server.httpServer?.once('close', () => room?.close());
+      // 这张 httpServer 收尾只收自己这一代的桌：重启时旧 server 关闭，live 已记成下一代，这一手就落空
+      http?.once('close', () => {
+        if (live?.gen === gen) {
+          room.close();
+          live = null;
+        }
+      });
       // 服务器起来了再补这几行（实测排在 Vite 那条 Local/Network 前面，看两遍地址别奇怪）
       return () => {
-        const urls = room?.inviteUrls() ?? [];
-        console.log(`  牌桌就挂在这个服务器上，存档 ${room?.savePath}；别的设备打开下面那条局域网地址就是候场厅。`);
+        const urls = room.inviteUrls();
+        console.log(`  牌桌就挂在这个服务器上，存档 ${room.savePath}；别的设备打开下面那条局域网地址就是候场厅。`);
         console.log(
           urls.length
             ? `  局域网地址：${urls.join('  ')}`
             : '  没找到局域网地址：这台机器好像没连上路由器',
         );
-        const d = room?.discovery;
+        const d = room.discovery;
         console.log(
           d?.on
             ? `  同网寻呼守 UDP ${d.port}：别的设备上同网桌列表那一页每五秒往这块网问一圈。`
