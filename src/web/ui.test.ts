@@ -249,6 +249,13 @@ G.window = { setTimeout: () => ++timerSeq, clearTimeout: (id: number) => void cl
   );
   // 摞标签按最宽那一档建够：3 人档 30 枚 ÷ 一摞 3 张＝10 摞，比 2、4 人那 8 摞多两格
   ok('十摞标签建够十块', v.pileZones.length === 10);
+  // 标签只写「N 摞」（2026-10-14 用户：手机上「第几摞」折行了，不许换行）。
+  // 领地的宽度是几何量：10 摞那一档只有 29～33px，而「第 N 摞」最少要 33.5px——量过，装不下
+  ok(
+    '摞标签只写「N 摞」（「第 N 摞」在 10 摞那一档装不下，一超就折行）',
+    v.pileZones[0]!.textContent === '1 摞' && v.pileZones[9]!.textContent === '10 摞',
+    `首块「${v.pileZones[0]!.textContent}」末块「${v.pileZones[9]!.textContent}」`,
+  );
   ok(
     '五格都挂在自己那条名字条下面',
     v.chipEls.every((p) => Object.values(p).every((el) => el.parent === v.chips[v.chipEls.indexOf(p)])),

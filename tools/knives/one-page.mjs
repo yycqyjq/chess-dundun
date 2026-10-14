@@ -3,6 +3,8 @@
  * 三处出口念同一份「返回」。`app.ts` 经 `rules.json?raw` 进不了 node 测试，
  * 所以那几条文本质疑挂在 `test:style` 上，能真跑的两句（BACK／entryHead/page 的类名）挂在 `test:ui` 上。
  * 2026-09-29 每把跑过 `npm run knives -- one-page --verbose`，`expect` 从实际红字逐字抄回。
+* 2026-10-14：`.sheet`／`.home`／`.drawer` 前头各插了 inset 的四条兜底（top/right/bottom/left，
+* 认不得 inset 简写的旧内核用），M／P／R／S 四处刀口跟着重抄——刀口只认源码里现成的那一段。
  * 跑法：npm run knives -- one-page（全跑就 npm run knives；看每刀全红几句加 --verbose）
  */
 export default {
@@ -122,9 +124,9 @@ export default {
     {
       rel: 'src/web/style.css',
       note: 'M 往基础遮罩那层添一条模糊：页面自己也跟着糊一层（`.as-page` 压根不知道多了这条）',
-      from: '.sheet {\n  position: fixed;\n  inset: 0;',
-      to: '.sheet {\n  backdrop-filter: blur(3px);\n  position: fixed;\n  inset: 0;',
-      expect: '遮罩那层照旧生效的只有「铺满一屏」那四件（没有半透底、没有内边距）',
+      from: '.sheet {\n  position: fixed;',
+      to: '.sheet {\n  backdrop-filter: blur(3px);\n  position: fixed;',
+      expect: '遮罩那层照旧生效的只有「铺满一屏」那四件＋inset 的四条方向展开（没有半透底、没有内边距）',
     },
     {
       rel: 'src/web/style.css',
@@ -143,8 +145,8 @@ export default {
     {
       rel: 'src/web/style.css',
       note: 'P 复盘那一格的层号高过卡：掀不开这一屏，还挡在钉住的那排按钮上',
-      from: '.drawer {\n  position: fixed;\n  inset: auto 0 0 0;\n  z-index: 1900;',
-      to: '.drawer {\n  position: fixed;\n  inset: auto 0 0 0;\n  z-index: 2500;',
+      from: '  inset: auto 0 0 0;\n  z-index: 1900;',
+      to: '  inset: auto 0 0 0;\n  z-index: 2500;',
       expect: '卡／整屏页之上只剩提示条那层，首页压在复盘之上（.drawer＜.home＜.sheet＜.toast）',
     },
     {
@@ -157,15 +159,15 @@ export default {
     {
       rel: 'src/web/style.css',
       note: 'R 首页那层的层号退回跟复盘打平（1950 → 1900）：谁压谁又交回 DOM 顺序，改顺序就悄悄盖不住那一格',
-      from: '.home {\n  position: fixed;\n  inset: 0;\n  z-index: 1950;',
-      to: '.home {\n  position: fixed;\n  inset: 0;\n  z-index: 1900;',
+      from: '  inset: 0;\n  z-index: 1950;',
+      to: '  inset: 0;\n  z-index: 1900;',
       expect: '卡／整屏页之上只剩提示条那层，首页压在复盘之上（.drawer＜.home＜.sheet＜.toast）',
     },
     {
       rel: 'src/web/style.css',
       note: 'S 首页的层号高过卡跟提示条（1950 → 2500）：整屏那一页和那一句话都被首页盖死',
-      from: '.home {\n  position: fixed;\n  inset: 0;\n  z-index: 1950;',
-      to: '.home {\n  position: fixed;\n  inset: 0;\n  z-index: 2500;',
+      from: '  inset: 0;\n  z-index: 1950;',
+      to: '  inset: 0;\n  z-index: 2500;',
       expect: '首页压在牌桌之上、任何卡之下',
     },
     {

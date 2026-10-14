@@ -2210,14 +2210,17 @@ export class App {
           : '轮到你跟牌：张数对上就必须出，出大出小随意');
     if (!clickable) return;
     const match = this.matching();
-    if (match) this.takeBtn(this.describe(match), () => this.commit(match), 'btn primary');
-    else if (this.view.sel.size > 0) this.takeBtn(this.whyNot(this.view.sel), null);
+    // 「清空」排在「出牌」前头，并且独占按钮条上面那一行（宽度见 style.css 的 .btn.clear）。
+    // 按钮条贴着底边（.ctrl 是绝对定位 + bottom 固定），最后一行永远落在手指最熟的那个位置——
+    // 那儿必须是「出牌」：清空挤在出牌下面时，一抬手就把刚选好的牌清光了（2026-10-13 用户报的误触）。
     if (this.view.sel.size > 0) {
       this.takeBtn('清空', () => {
         this.view.sel.clear();
         this.render(true);
-      });
+      }, 'btn clear');
     }
+    if (match) this.takeBtn(this.describe(match), () => this.commit(match), 'btn primary');
+    else if (this.view.sel.size > 0) this.takeBtn(this.whyNot(this.view.sel), null);
   }
 
   /**

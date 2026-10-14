@@ -36,6 +36,11 @@ body {
 #app {
   display: flex;
   flex-direction: column;
+  /* 高度先给 vh 兜底、再给 dvh（2026-10-14 查兼容）：认不得 dvh 的内核会把整条声明丢掉，
+     #app 一丢就没高度，牌桌当场塌成 0 高（实测 844→81.7、.board 762.3→0）。
+     JS 那侧的语法下限只到 Chrome 85（dist 里有 ??=），比 dvh 的 108 低一大截，
+     所以确实存在「JS 跑得动、牌桌却塌了」的窗口。全份 CSS 的 dvh 都照这个写法来。 */
+  height: 100vh;
   height: 100dvh;
   padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px) 0 env(safe-area-inset-left, 0px);
 }
@@ -140,6 +145,23 @@ body {
   justify-content: center;
   gap: 6px;
   max-width: calc(100% - 20px);
+}
+
+/* 「清空」不占按钮条的位子——浮在它上面、单独一行。
+   按钮条贴着底边（.ctrl 是绝对定位 + bottom 固定），所以最后一行永远落在手指最熟的那个位置，
+   那儿必须是「出牌」：清空挤在出牌下面时，一抬手就把刚选好的牌清光了（2026-10-13 用户报的误触）。
+   绝对定位让它退出按钮条的行流，出牌的位置一个字都不动。
+   左右 auto 外边距居中——不用 transform，那个留给 hover／:active 的抬起落下。
+   left/right 都是 0 会把按钮拉成跟按钮条一样宽，拿 max-content 收回来（认不得这个值的旧内核
+   就当没写，退回等宽，按钮照旧按得动）。 */
+.ctrl .btn.clear {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(100% + 6px);
+  max-width: max-content;
+  margin-left: auto;
+  margin-right: auto;
 }
 
 /* 掉线轻提醒：钉在桌面正上方那条。半透明底、不抢牌，只在那几位连不上时露脸；
@@ -302,9 +324,9 @@ body {
 /* 名字条的落点不住在这儿：board.ts 的 labelBands() 算，app.ts 写成内联 left/top，
    和收牌摞同一套几何，谁挨着谁、谁让开谁，CSS 里不会有第二份坐标可以漂移。 */
 
-/* ---------- 摸签那一排「第 N 摞」标签 ---------- */
+/* ---------- 摸签那一排「N 摞」标签 ---------- */
 
-/* 这一块只管圈出领地和摆「第 N 摞」几个字，绝不吃点击：领地一旦成了点击目标，点的位置就没了意义，
+/* 这一块只管圈出领地和摆「N 摞」几个字，绝不吃点击：领地一旦成了点击目标，点的位置就没了意义，
    会出现「点的那张和抽出来的那张不是一张」。点击目标是摞里那一张张牌，摊开之后每张各自可点 */
 .pile-zone {
   position: absolute;
@@ -316,10 +338,14 @@ body {
   pointer-events: none;
 }
 
+/* 标签只写「N 摞」（ui.ts），领地那点宽度刚好装得下：10 摞那一档手机上只有 29～33px，
+   「N 摞」19～26px 装得下、「第 N 摞」33.5px 起就折行。nowrap 是兜底——文案或回退字体
+   哪天又把它撑宽了，宁可溢出也不折行（2026-10-14 用户：这个第几摞 不能换行 不行就修改展示形式） */
 .pile-zone .cap {
   font-size: 11px;
   opacity: 0.8;
   transition: opacity 150ms ease-out;
+  white-space: nowrap;
 }
 
 /* 选中/抽出那一拍点中的那张会放大到摞外，正压在这条标签上；那两拍不用标签也认得出是哪摞 */
@@ -373,6 +399,15 @@ body {
 .face,
 .back {
   position: absolute;
+  /* inset 兜底（2026-10-14 查兼容）：inset 简写要 Chromium 87，比这份代码的 JS 下限（85）高两档，
+     认不得它的内核会把整条丢掉、四个方向一起丢 ⇒ 覆盖层／棋子当场没了定位。
+     所以凡是 inset，前头都按简写展开把 top/right/bottom/left 四条写一遍。
+     **这四条能活着进包，靠的是 `vite.config.ts` 里的 `cssMinify: false`**——压缩器
+     （lightningcss）会把它们折回 `inset` 简写，兜底当场没了（2026-10-14 打包装出来才发现）。 */
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
   inset: 0;
   border-radius: 50%;
   backface-visibility: hidden;
@@ -402,6 +437,11 @@ body {
 .back::after {
   content: '';
   position: absolute;
+  /* inset 兜底（同 .face 那条） */
+  top: 17%;
+  right: 17%;
+  bottom: 17%;
+  left: 17%;
   inset: 17%;
   border-radius: 50%;
   border: 1px dashed rgba(255, 255, 255, 0.22);
@@ -427,7 +467,7 @@ body {
 /* 摸签「选中」那一拍：点中这张原地放大一圈、描一道金，别家七摞退下去。
    位移写在 .turn 上——.piece 的 transform 归 pieces.ts 的补间管，CSS 抢不过内联样式，
    而 .turn 同时管翻面，所以扣着的那一态要把 rotateY 一起写回来。
-   这里刻意只做缩放、不做上下抬：一列摊开是从那一格往上铺的，往下抬会撞「第 N 摞」标签、
+   这里刻意只做缩放、不做上下抬：一列摊开是从那一格往上铺的，往下抬会撞「N 摞」标签、
    往上抬会顶出列头，真正的「拿走」由下一拍的抽出位移去演。 */
 .piece.pick .turn {
   transform: scale(1.06);
@@ -474,6 +514,11 @@ body {
    现在让层号自己定胜负，动 DOM 顺序的人不会顺手把首页压到复盘底下。 */
 .home {
   position: fixed;
+  /* inset 兜底（同 .face 那条） */
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
   inset: 0;
   z-index: 1950;
   display: flex;
@@ -579,6 +624,11 @@ body {
 
 .sheet {
   position: fixed;
+  /* inset 兜底（同 .face 那条） */
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
   inset: 0;
   z-index: 2000;
   display: grid;
@@ -620,6 +670,8 @@ body {
    所以「开始这一局／开桌」永远停在拇指够得着的地方，不会被推走（他原话：主按钮不许滚出可视区） */
 .sheet-card {
   width: min(var(--card-w), 94vw);
+  /* dvh 兜底（同 #app 那条） */
+  max-height: 88vh;
   max-height: 88dvh;
   display: flex;
   flex-direction: column;
@@ -1030,8 +1082,15 @@ body {
 
 .drawer {
   position: fixed;
+  /* inset 兜底（同 .face 那条） */
+  top: auto;
+  right: 0;
+  bottom: 0;
+  left: 0;
   inset: auto 0 0 0;
   z-index: 1900;
+  /* dvh 兜底（同 #app 那条） */
+  height: 46vh;
   height: 46dvh;
   display: flex;
   flex-direction: column;
@@ -1111,8 +1170,15 @@ body {
 /* 大屏：复盘改成左下角浮层，不盖牌桌；小屏照旧从底部上滑 */
 @media (orientation: landscape) and (min-width: 820px) {
   .drawer {
+    /* inset 兜底（同 .face 那条） */
+    top: auto;
+    right: auto;
+    bottom: 10px;
+    left: 10px;
     inset: auto auto 10px 10px;
     width: 320px;
+    /* dvh 兜底（同 #app 那条） */
+    height: min(42vh, 330px);
     height: min(42dvh, 330px);
     border: 1px solid #4a4038;
     border-radius: 14px;

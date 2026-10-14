@@ -123,12 +123,15 @@ function linkNodeModules(dir) {
  * 要盖的不止 `src/`——桌面外壳那两文件（`desktop/`）也架着刀，漏了它下一把刀就砍在上一把的伤口上。
  * `package.json` 同理（housekeeping 那把拆脚本键的刀改的是它）：不盖回的话，同一张谱子里
  * 后面每把刀都看见那份写了两遍 `"release"` 的坏文件，红字里凭空多一条不属于它的 ✗。
+ * `vite.config.ts` 也是（css-minify 那把拆的是它的 `cssMinify`，2026-10-14）：漏了它，
+ * 同一张谱子里第二把刀直接报「刀口没找着」——第一把的改动压根没还回去。
  */
 export function syncSrc(dir) {
   for (const sub of ['src', 'desktop']) {
     if (existsSync(join(REPO, sub))) execFileSync('rsync', ['-a', '--delete', `${REPO}/${sub}/`, `${dir}/${sub}/`]);
   }
   if (existsSync(join(REPO, 'package.json'))) execFileSync('rsync', ['-a', `${REPO}/package.json`, `${dir}/package.json`]);
+  if (existsSync(join(REPO, 'vite.config.ts'))) execFileSync('rsync', ['-a', `${REPO}/vite.config.ts`, `${dir}/vite.config.ts`]);
   // 副本那份存档是上一场冒烟坐过的椅子：不清就卡在「这把椅子坐了人」，跑不到要量的那一段
   if (existsSync(join(dir, 'table.json'))) rmSync(join(dir, 'table.json'));
 }

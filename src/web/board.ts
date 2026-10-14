@@ -427,7 +427,7 @@ function draftGeom(board: Board) {
 /** 抽出来展示这张放大这么多：整桌就它一张在讲点数，得比摞里的牌明显大一圈 */
 const LIFT_SCALE = 1.3;
 
-/** 每摞的领地（桌面像素坐标）：按摊开后的整列算。鼠标进这一块就把那摞摊开，「第 N 摞」标签也挂在这儿。
+/** 每摞的领地（桌面像素坐标）：按摊开后的整列算。鼠标进这一块就把那摞摊开，「N 摞」标签也挂在这儿。
  *  点击目标不是它——摊开之后摞里每一张各是一个目标，点哪张抽哪张。 */
 export function stackSpots(board: Board): { x: number; y: number; w: number; h: number }[] {
   const { cw, gap, x0, y0 } = draftGeom(board);

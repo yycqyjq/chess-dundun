@@ -12,7 +12,7 @@ export interface Shell {
   chips: HTMLElement[];
   /** 每条名字条里那五个格：搭壳子那一次就记下来，画面一秒刷十来回，别再一格一格 querySelector */
   chipEls: ChipEls[];
-  /** 摸签那一排「第 N 摞」标签：每块罩住一摞的领地，只管文字，点击目标是摞里的牌 */
+  /** 摸签那一排「N 摞」标签：每块罩住一摞的领地，只管文字，点击目标是摞里的牌 */
   pileZones: HTMLElement[];
   /**
    * 掉线轻提醒：钉在桌面正上方一条。谁掉线了、还剩几秒电脑接手都写在这儿。
@@ -39,7 +39,7 @@ export interface ChipEls {
 /**
  * 台面壳子。座位标记按 `maxSeats` 建够、只亮 `players` 条：
  * 房主在候场厅把 2 人改成 4 人，画面这边不用重搭壳子——重搭会把牌、事件、动画全丢在原地。
- * 「第 N 摞」那排照同一个办法按 `maxStacks` 建够：摞数随档位（3 人局摆 10 摞），用不上的藏掉就行。
+ * 「N 摞」那排照同一个办法按 `maxStacks` 建够：摞数随档位（3 人局摆 10 摞），用不上的藏掉就行。
  */
 export function buildShell(
   root: HTMLElement,
@@ -84,11 +84,15 @@ export function buildShell(
     chipEls.push(parts);
     board.append(chip);
   }
+  // 摞标签只写「N 摞」：领地的宽度是几何量（board.ts 的 cw × 1.12），10 摞那一档手机上
+  // 只有 29～33px，而「第 N 摞」最少要 33.5px——一超就折成两行，折出来的「第 1／摞」
+  // 比没标签还难认（2026-10-14 用户：这个第几摞 不能换行 不行就修改展示形式）。
+  // 「N 摞」19～26px，2／3／4 人各档都一行装得下（实测见 tools/knives/pile-cap.mjs）
   const pileZones: HTMLElement[] = [];
   for (let i = 0; i < maxStacks; i++) {
     const zone = div('pile-zone');
     const cap = div('cap');
-    cap.textContent = `第 ${i + 1} 摞`;
+    cap.textContent = `${i + 1} 摞`;
     zone.append(cap);
     pileZones.push(zone);
     board.append(zone);

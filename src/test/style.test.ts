@@ -209,6 +209,32 @@ console.log('\n牌桌：几何还是 board.ts 说了算');
   ok('名字条宽度认的是 --label-w（app.ts 按 LABEL_W 写进来）', /var\(--label-w/.test(val('.chip', 'max-width') ?? ''), val('.chip', 'max-width') ?? '‹没写›');
   ok('操作条还是浮在桌面里（.ctrl position: absolute）', val('.ctrl', 'position') === 'absolute');
   ok('操作条离底边那一档由 --ctrl-lift 定', /var\(--ctrl-lift/.test(val('.ctrl', 'bottom') ?? ''));
+  // 「清空」不占按钮条的位子（2026-10-13 用户报的误触：它挤在出牌下面，一抬手就把选好的牌清光了）。
+  // 按钮条贴着底边，最后一行永远落在手指最熟的那个位置——那儿必须是「出牌」。
+  ok('「清空」退出按钮条的行流（绝对定位），不跟出牌抢贴底那一行', val('.ctrl .btn.clear', 'position') === 'absolute', val('.ctrl .btn.clear', 'position') ?? '‹没写›');
+  ok('「清空」浮在按钮条上面一行（bottom: calc(100% + 6px)）', /calc\(100% \+ 6px\)/.test(val('.ctrl .btn.clear', 'bottom') ?? ''), val('.ctrl .btn.clear', 'bottom') ?? '‹没写›');
+  ok(
+    '「清空」靠左右 auto 外边距居中，且不碰 transform（那个留给 hover／:active 的抬起落下）',
+    val('.ctrl .btn.clear', 'margin-left') === 'auto' && val('.ctrl .btn.clear', 'margin-right') === 'auto' && val('.ctrl .btn.clear', 'transform') === undefined,
+    `margin-left=${val('.ctrl .btn.clear', 'margin-left')} transform=${val('.ctrl .btn.clear', 'transform')}`,
+  );
+  // 顺序也钉一道：万一哪天 CSS 没加载上，DOM 顺序还兜得住「清空在上、出牌贴底」
+  {
+    const app = web('app.ts');
+    const clear = app.indexOf("this.takeBtn('清空'");
+    const play = app.indexOf('this.takeBtn(this.describe(match)');
+    ok('app.ts 里「清空」排在「出牌」前头（CSS 之外再兜一层）', clear > 0 && play > clear, `清空@${clear} 出牌@${play}`);
+  }
+}
+
+// ---------- 摸签那排摞标签：一行装得下、且不许折行（2026-10-14 用户报的折行） ----------
+
+console.log('\n摸签：「N 摞」标签不许折行');
+{
+  // 领地的宽度是 board.ts 的几何量（cw × 1.12），10 摞那一档手机上只有 29～33px，
+  // 而「第 N 摞」最少要 33.5px——一超就折成两行。文案已经短到装得下（ui.test.ts 那条钉着），
+  // 这里钉的是兜底：哪天文案或回退字体又把它撑宽了，也不许折行（宁可溢出）
+  ok('摞标签不许折行（white-space: nowrap）', val('.pile-zone .cap', 'white-space') === 'nowrap', val('.pile-zone .cap', 'white-space') ?? '‹没写›');
 }
 
 // ---------- 首页那一层 ----------
@@ -552,8 +578,14 @@ console.log('\n整屏页：三处出口同一份名字，身后不隔着半透�
     const o = new Set(decl(over));
     return decl(base).filter((k) => !o.has(k));
   };
+  // 那四条方向声明不是「新添的样式效果」，是 `inset: 0` 的兼容展开（拆给认不得 inset 简写的旧内核，
+  // 见 style.css 里那两行）：跟 inset 是同一件事的两种写法，不该算进「照旧生效了什么」里。
+  // 所以期望集自己推：写了 inset 就带上那四条方向，没写就只有 inset 一条——两种写法都不误报，
+  // 而别的真新增（描边、模糊、投影）照样当场红，这条断言守的还是原来那件事。
+  const dirs = ['top', 'right', 'bottom', 'left'];
   const veilKept = kept('.sheet', '.sheet.as-page');
-  ok('遮罩那层照旧生效的只有「铺满一屏」那四件（没有半透底、没有内边距）', veilKept.join('｜') === 'display｜inset｜position｜z-index', veilKept.join('｜') ?? '‹没找到那条›');
+  const veilWant = ['display', 'inset', 'position', 'z-index', ...(decl('.sheet').includes('inset') ? dirs : [])].sort();
+  ok('遮罩那层照旧生效的只有「铺满一屏」那四件＋inset 的四条方向展开（没有半透底、没有内边距）', veilKept.join('｜') === veilWant.join('｜'), veilKept.join('｜') ?? '‹没找到那条›');
   const cardKept = kept('.sheet-card', '.sheet.as-page .sheet-card');
   ok('卡那层照旧生效的只有排版三件（边框、圆角、底色、投影都压掉了）', cardKept.join('｜') === 'display｜flex-direction｜overflow', cardKept.join('｜') ?? '‹没找到那条›');
   // 那一屏从此不透明白占满一屏，所以它跟另外两层谁压谁就不再是「看着顺便」：
@@ -955,6 +987,74 @@ console.log('\n第三批：让座等点头、原生寻呼在飞闸、vite 重启
   ok('收尾只认自己那一代：旧 server 关闭时别去收新 server 正用着的那张桌',
     vite.includes('const gen = ++genSeq;') && /if \(live\?\.gen === gen\) \{/.test(vite),
     '‹找不到代号那一手›');
+}
+
+// ---------- dvh 一律要带同属性的 vh 兜底（2026-10-14 查兼容） ----------
+
+console.log('\n兼容：每条 dvh 前面都有一条同属性的 vh');
+{
+  // 认不得 dvh 的内核会把整条声明丢掉——`#app` 一丢就没高度，牌桌当场塌成 0 高
+  // （实测：认 dvh 时 #app 844／.board 762.3；不认时 #app 81.7／.board 0）。
+  // 而 JS 那侧的语法下限只到 Chrome 85（dist 里有 ??=／||=），比 dvh 的 108 低一大截，
+  // 所以确实存在「JS 跑得动、牌桌却塌了」的窗口。凡是 dvh，上一行必须是同属性的 vh。
+  const lines = web('style.css').split('\n');
+  const bad: string[] = [];
+  lines.forEach((line, i) => {
+    const m = /^\s*([a-z-]+):\s*\S*dvh/.exec(line);
+    if (!m) return;
+    const prop = m[1]!;
+    const prev = lines[i - 1] ?? '';
+    // 上一行得是同属性、且值是 vh——`(?<!d)` 把 dvh 自己排掉（不然它自己就算「兜底」了）
+    if (!new RegExp(`^\\s*${prop}:`).test(prev) || !/(?<!d)vh\b/.test(prev)) bad.push(`第 ${i + 1} 行 ${prop}：上一行是「${prev.trim()}」`);
+  });
+  ok('每条 dvh 都有同属性的 vh 兜底（认不得 dvh 的内核才不会把牌桌整条丢掉）', bad.length === 0, bad.join('｜') || '四条都带兜底');
+}
+
+// ---------- inset 一律拆成 top/right/bottom/left（2026-10-14 查兼容） ----------
+
+console.log('\n兼容：每条 inset 都拆了四个方向的兜底');
+{
+  // `inset` 简写要 Chromium 87，比 JS 下限（85）高两档；认不得它的内核把整条丢掉，
+  // 四个方向**一起丢** ⇒ 覆盖层／棋子当场没了定位（`.sheet`／`.home`／`.drawer`／`.face`）。
+  // 所以凡是 inset，前头都按简写展开把 top/right/bottom/left 写一遍——同一规则里，
+  // 认 inset 的用后者、不认的用前者，两边结果一样。这里连**值**一起核，不许只写四条空壳。
+  const expand = (v: string): string[] => {
+    const p = v.split(/\s+/);
+    const a = p[0]!;
+    const b = p[1] ?? a;
+    const c = p[2] ?? a;
+    const d = p[3] ?? b;
+    return [a, b, c, d];
+  };
+  const bad: string[] = [];
+  let seen = 0;
+  for (const r of RULES) {
+    const ins = r.decls.get('inset');
+    if (ins === undefined) continue;
+    seen++;
+    const want = expand(ins);
+    const got = ['top', 'right', 'bottom', 'left'].map((k) => r.decls.get(k));
+    if (want.some((w, i) => got[i] !== w)) bad.push(`${r.sel}：inset=${ins} 而四条是 ${got.map((g) => g ?? '‹没写›').join(' / ')}`);
+  }
+  ok('每条 inset 都按简写展开拆了 top/right/bottom/left（值也得对上，不许只写空壳）', seen > 0 && bad.length === 0, bad.join('｜') || `拆了 ${seen} 条`);
+}
+
+// ---------- CSS 压缩必须关着：不然上面那条 inset 兜底白装（2026-10-14 打包装出来才发现） ----------
+
+console.log('\n兼容：CSS 压缩关着（不然 inset 那四条兜底进不了包）');
+{
+  // 这条闸盯的不是源码，是**产物**。上面那条「每条 inset 都拆了四条」只看源码写得对不对，
+  // 而真正决定兜底活不活得下来的是压缩器：客户端那条路的 CSS 压缩器是 lightningcss
+  // （Vite 8 的默认；本仓库没装 esbuild），它把同一规则里四条 `top/right/bottom/left`
+  // **无条件折回 `inset` 简写**——实测 `{top:0;right:0;bottom:0;left:0;inset:0}` 压完只剩
+  // `inset:0;inset:0`。源码侧没有任何写法躲得开（`@supports not (inset:0){…}` 里照折、
+  // 拿自定义属性隔开也照折，只有 `!important` 挡得住，那会改级联语义），
+  // 所以唯一的开关就在 vite.config.ts 的 `cssMinify: false` 上，钉死它。
+  const vite = readFileSync(new URL('../../vite.config.ts', import.meta.url), 'utf8');
+  const buildLine = vite.match(/build:\s*\{[^}]*\}/)?.[0] ?? '';
+  ok('CSS 压缩关着（开着的话 lightningcss 会把四条方向折回 inset，兜底整条进不了包）',
+    /build:\s*\{[^}]*cssMinify:\s*false/.test(vite),
+    buildLine.replace(/\s+/g, ' ') || '‹找不到 build 那一行›');
 }
 
 console.log(failures ? `\n${failures} 条没过` : '\n全部通过');

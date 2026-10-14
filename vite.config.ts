@@ -74,7 +74,16 @@ export default defineConfig({
   // 相对路径：之后 Capacitor（安卓）和 Tauri/Electron（Win/Mac）都是把 dist 塞进壳里，绝对路径会白屏
   base: './',
   define: { __APP_VERSION__: JSON.stringify(version) },
-  build: { outDir: 'dist', target: 'es2022' },
+  // cssMinify: false 是**故意的，别顺手打开**（2026-10-14 查兼容）。
+  // 客户端那条路的 CSS 压缩器是 lightningcss（Vite 8 的默认；本仓库压根没装 esbuild），
+  // 它会把同一个规则里的四条 `top/right/bottom/left` **无条件折回 `inset` 简写**——
+  // 实测 `{top:0;right:0;bottom:0;left:0;inset:0}` 压完只剩 `inset:0;inset:0`，手写的兜底整条没了；
+  // `@supports not (inset:0){…}` 里照折，拿自定义属性隔开也照折，只有 `!important` 挡得住
+  // （那会改级联语义，不能用）。而 `inset` 要 Chromium 87、这份代码的 JS 下限是 85
+  // ⇒ 不关压缩，WebView 85/86 上覆盖层（`.sheet`／`.home`／`.drawer`）和棋子正反面当场没定位。
+  // 代价只是 CSS 不压缩（gzip 3.98 KB → 12.1 KB，APK 5.9 MB／桌面包 100 MB 里可忽略），
+  // 换「下限 85」这句话是真的。闸在 `src/test/style.test.ts` 的「CSS 压缩必须关着」那一节。
+  build: { outDir: 'dist', target: 'es2022', cssMinify: false },
   // 5173 被本机另一个项目（pocket-kit）占着，这里钉死一个不撞车的端口
   server: { host: true, port: 5199, strictPort: true },
   plugins: [tableRoom()],
